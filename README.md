@@ -135,6 +135,6 @@ Caçador (breakouts on volume, 2% risk), Sniper (volatility contraction, 1%
 risk), Campeão Setorial (best stocks of the strongest sectors), Pescador de
 Quedas (pullbacks in uptrends) and Kamikaze (2 biggest 3-month gainers).
 
-`.github/workflows/agents.yml` runs the daily league (12:15 UTC for now, later
-from `/horario`) and answers `/agentes [nome]` and the admin-only `/agente
+`.github/workflows/agents.yml` runs the daily league (12:15 Lisbon by default,
+set with `/horario`) and answers `/agentes [nome]` and the admin-only `/agente
 criar|depositar|remover`.
