@@ -229,8 +229,13 @@ def create_channels() -> int:
             channel = discord_api("POST", f"/guilds/{guild}/channels", json={
                 "name": name, "type": 0, "parent_id": category["id"], "topic": topic, "permission_overwrites": overwrites})
             print(f"::notice title=Canais::Criado #{name}")
-        else:  # created by an earlier run with these permissions: reuse as is
-            print(f"::notice title=Canais::Já existe #{channel['name']} ({channel['id']})")
+        else:  # reapply parent, topic and permissions (they may have been synced with the category)
+            try:
+                discord_api("PATCH", f"/channels/{channel['id']}", json={
+                    "parent_id": category["id"], "topic": topic, "permission_overwrites": overwrites})
+                print(f"::notice title=Canais::Permissões repostas em #{channel['name']}")
+            except RuntimeError as e:
+                print(f"::warning title=Canais::Não consegui atualizar #{channel['name']}: {e}")
         ids[key] = channel["id"]
     try:
         discord_api("PATCH", f"/channels/{chat}", json={"parent_id": category["id"], "lock_permissions": False})
