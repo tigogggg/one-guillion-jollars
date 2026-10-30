@@ -15,6 +15,10 @@ on:
         description: "Criar a categoria 📈 FINANÇAS e os canais do bot"
         type: boolean
         default: false
+      diagnostico:
+        description: "Mostrar as permissões do bot no servidor"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -33,6 +37,12 @@ jobs:
           DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: uv run python scripts/discord_setup.py --register
+      - name: Diagnóstico das permissões
+        if: ${{ inputs.diagnostico }}
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: uv run python scripts/discord_setup.py --diagnostico
       - name: Criar os canais
         if: ${{ inputs.criar_canais }}
         env:
