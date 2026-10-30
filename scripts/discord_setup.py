@@ -229,10 +229,8 @@ def create_channels() -> int:
             channel = discord_api("POST", f"/guilds/{guild}/channels", json={
                 "name": name, "type": 0, "parent_id": category["id"], "topic": topic, "permission_overwrites": overwrites})
             print(f"::notice title=Canais::Criado #{name}")
-        else:
-            discord_api("PATCH", f"/channels/{channel['id']}", json={
-                "parent_id": category["id"], "topic": topic, "permission_overwrites": overwrites})
-            print(f"::notice title=Canais::Atualizado #{name}")
+        else:  # created by an earlier run with these permissions: reuse as is
+            print(f"::notice title=Canais::Já existe #{channel['name']} ({channel['id']})")
         ids[key] = channel["id"]
     try:
         discord_api("PATCH", f"/channels/{chat}", json={"parent_id": category["id"], "lock_permissions": False})
@@ -243,13 +241,23 @@ def create_channels() -> int:
     CHANNELS_PATH.parent.mkdir(parents=True, exist_ok=True)
     CHANNELS_PATH.write_text(json.dumps({"guild_id": guild, "category_id": category["id"],
                                          "channels": {**ids, "discussao": chat}}, indent=2) + "\n")
+    failed = 0
     for key, name, topic in CHANNELS:
-        message = discord_api("POST", f"/channels/{ids[key]}/messages",
-                              json={"embeds": [embed(f"Bem-vindo a #{name}", topic, color=BLUE, footer="")]})
+        try:
+            message = discord_api("POST", f"/channels/{ids[key]}/messages",
+                                  json={"embeds": [embed(f"Bem-vindo a #{name}", topic, color=BLUE, footer="")]})
+        except RuntimeError as e:  # the bot must be able to post here, or that kind of post would be lost
+            print(f"::error title=Canais::O bot não consegue publicar em #{name}: {e}")
+            failed += 1
+            continue
+        print(f"::notice title=Canais::O bot publica em #{name}")
         try:
             discord_api("PUT", f"/channels/{ids[key]}/messages/pins/{message['id']}")
         except RuntimeError as e:
-            print(f"Não consegui fixar a mensagem em #{name}: {e}", file=sys.stderr)
+            print(f"::warning title=Canais::Não consegui fixar a mensagem em #{name}: {e}")
+    if failed:  # keep posting to the webhook channel until every channel works
+        CHANNELS_PATH.unlink()
+        return 1
     return 0
 
 
