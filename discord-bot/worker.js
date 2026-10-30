@@ -31,6 +31,7 @@ const DEFAULT_SCHEDULE = {
   alertas: ["15:40", "17:40", "19:40"],
   noticias: ["12:00", "16:00", "20:30"],
   semanal: { dia: "sab", hora: "10:00" },
+  treino: "07:30", // first weekday of each month: re-train the agents on the last 5 years
 };
 const DAYS = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
 const DAY_NAMES = { dom: "domingo", seg: "segunda", ter: "terça", qua: "quarta", qui: "quinta", sex: "sexta", sab: "sábado" };
@@ -40,6 +41,7 @@ const WORKFLOWS = {
   alertas: "opportunity-alerts.yml",
   noticias: "news.yml",
   semanal: "weekly-summary.yml",
+  treino: "pretrain.yml",
 };
 const LATE_LIMIT_MIN = 20; // still start a job this many minutes after its time (missed cron ticks)
 const MAX_ALERT_TIMES = 6;
@@ -51,7 +53,7 @@ const HELP = [
   "**O que aparece aqui** (hora de Lisboa; `/horario ver` mostra os horários atuais):",
   "• Dias úteis de manhã · 📊 Dicas do dia, 🏆 top 3 ações por setor e 📦 top 10 ETFs UCITS",
   "• Durante a sessão dos EUA · 🚨 alertas, só quando uma ação da lista rompe com volume",
-  "• Dias úteis · 🤖 liga dos agentes: 12 estratégias com dinheiro fictício e preços reais",
+  "• Dias úteis · 🤖 liga dos agentes: 16 estratégias com dinheiro fictício e preços reais",
   "• Dias úteis, 3 vezes · 📰 notícias que importam, lidas pelo Claude",
   "• Ao fim de semana · 🗓️ resumo semanal com o desempenho dos alertas",
   "",
@@ -134,6 +136,8 @@ export default {
       for (const t of schedule.noticias) jobs.push(["noticias", t]);
     }
     if (now.day === schedule.semanal.dia) jobs.push(["semanal", schedule.semanal.hora]);
+    const dayOfMonth = Number(now.date.slice(8));
+    if (weekday && (dayOfMonth === 1 || (now.day === "seg" && dayOfMonth <= 3))) jobs.push(["treino", schedule.treino]);
 
     for (const [job, time] of jobs) {
       const late = now.minutes - toMinutes(time);
@@ -211,6 +215,7 @@ async function scheduleCommand(env, sub) {
     `🚨 Verificação de alertas: **${schedule.alertas.join(" · ")}** (dias úteis; a sessão dos EUA é das 14:30 às 21:00)`,
     `📰 Notícias: **${schedule.noticias.join(" · ")}** (dias úteis)`,
     `🗓️ Resumo semanal: **${DAY_NAMES[schedule.semanal.dia]} às ${schedule.semanal.hora}**`,
+    `🧠 Re-treino dos agentes (últimos 5 anos): **1.º dia útil de cada mês às ${schedule.treino}**`,
     "-# As análises arrancam até 5 minutos depois da hora marcada e demoram alguns minutos a chegar.",
   ].join("\n");
 }

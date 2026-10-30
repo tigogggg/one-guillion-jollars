@@ -79,7 +79,7 @@ def test_points_for_profit_and_daily_change():
 
 
 def test_training_mutates_losers_only():
-    cfg = {"id": "x", "params": {"n": 5, "stop_pct": 0.1}}
+    cfg = {"id": "x", "strategy": "jornalista", "params": {"n": 5, "stop_pct": 0.1}}
     loser = new_portfolio(1000, DATES[0].date())
     loser["history"] = [{"date": "2026-10-01", "equity": 1000, "deposits": 1000},
                         {"date": "2026-10-30", "equity": 900, "deposits": 1000},
@@ -88,6 +88,8 @@ def test_training_mutates_losers_only():
     mkt = market({}, date(2026, 11, 2))
     assert train(cfg, loser, mkt) and loser["generation"] == 2 and loser["params"] != cfg["params"]
     assert train(cfg, winner, mkt) is None and winner["params"] == cfg["params"]
+    backtestable = {**new_portfolio(1000, DATES[0].date()), "history": loser["history"]}
+    assert train({**cfg, "strategy": "foguetao"}, backtestable, mkt) is None  # re-trained by pretrain.py instead
 
 
 def test_configurator_create_and_deposit(tmp_path):
@@ -161,3 +163,69 @@ def test_jornalista_buys_good_news_and_sells_bad_news():
     orders = agents.s_jornalista({}, port, mkt, {"n": 5, "limiar": 4, "stop_pct": 0.08, "max_dias": 10})
     assert [(o["side"], o["symbol"]) for o in orders] == [("sell", "BAD"), ("buy", "GOOD")]
     assert orders[1]["reason"] == "Contrato enorme" and orders[1]["stop"] == pytest.approx(92)
+
+
+def test_news_veto_blocks_buys_for_every_agent_but_cetico():
+    closes = [100, 101, 102, 103, 104]
+    hist = {"SXR8.DE": frame(closes, closes, closes, closes)}
+    config = {"agents": [{"id": "i", "name": "I", "emoji": "🐢", "strategy": "indexador", "capital": 1000, "params": {}}]}
+    state = {"agents": {}}
+    mkt = market(hist, DATES[0].date())
+    mkt.news = {"SXR8.DE": {"score": -6, "importance": 3, "items": []}}
+    _, _, avoided = run_day(config, state, mkt)
+    assert not state["agents"]["i"]["pending"] and "notícias negativas" in avoided[0]
+
+
+def stock(**kw):
+    base = {"price": 100.0, "sma50": 90.0, "sma200": 80.0, "sector": "Energy", "stage2": True, "trend_score": 80,
+            "ret_1d": 0.02, "vol_ratio": 2.0, "gap_age": -1, "gap_size": 0.0, "low10_prev": 95.0}
+    return {**base, **kw}
+
+
+def test_catalisador_needs_price_confirmation():
+    mkt = market({}, DATES[2].date(), stocks={"UP": stock(), "FLAT": stock(ret_1d=-0.01)})
+    mkt.closes = {"UP": 100.0, "FLAT": 100.0}
+    mkt.news = {"UP": {"score": 4, "importance": 3}, "FLAT": {"score": 6, "importance": 3}}
+    orders = agents.s_catalisador({}, new_portfolio(1000, DATES[0].date()), mkt,
+                                  {"n": 5, "limiar": 3, "stop_pct": 0.08, "max_dias": 15})
+    assert [o["symbol"] for o in orders] == ["UP"] and orders[0]["stop"] == pytest.approx(95.0)
+
+
+def test_cetico_buys_bad_news_the_market_ignored():
+    mkt = market({}, DATES[2].date(), stocks={"HOLD": stock(ret_1d=0.0), "DROP": stock(ret_1d=-0.05)})
+    mkt.closes = {"HOLD": 100.0, "DROP": 100.0}
+    mkt.news = {"HOLD": {"score": -4, "importance": 3}, "DROP": {"score": -4, "importance": 3}}
+    orders = agents.s_cetico({}, new_portfolio(1000, DATES[0].date()), mkt,
+                             {"n": 4, "limiar": 3, "stop_pct": 0.06, "alvo_pct": 0.08, "max_dias": 10})
+    assert [o["symbol"] for o in orders] == ["HOLD"] and orders[0]["tp"] == pytest.approx(108)
+
+
+def league_market(holdings: dict[str, list[str]], histories: dict[str, list[float]] | None = None):
+    closes = {s: 100.0 for syms in holdings.values() for s in syms}
+    mkt = market({}, DATES[4].date(), stocks={s: stock() for s in closes})
+    mkt.closes = closes
+    for agent_id, syms in holdings.items():
+        port = new_portfolio(1000, DATES[0].date())
+        port["cash"] = 1000 - 100 * len(syms)
+        for s in syms:
+            port["positions"][s] = {"qty": 1.0, "entry": 100, "entry_date": "2026-10-26", "cost_eur": 100,
+                                    "stop": None, "tp": None, "checked": "2026-10-30"}
+        curve = (histories or {}).get(agent_id, [1000] * 6)
+        port["history"] = [{"date": f"2026-10-{20 + i}", "equity": e, "deposits": 1000} for i, e in enumerate(curve)]
+        mkt.league[agent_id] = ({"id": agent_id, "name": agent_id.upper(), "strategy": "foguetao"}, port)
+    return mkt
+
+
+def test_conselho_follows_consensus():
+    mkt = league_market({"a": ["XOM", "NVDA"], "b": ["XOM"], "c": ["AAPL"]})
+    orders = agents.s_conselho({"id": "me"}, new_portfolio(1000, DATES[0].date()), mkt,
+                               {"n": 6, "min_votos": 2, "stop_pct": 0.1})
+    assert [o["symbol"] for o in orders] == ["XOM"] and "2 agentes" in orders[0]["reason"]
+
+
+def test_maestro_copies_the_recent_winners():
+    mkt = league_market({"win": ["NVDA"], "lose": ["XOM"]},
+                        {"win": [1000, 1010, 1020, 1030, 1040, 1050], "lose": [1000, 990, 980, 970, 960, 950]})
+    port = new_portfolio(1000, DATES[0].date())
+    orders = agents.s_maestro({"id": "me"}, port, mkt, {"n": 8, "lideres": 3, "janela": 20, "cada": 5})
+    assert [o["symbol"] for o in orders] == ["NVDA"] and "WIN" in orders[0]["reason"]

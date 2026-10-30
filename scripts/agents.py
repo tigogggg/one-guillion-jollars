@@ -62,6 +62,11 @@ EXPOSURE = {"Alta": 1.0, "Neutra": 0.7, "Cautelosa": 0.4, "Queda": 0.1}
 ZONE_ICON = {"Alta": "🟢", "Neutra": "🟡", "Cautelosa": "🟠", "Queda": "🔴"}
 MUTATION = 0.2
 EARNINGS_AVOID_DAYS = 5
+NEWS_VETO = 3  # no agent buys a stock whose 36 h news score is at or below -NEWS_VETO
+# Strategies that cannot be replayed on past data (no history of fundamentals, news or other agents):
+# they learn by monthly mutation; the rest are re-trained each month by pretrain.py.
+LIVE_ONLY = {"joalheiro", "jornalista", "catalisador", "cetico", "conselho", "maestro"}
+META = {"conselho", "maestro"}  # decide after the others, from their portfolios
 TRADES_KEPT = 200
 POINTS_LOG_KEPT = 60
 
@@ -83,6 +88,9 @@ PARAM_BOUNDS = {
     "folga": (0.05, 0.25, float),
     "salto_pct": (0.03, 0.12, float),
     "limiar": (2, 9, int),
+    "min_votos": (2, 4, int),
+    "lideres": (2, 5, int),
+    "janela": (10, 40, int),
 }
 
 
@@ -101,6 +109,7 @@ class Market:
     earnings: dict[str, date | None] = field(default_factory=dict)  # looked up once per run
     closes: dict[str, float] | None = None  # as_of closes, precomputed by the backtest for speed
     news: dict[str, dict] = field(default_factory=dict)  # news.py signals: {symbol: {score, importance, items}}
+    league: dict[str, tuple[dict, dict]] = field(default_factory=dict)  # {agent id: (cfg, portfolio)}, for meta-agents
 
 
 # --------------------------------------------------------------------------
@@ -382,7 +391,10 @@ def month_return(port: dict, month: str) -> float | None:
 
 
 def train(cfg: dict, port: dict, mkt: Market) -> str | None:
-    """First run of a month: an agent that lost money last month mutates its parameters."""
+    """First run of a month: a live-only agent that lost money last month mutates its parameters.
+
+    The other strategies are re-trained on the last year by pretrain.py at the start of each month.
+    """
     hist = port["history"]
     if len(hist) < 2 or hist[-1]["date"][:7] == hist[-2]["date"][:7]:
         return None
@@ -390,7 +402,7 @@ def train(cfg: dict, port: dict, mkt: Market) -> str | None:
     ret = month_return(port, last_month)
     params = port.setdefault("params", dict(cfg["params"]))
     tunable = [k for k in params if k in PARAM_BOUNDS]
-    if ret is None or ret >= 0 or not tunable:
+    if ret is None or ret >= 0 or not tunable or cfg.get("strategy") not in LIVE_ONLY:
         return None
     rng = random.Random(f"{cfg['id']}-{mkt.as_of}")
     changes = []
@@ -632,6 +644,108 @@ def s_jornalista(cfg, port, mkt, p):
     return orders
 
 
+def news_score(mkt: Market, symbol: str) -> int:
+    return mkt.news.get(symbol, {}).get("score", 0)
+
+
+def s_catalisador(cfg, port, mkt, p):
+    """News confirmed by the market: important positive news plus a price reaction on volume."""
+    orders = [order_sell(s, "notícias negativas") for s in port["positions"] if news_score(mkt, s) <= -NEWS_VETO]
+    orders += [order_sell(s, f"{p['max_dias']} sessões") for s, pos in port["positions"].items()
+               if sessions_since(mkt, pos["entry_date"]) >= p["max_dias"] and s not in {o["symbol"] for o in orders}]
+    if mkt.zone == "Queda":
+        return orders
+    picks = []
+    for s, sig in mkt.news.items():
+        m = mkt.stocks.get(s)
+        if not m or s in port["positions"] or sig.get("score", 0) < p["limiar"] or sig.get("importance", 0) < 2:
+            continue
+        reacted = m["ret_1d"] > 0 and (m["vol_ratio"] >= 1.5 or (m["gap_age"] == 0 and m["gap_size"] > 0))
+        if reacted and m["price"] > m["sma50"]:
+            picks.append(s)
+    eq = equity(port, mkt)
+    for s in sorted(picks, key=lambda s: mkt.news[s]["score"], reverse=True)[: max(free_slots(port, p["n"]), 0)]:
+        m = mkt.stocks[s]
+        stop = max(m["low10_prev"], m["price"] * (1 - p["stop_pct"]))
+        orders.append(order_buy(s, eq / p["n"], "notícia confirmada pelo preço", stop=round(stop, 4)))
+    return orders
+
+
+def s_cetico(cfg, port, mkt, p):
+    """Adversarial: important bad news that the market shrugged off, in a stock still in an uptrend."""
+    orders = [order_sell(s, f"{p['max_dias']} sessões") for s, pos in port["positions"].items()
+              if sessions_since(mkt, pos["entry_date"]) >= p["max_dias"]]
+    if mkt.zone == "Queda":
+        return orders
+    picks = [s for s, sig in mkt.news.items()
+             if sig.get("score", 0) <= -p["limiar"] and sig.get("importance", 0) >= 2
+             and (m := mkt.stocks.get(s)) and m["stage2"] and m["ret_1d"] >= 0 and s not in port["positions"]]
+    eq = equity(port, mkt)
+    for s in sorted(picks, key=lambda s: mkt.news[s]["score"])[: max(free_slots(port, p["n"]), 0)]:
+        price = mkt.stocks[s]["price"]
+        orders.append(order_buy(s, eq / p["n"], "o mercado ignorou a má notícia",
+                                stop=round(price * (1 - p["stop_pct"]), 4), tp=round(price * (1 + p["alvo_pct"]), 4)))
+    return orders
+
+
+def peers(mkt: Market, cfg: dict) -> list[tuple[dict, dict]]:
+    """The other agents that decide on their own (not meta-agents, not this one)."""
+    return [(c, port) for agent_id, (c, port) in mkt.league.items()
+            if agent_id != cfg.get("id") and c["strategy"] not in META]
+
+
+def s_conselho(cfg, port, mkt, p):
+    """Collective intelligence: hold what at least min_votos agents hold or are buying, without bad news."""
+    votes: dict[str, int] = {}
+    for _, other in peers(mkt, cfg):
+        for s in set(other["positions"]) | {o["symbol"] for o in other["pending"] if o["side"] == "buy"}:
+            votes[s] = votes.get(s, 0) + 1
+    orders = [order_sell(s, "o conselho deixou de a apoiar") for s in port["positions"]
+              if votes.get(s, 0) < 1 or news_score(mkt, s) <= -NEWS_VETO]
+    picks = [s for s, v in votes.items() if v >= p["min_votos"] and s not in port["positions"]
+             and news_score(mkt, s) > -NEWS_VETO and metrics(mkt, s)]
+    picks.sort(key=lambda s: (votes[s], metrics(mkt, s).get("trend_score", 0)), reverse=True)
+    eq = equity(port, mkt)
+    for s in picks[: max(free_slots(port, p["n"]), 0)]:
+        price = last_close(mkt, s)
+        orders.append(order_buy(s, eq / p["n"], f"{votes[s]} agentes de acordo",
+                                stop=round(price * (1 - p["stop_pct"]), 4) if price else None))
+    return orders
+
+
+def recent_return(port: dict, sessions: int) -> float | None:
+    h = port["history"][-(sessions + 1):]
+    if len(h) < 5 or not h[0]["equity"]:
+        return None
+    return (h[-1]["equity"] - h[0]["equity"] - (h[-1]["deposits"] - h[0]["deposits"])) / h[0]["equity"]
+
+
+def s_maestro(cfg, port, mkt, p):
+    """Central coordinator: copy the combined portfolio of the agents with the best recent results."""
+    if not due(port, mkt, p["cada"]):
+        return []
+    ranked = sorted(((recent_return(o, p["janela"]), c, o) for c, o in peers(mkt, cfg)),
+                    key=lambda x: -999 if x[0] is None else x[0], reverse=True)
+    leaders = [(c, o) for r, c, o in ranked[: p["lideres"]] if r is not None and r > 0]
+    if not leaders:
+        return [order_sell(s, "nenhum agente a ganhar") for s in port["positions"]]
+    weights: dict[str, float] = {}
+    for _, other in leaders:
+        other_eq = equity(other, mkt)
+        for s, pos in other["positions"].items():
+            weights[s] = weights.get(s, 0.0) + position_value(mkt, s, pos) / other_eq / len(leaders)
+    targets = sorted(weights, key=weights.get, reverse=True)[: p["n"]]
+    total = sum(weights[s] for s in targets)
+    scale = 1.0 / total if total > 1 else 1.0
+    orders = [order_sell(s, "saiu das carteiras dos líderes") for s in port["positions"] if s not in targets]
+    eq = equity(port, mkt)
+    names = ", ".join(c["name"] for c, _ in leaders)
+    for s in targets:
+        if s not in port["positions"]:
+            orders.append(order_buy(s, eq * weights[s] * scale, f"segue {names}"))
+    return orders
+
+
 STRATEGIES = {
     "indexador": (s_indexador, "Compra e mantém o S&P 500 (referência)", {}),
     "guardiao": (s_guardiao, "ETF mundial com peso pela zona do mercado", {"max_exposicao": 1.0, "folga": 0.1}),
@@ -644,6 +758,10 @@ STRATEGIES = {
     "pescador": (s_pescador, "Compra quedas em ações em tendência", {"n": 5, "queda_pct": 0.05, "alvo_pct": 0.06, "stop_pct": 0.07, "max_dias": 10}),
     "jornalista": (s_jornalista, "Negoceia notícias analisadas pelo Claude", {"n": 5, "limiar": 4, "stop_pct": 0.08, "max_dias": 10}),
     "deriva": (s_deriva, "Segue saltos com volume (deriva pós-notícia/resultados)", {"n": 5, "salto_pct": 0.04, "max_dias": 20}),
+    "catalisador": (s_catalisador, "Notícias positivas confirmadas pelo preço", {"n": 5, "limiar": 3, "stop_pct": 0.08, "max_dias": 15}),
+    "cetico": (s_cetico, "Más notícias que o mercado ignorou", {"n": 4, "limiar": 3, "stop_pct": 0.06, "alvo_pct": 0.08, "max_dias": 10}),
+    "conselho": (s_conselho, "Compra o que vários agentes apoiam", {"n": 6, "min_votos": 2, "stop_pct": 0.10}),
+    "maestro": (s_maestro, "Copia os agentes com melhores resultados recentes", {"n": 8, "lideres": 3, "janela": 20, "cada": 5}),
     "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5, "ignora_resultados": True}),
 }
 
@@ -701,10 +819,25 @@ def skip_earnings(orders: list[dict], mkt: Market) -> tuple[list[dict], list[str
     return kept, skipped
 
 
+def skip_bad_news(orders: list[dict], mkt: Market) -> tuple[list[dict], list[str]]:
+    """Drop buys of stocks with clearly negative news in the last 36 h; return (kept, skipped symbols)."""
+    kept, skipped = [], []
+    for o in orders:
+        if o["side"] == "buy" and news_score(mkt, o["symbol"]) <= -NEWS_VETO:
+            skipped.append(o["symbol"])
+        else:
+            kept.append(o)
+    return kept, skipped
+
+
 def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, dict]], list[str], list[str]]:
     moves, training, avoided = [], [], []
-    for cfg in active_agents(config):
+    agents_today = sorted(active_agents(config), key=lambda c: c["strategy"] in META)  # meta-agents decide last
+    for cfg in agents_today:
         port = state["agents"].setdefault(cfg["id"], new_portfolio(cfg["capital"], mkt.as_of))
+        mkt.league[cfg["id"]] = (cfg, port)
+    for cfg in agents_today:
+        port = state["agents"][cfg["id"]]
         params = port.setdefault("params", dict(cfg["params"]))
         for t in fill_pending(port, mkt) + check_exits(port, mkt):
             moves.append((cfg, t))
@@ -718,7 +851,11 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
                 orders, skipped = skip_earnings(orders, mkt)
                 if skipped:
                     avoided.append(f"{cfg['emoji']} {cfg['name']}: " + ", ".join(
-                        f"{s} ({earnings.label(mkt.earnings[s])})" for s in skipped))
+                        f"{s} (resultados {earnings.label(mkt.earnings[s])})" for s in skipped))
+            if not params.get("ignora_noticias") and cfg["strategy"] != "cetico":
+                orders, skipped = skip_bad_news(orders, mkt)
+                if skipped:
+                    avoided.append(f"{cfg['emoji']} {cfg['name']}: " + ", ".join(f"{s} (notícias negativas)" for s in skipped))
             port["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders if o["side"] == "sell" or o["eur"] >= MIN_ORDER_EUR]
             port["last_decision"] = mkt.as_of.isoformat()
     return moves, training, avoided
@@ -765,7 +902,7 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
                 move_lines.append(f"🔴 {cfg['emoji']} {cfg['name']} vendeu **{t['symbol']}** · {t['pnl_eur']:+.0f} € ({t['reason']})")
         fields.append(("📥 Movimentos", "\n".join(move_lines)))
     if avoided:
-        fields.append((f"📅 Compras evitadas: resultados nos próximos {EARNINGS_AVOID_DAYS} dias", "\n".join(avoided)[:1024]))
+        fields.append(("🚫 Compras evitadas (resultados próximos ou notícias negativas)", "\n".join(avoided)[:1024]))
     if training:
         fields.append(("🧬 Treino do mês (agentes que perderam dinheiro mudam de parâmetros)", "\n".join(training)[:1024]))
     pending = sum(len(p["pending"]) for _, p, _ in rows)

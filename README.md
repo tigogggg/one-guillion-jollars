@@ -219,3 +219,18 @@ move the webhook's channel into it for conversation and commands. The ids go to
 `discord/channels.json`; `discord_post.route()` then posts each kind with the
 bot user into its channel (needs Manage Channels and Manage Roles to create
 them). Without that file everything posts to the webhook channel as before.
+
+## Agent logic v2: news filter, monthly re-training, four new agents
+
+- No agent buys a stock whose 36 h news score is at or below -3 (except
+  Cético, whose strategy is exactly that, and agents with `ignora_noticias`).
+- Learning: strategies that can be replayed are re-trained on the last 5
+  years on the first weekday of each month (Worker job `treino`, 07:30
+  Lisbon, `pretrain.yml` with the last year as exam). Random monthly mutation
+  remains only for the live-only strategies (`LIVE_ONLY`).
+- Catalisador: positive, important news confirmed by the price (up day on
+  1.5x volume or a gap). Cético: important bad news the market shrugged off in
+  an uptrend stock. Conselho: holds what at least 2 agents hold or are buying,
+  without bad news. Maestro: copies the combined portfolio of the 3 agents with
+  the best results over the last 20 sessions. Meta-agents decide after the
+  others.

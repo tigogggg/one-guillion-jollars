@@ -1,11 +1,10 @@
-"""Pre-train the agents on the last year of real data (walk-forward backtest).
+"""Pre-train the agents on the last YEARS years of real data (walk-forward backtest).
 
 Every strategy is replayed day by day with the live engine (agents.py): on day
 D it only sees data up to D's close, its orders fill at D+1's open, then stops
 and targets are checked. For each strategy about VARIANTS parameter sets are
-scored with the league's own points on the first ~8 months (training); the
-best one is then run on the last ~4 months (validation, never seen in
-training) and adopted only if it scores at least as well there as the
+scored with the league's own points on all but the last year (training); the
+best one is then run on the last year (validation, never seen in training) and adopted only if it scores at least as well there as the
 original parameters.
 
 Limits, also stated in the Discord report: today's S&P 500 list is used for
@@ -21,6 +20,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
+import os
 import random
 import sys
 from datetime import date
@@ -43,13 +44,18 @@ from charts import lines_chart
 from discord_post import BLUE, embed, route, send
 from rankings import UCITS_ETFS, download_history, load_constituents
 
-BACKTEST_DAYS = 250
-TRAIN_SHARE = 0.68
+SESSIONS_PER_YEAR = 252
+YEARS = 5
+EXAM_SESSIONS = SESSIONS_PER_YEAR  # the last year is the exam; the years before it are for training
 VARIANTS = 24
 WARMUP = 220
 SKIP = {
     "joalheiro": "precisa dos fundamentais do passado, que o Yahoo não tem",
     "jornalista": "não há histórico gratuito de notícias; só se avalia ao vivo",
+    "catalisador": "não há histórico gratuito de notícias; só se avalia ao vivo",
+    "cetico": "não há histórico gratuito de notícias; só se avalia ao vivo",
+    "conselho": "depende das carteiras dos outros agentes ao vivo",
+    "maestro": "depende dos resultados dos outros agentes ao vivo",
 }
 REPORT_PATH = agents.REPO_AGENTS / "pretrain.json"
 
@@ -91,19 +97,24 @@ def features(df: pd.DataFrame) -> pd.DataFrame:
 
 def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, dict] | None = None) -> dict[date, dict]:
     """{day: {symbol: metrics}} with trend_score ranked within the group that day."""
-    feats = {s: features(df) for s, df in hist.items()}
+    # Plain numpy rows per symbol: pandas row lookups are too slow for years x hundreds of symbols.
+    tables = {}
+    for s, df in hist.items():
+        f = features(df)
+        valid = f["valid"].to_numpy() & f["sma200"].notna().to_numpy() & f["ret_6m"].notna().to_numpy()
+        cols = [c for c in f.columns if c != "valid"]
+        rows = {ts.date(): i for i, ts in enumerate(f.index)}
+        tables[s] = (rows, f[cols].to_numpy(dtype=float), cols, valid)
     out = {}
     for d in days:
-        ts = pd.Timestamp(d)
         today = {}
-        for s, f in feats.items():
-            if ts not in f.index:
+        for s, (rows, values, cols, valid) in tables.items():
+            i = rows.get(d)
+            if i is None or not valid[i]:
                 continue
-            row = f.loc[ts]
-            if not row["valid"] or row[["sma200", "ret_6m"]].isna().any():
-                continue
-            m = row.drop("valid").to_dict()
+            m = dict(zip(cols, values[i].tolist()))
             m["sma200_rising"] = bool(m["sma200_rising"])
+            m["gap_age"] = int(m["gap_age"])
             m.update((extra or {}).get(s, {}))
             if "sector" in m:
                 m["stage2"] = agents.is_stage2(m)
@@ -113,15 +124,16 @@ def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, 
     return out
 
 
-def build_markets() -> list[Market]:
+def build_markets(years: int = YEARS) -> list[Market]:
     constituents = load_constituents()
     sector_of = {c["symbol"]: c["sector"] for c in constituents}
-    stock_hist = download_history(list(sector_of) + ["SPY"], period="2y")
-    etf_hist = download_history([t for t, _ in UCITS_ETFS], period="2y")
-    fx = download_history(["EURUSD=X"], period="2y")["EURUSD=X"]["Close"]
+    period = "2y" if years <= 1 else "10y"  # Yahoo periods: enough for the backtest plus the 200-day warm-up
+    stock_hist = download_history(list(sector_of) + ["SPY"], period=period)
+    etf_hist = download_history([t for t, _ in UCITS_ETFS], period=period)
+    fx = download_history(["EURUSD=X"], period=period)["EURUSD=X"]["Close"]
     spy = stock_hist.pop("SPY")
     sessions = [d.date() for d in spy.index]
-    days = sessions[-BACKTEST_DAYS:]
+    days = sessions[WARMUP:][-years * SESSIONS_PER_YEAR:]
     names = dict(UCITS_ETFS)
     stocks = snapshots(stock_hist, days, {s: {"sector": sector_of[s]} for s in stock_hist})
     etfs = snapshots(etf_hist, days, {s: {"name": names.get(s, s)} for s in etf_hist})
@@ -184,35 +196,53 @@ def variants(strategy: str, n: int) -> list[dict]:
     return out
 
 
-def pretrain(markets: list[Market], only: set[str] | None = None) -> dict:
-    split = int(len(markets) * TRAIN_SHARE)
+_MARKETS: list[Market] = []  # shared with the worker processes (fork), not pickled
+
+
+def train_strategy(strategy: str) -> tuple[str, dict]:
+    """Search parameters on the training years, then check the best set on the exam year."""
+    markets = _MARKETS
+    split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
     train, valid = markets[:split], markets[split:]
-    results = {"train": [train[0].as_of.isoformat(), train[-1].as_of.isoformat()],
-               "valid": [valid[0].as_of.isoformat(), valid[-1].as_of.isoformat()], "strategies": {}}
-    for strategy in STRATEGIES:
-        if only and strategy not in only:
-            continue
-        if strategy in SKIP:
-            results["strategies"][strategy] = {"skipped": SKIP[strategy]}
-            continue
-        candidates = variants(strategy, VARIANTS)
-        scored = [(simulate(strategy, p, train), p) for p in candidates]
-        best_train, best = max(scored, key=lambda x: x[0]["points"])
-        default_train = scored[0][0]
-        best_valid = simulate(strategy, best, valid)
-        default_valid = best_valid if best == candidates[0] else simulate(strategy, candidates[0], valid)
-        adopt = best != candidates[0] and best_valid["points"] >= default_valid["points"]
-        chosen = best if adopt else candidates[0]
-        full = simulate(strategy, chosen, markets)
-        results["strategies"][strategy] = {
-            "default": candidates[0], "best": best, "adopted": adopt, "chosen": chosen,
-            "train": {"default": strip(default_train), "best": strip(best_train)},
-            "valid": {"default": strip(default_valid), "best": strip(best_valid)},
-            "year": strip(full), "curve": full["curve"],
-        }
-        print(f"{strategy}: treino {best_train['points']} vs {default_train['points']} pts; "
-              f"validação {best_valid['points']} vs {default_valid['points']} → {'adotado' if adopt else 'mantém'}",
-              file=sys.stderr)
+    candidates = variants(strategy, VARIANTS)
+    scored = [(simulate(strategy, p, train), p) for p in candidates]
+    best_train, best = max(scored, key=lambda x: x[0]["points"])
+    default_train = scored[0][0]
+    best_valid = simulate(strategy, best, valid)
+    default_valid = best_valid if best == candidates[0] else simulate(strategy, candidates[0], valid)
+    adopt = best != candidates[0] and best_valid["points"] >= default_valid["points"]
+    chosen = best if adopt else candidates[0]
+    full = simulate(strategy, chosen, markets)
+    print(f"{strategy}: treino {best_train['points']} vs {default_train['points']} pts; "
+          f"validação {best_valid['points']} vs {default_valid['points']} → {'adotado' if adopt else 'mantém'}",
+          file=sys.stderr, flush=True)
+    return strategy, {
+        "default": candidates[0], "best": best, "adopted": adopt, "chosen": chosen,
+        "train": {"default": strip(default_train), "best": strip(best_train)},
+        "valid": {"default": strip(default_valid), "best": strip(best_valid)},
+        "year": strip(full), "curve": full["curve"],
+    }
+
+
+def pretrain(markets: list[Market], only: set[str] | None = None, processes: int | None = None) -> dict:
+    """Train every strategy (in parallel processes) and report training and exam results."""
+    global _MARKETS
+    _MARKETS = markets
+    split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
+    results = {"train": [markets[0].as_of.isoformat(), markets[split - 1].as_of.isoformat()],
+               "valid": [markets[split].as_of.isoformat(), markets[-1].as_of.isoformat()], "strategies": {}}
+    todo = [s for s in STRATEGIES if not only or s in only]
+    for s in todo:
+        if s in SKIP:
+            results["strategies"][s] = {"skipped": SKIP[s]}
+    trainable = [s for s in todo if s not in SKIP]
+    processes = processes or min(len(trainable), os.cpu_count() or 1)
+    if processes > 1:
+        with multiprocessing.get_context("fork").Pool(processes) as pool:
+            done = pool.map(train_strategy, trainable, chunksize=1)
+    else:
+        done = [train_strategy(s) for s in trainable]
+    results["strategies"].update(done)
     return results
 
 
@@ -264,14 +294,14 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
         y, v = r["year"], r["valid"]
         verdict = "✅ parâmetros novos" if r["adopted"] else "↩️ mantém os originais"
         lines.append(
-            f"{cfg['emoji']} **{cfg['name']}** · ano* {pct(y['return'])} · queda máx. {pct(-y['max_drawdown'])}"
+            f"{cfg['emoji']} **{cfg['name']}** · período* {pct(y['return'])} · queda máx. {pct(-y['max_drawdown'])}"
             f" · exame: {v['best']['points']} vs {v['default']['points']} pts · {verdict}"
         )
     fields = [("🧪 Como foi feito",
                f"Treino {results['train'][0]} a {results['train'][1]} · exame {results['valid'][0]} a {results['valid'][1]}.\n"
                f"~{VARIANTS} variações por estratégia, avaliadas pelos pontos da liga. Ordens à abertura do dia seguinte, "
                "0,1% de custos, sem ver o futuro.\n"
-               "*O ano inclui o período em que os parâmetros foram escolhidos, por isso é otimista; "
+               "*O período inclui os anos em que os parâmetros foram escolhidos, por isso é otimista; "
                "o que conta é o exame (pontos com os parâmetros escolhidos vs os originais).")]
     if applied:
         fields.append(("⚙️ Parâmetros aplicados aos agentes", "\n".join(applied)[:1024]))
@@ -279,10 +309,11 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
                    "Lista atual do S&P 500 (empresas que saíram do índice não entram: resultados otimistas). "
                    "Sem regra de resultados no passado. Um ano é um só tipo de mercado."))
     if bench:
-        fields.append(("🐢 Referência", f"S&P 500 (Indexador) no ano: {pct(bench['return'])}, queda máx. {pct(-bench['max_drawdown'])}"))
+        fields.append(("🐢 Referência", f"S&P 500 (Indexador) no período: {pct(bench['return'])}, queda máx. {pct(-bench['max_drawdown'])}"))
     series = {by_strategy.get(s, {"name": s})["name"]: r["curve"] for s, r in results["strategies"].items() if "curve" in r}
-    files = {"pretreino.png": lines_chart(series, "Pré-treino: rentabilidade no último ano (parâmetros escolhidos)")}
-    card = embed("🧠 Pré-treino dos agentes: o último ano, dia a dia", "\n".join(lines), color=BLUE,
+    years = round(len(next(iter(series.values()), [])) / SESSIONS_PER_YEAR, 1) if series else YEARS
+    files = {"pretreino.png": lines_chart(series, f"Pré-treino: rentabilidade em {years:g} anos (parâmetros escolhidos)")}
+    card = embed(f"🧠 Pré-treino dos agentes: {years:g} anos, dia a dia", "\n".join(lines), color=BLUE,
                  fields=fields, image="pretreino.png",
                  footer="Backtest: resultados passados simulados, não garantem resultados futuros.")
     return [card], files
@@ -293,9 +324,10 @@ def main() -> int:
     parser.add_argument("--apply", action="store_true", help="Set the agents' parameters in agents/state.json")
     parser.add_argument("--dry-run", action="store_true", help="Print the report instead of posting")
     parser.add_argument("--estrategias", default="", help="Comma-separated strategies to train (default: all)")
+    parser.add_argument("--anos", type=int, default=YEARS, help=f"Years of history to replay (default {YEARS})")
     args = parser.parse_args()
 
-    markets = build_markets()
+    markets = build_markets(args.anos)
     print(f"{len(markets)} dias de {markets[0].as_of} a {markets[-1].as_of}", file=sys.stderr)
     only = {s.strip() for s in args.estrategias.split(",") if s.strip()} or None
     results = pretrain(markets, only | {"indexador"} if only else None)
