@@ -22,6 +22,12 @@ jobs:
           path: state/watchlist
           key: watchlist-latest
           restore-keys: watchlist-
+      - name: Carregar o histórico de alertas
+        uses: actions/cache/restore@v4
+        with:
+          path: state/history
+          key: alert-history-latest
+          restore-keys: alert-history-
       - id: day
         run: echo "d=$(TZ=America/New_York date +%F)" >> "$GITHUB_OUTPUT"
       - name: Carregar os alertas já enviados hoje
@@ -40,3 +46,9 @@ jobs:
         with:
           path: state/alerts
           key: alerts-${{ steps.day.outputs.d }}-${{ github.run_id }}
+      - name: Guardar o histórico de alertas
+        if: ${{ !cancelled() && hashFiles('state/history/*.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: state/history
+          key: alert-history-${{ github.run_id }}

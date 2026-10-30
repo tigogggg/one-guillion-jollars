@@ -96,3 +96,17 @@ Setup, once:
 
 Messages are embeds with PNG charts (`scripts/charts.py`, `scripts/discord_post.py`);
 `--dry-run` on any script saves the charts to `reports/preview/`.
+
+## Schedule (`/horario`) and weekly summary
+
+The Worker is also the scheduler. A Cloudflare cron trigger (`*/5 * * * *`)
+calls its `scheduled()` handler, which dispatches `discord-daily.yml`,
+`opportunity-alerts.yml` and `weekly-summary.yml` at the times stored in the
+Worker's KV namespace (binding `CONFIG`), in Lisbon time. Defaults: tips and
+rankings 11:40 on weekdays, alerts 15:40/17:40/19:40 on weekdays, weekly
+summary Saturday 10:00. Server admins change them with `/horario`.
+
+`scripts/weekly_summary.py` posts the week's index and sector changes, the
+share of S&P 500 stocks above their 50-day average vs a week ago, the top
+gainers and losers, and how the alerts of the last 5 weeks did
+(`state/history/alerts.json`, kept in the Actions cache).
