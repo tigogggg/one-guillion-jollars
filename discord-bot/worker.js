@@ -25,10 +25,20 @@ const EPHEMERAL = 64;
 const WORKFLOW_COMMANDS = new Set(["acao", "etf", "mercado"]);
 
 const TIMEZONE = "Europe/Lisbon";
-const DEFAULT_SCHEDULE = { dicas: "11:40", alertas: ["15:40", "17:40", "19:40"], semanal: { dia: "sab", hora: "10:00" } };
+const DEFAULT_SCHEDULE = {
+  dicas: "11:40",
+  agentes: "12:15",
+  alertas: ["15:40", "17:40", "19:40"],
+  semanal: { dia: "sab", hora: "10:00" },
+};
 const DAYS = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
 const DAY_NAMES = { dom: "domingo", seg: "segunda", ter: "terça", qua: "quarta", qui: "quinta", sex: "sexta", sab: "sábado" };
-const WORKFLOWS = { dicas: "discord-daily.yml", alertas: "opportunity-alerts.yml", semanal: "weekly-summary.yml" };
+const WORKFLOWS = {
+  dicas: "discord-daily.yml",
+  agentes: "agents.yml",
+  alertas: "opportunity-alerts.yml",
+  semanal: "weekly-summary.yml",
+};
 const LATE_LIMIT_MIN = 20; // still start a job this many minutes after its time (missed cron ticks)
 const MAX_ALERT_TIMES = 6;
 
@@ -38,6 +48,7 @@ const HELP = [
   "**O que aparece aqui** (hora de Lisboa; `/horario ver` mostra os horários atuais):",
   "• Dias úteis de manhã · 📊 Dicas do dia, 🏆 top 3 ações por setor e 📦 top 10 ETFs UCITS",
   "• Durante a sessão dos EUA · 🚨 alertas, só quando uma ação da lista rompe com volume",
+  "• Dias úteis · 🤖 liga dos agentes: 10 estratégias com dinheiro fictício e preços reais",
   "• Ao fim de semana · 🗓️ resumo semanal com o desempenho dos alertas",
   "",
   "**Comandos** (escreve `/` na caixa de mensagem):",
@@ -45,7 +56,8 @@ const HELP = [
   "• `/etf VWCE` · tendência de um ETF UCITS",
   "• `/mercado` · leitura do mercado agora",
   "• `/posicao capital entrada stop` · quantas ações comprar (ex.: `/posicao 10000 35.84 34.14`)",
-  "• `/horario` · ver ou mudar as horas das análises (só administradores)",
+  "• `/agentes` · liga dos agentes simulados (ou `/agentes nome` para ver um agente)",
+  "• `/horario` e `/agente` · horários e gestão dos agentes (só administradores)",
   "• `/ajuda` · esta mensagem",
   "",
   "`/acao`, `/etf` e `/mercado` demoram 1-2 minutos: o bot mostra \"a pensar…\" e depois responde.",
@@ -80,6 +92,14 @@ export default {
     if (name === "posicao") {
       return json({ type: CHANNEL_MESSAGE, data: { content: positionSize(options), allowed_mentions: { parse: [] } } });
     }
+    if (name === "agentes" || name === "agente") {
+      const sub = name === "agente" ? interaction.data.options?.[0] : null;
+      const args = sub
+        ? { acao: sub.name, ...Object.fromEntries((sub.options || []).map((o) => [o.name, o.value])) }
+        : { acao: "ver", nome: String(options.nome || "") };
+      ctx.waitUntil(startInteractionWorkflow(env, interaction, "agents.yml", { mode: "config", args: JSON.stringify(args) }));
+      return json({ type: DEFERRED_CHANNEL_MESSAGE });
+    }
     if (name === "horario") {
       return json({ type: CHANNEL_MESSAGE, data: { content: await scheduleCommand(env, interaction.data.options?.[0]) } });
     }
@@ -99,6 +119,7 @@ export default {
     const jobs = [];
     if (weekday) {
       jobs.push(["dicas", schedule.dicas]);
+      jobs.push(["agentes", schedule.agentes]);
       for (const t of schedule.alertas) jobs.push(["alertas", t]);
     }
     if (now.day === schedule.semanal.dia) jobs.push(["semanal", schedule.semanal.hora]);
@@ -122,9 +143,9 @@ async function scheduleCommand(env, sub) {
   const args = Object.fromEntries((sub?.options || []).map((o) => [o.name, String(o.value).trim()]));
   const action = sub?.name || "ver";
 
-  if (action === "dicas") {
+  if (action === "dicas" || action === "agentes") {
     if (!isTime(args.hora)) return badTime(args.hora);
-    schedule.dicas = normaliseTime(args.hora);
+    schedule[action] = normaliseTime(args.hora);
   } else if (action === "alertas") {
     const times = (args.horas || "").split(/[,\s]+/).filter(Boolean);
     if (!times.length || times.length > MAX_ALERT_TIMES || !times.every(isTime)) {
@@ -143,6 +164,7 @@ async function scheduleCommand(env, sub) {
   return [
     action === "ver" ? "🕒 **Horários atuais** (hora de Lisboa)" : "✅ **Horários atualizados** (hora de Lisboa)",
     `📊 Dicas do dia e rankings: **${schedule.dicas}** (dias úteis)`,
+    `🤖 Liga dos agentes: **${schedule.agentes}** (dias úteis, depois das dicas)`,
     `🚨 Verificação de alertas: **${schedule.alertas.join(" · ")}** (dias úteis; a sessão dos EUA é das 14:30 às 21:00)`,
     `🗓️ Resumo semanal: **${DAY_NAMES[schedule.semanal.dia]} às ${schedule.semanal.hora}**`,
     "-# As análises arrancam até 5 minutos depois da hora marcada e demoram alguns minutos a chegar.",
@@ -233,9 +255,13 @@ async function dispatchWorkflow(env, workflow, inputs) {
 }
 
 async function startWorkflow(env, interaction, command, arg) {
-  const resp = await dispatchWorkflow(env, "discord-bot.yml", {
-    command,
-    arg,
+  return startInteractionWorkflow(env, interaction, "discord-bot.yml", { command, arg });
+}
+
+// Start a workflow that edits this interaction's deferred reply; report failures in the reply.
+async function startInteractionWorkflow(env, interaction, workflow, inputs) {
+  const resp = await dispatchWorkflow(env, workflow, {
+    ...inputs,
     application_id: interaction.application_id,
     token: interaction.token,
   });

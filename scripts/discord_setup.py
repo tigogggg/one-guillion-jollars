@@ -19,6 +19,19 @@ from discord_post import BLUE, embed, send
 
 SUB_COMMAND, STRING, NUMBER = 1, 3, 10
 MANAGE_SERVER = "32"  # permission bit: only server admins see /horario
+# Mirrors agents.STRATEGIES (not imported: that module pulls in pandas and yfinance).
+STRATEGY_CHOICES = [
+    ("indexador", "compra e mantém o S&P 500"),
+    ("guardiao", "ETF mundial com peso pela zona do mercado"),
+    ("rotador", "roda entre os melhores ETFs UCITS"),
+    ("foguetao", "top ações por score de tendência"),
+    ("joalheiro", "melhores do ranking com qualidade alta"),
+    ("cacador", "rompimentos com volume"),
+    ("sniper", "contração de volatilidade (VCP)"),
+    ("campeao", "melhores ações dos setores mais fortes"),
+    ("pescador", "compra quedas em ações em tendência"),
+    ("kamikaze", "tudo nas maiores subidas a 3 meses"),
+]
 WEEKDAYS = [("segunda", "seg"), ("terça", "ter"), ("quarta", "qua"), ("quinta", "qui"),
             ("sexta", "sex"), ("sábado", "sab"), ("domingo", "dom")]
 
@@ -59,6 +72,12 @@ COMMANDS = [
             },
             {
                 "type": SUB_COMMAND,
+                "name": "agentes",
+                "description": "Hora da liga dos agentes (dias úteis, depois das dicas)",
+                "options": [{"type": STRING, "name": "hora", "description": "HH:MM, ex.: 12:15", "required": True}],
+            },
+            {
+                "type": SUB_COMMAND,
                 "name": "alertas",
                 "description": "Horas da verificação de alertas (dias úteis)",
                 "options": [{"type": STRING, "name": "horas", "description": "Separadas por vírgulas, ex.: 15:40,17:40,19:40", "required": True}],
@@ -74,6 +93,45 @@ COMMANDS = [
                 ],
             },
             {"type": SUB_COMMAND, "name": "repor", "description": "Voltar aos horários de origem"},
+        ],
+    },
+    {
+        "name": "agentes",
+        "description": "Liga dos agentes simulados, ou o detalhe de um agente",
+        "options": [{"type": STRING, "name": "nome", "description": "Nome do agente (vazio = liga completa)"}],
+    },
+    {
+        "name": "agente",
+        "description": "Gerir os agentes: criar, dar dinheiro, desativar",
+        "default_member_permissions": MANAGE_SERVER,
+        "options": [
+            {
+                "type": SUB_COMMAND,
+                "name": "criar",
+                "description": "Criar um agente novo",
+                "options": [
+                    {"type": STRING, "name": "nome", "description": "Nome do agente", "required": True},
+                    {"type": STRING, "name": "estrategia", "description": "Estratégia", "required": True,
+                     "choices": [{"name": f"{k}: {label}"[:100], "value": k} for k, label in STRATEGY_CHOICES]},
+                    {"type": NUMBER, "name": "capital", "description": "Dinheiro inicial em € (por defeito 1000)", "min_value": 50},
+                    {"type": STRING, "name": "emoji", "description": "Emoji do agente, ex.: 🦊"},
+                ],
+            },
+            {
+                "type": SUB_COMMAND,
+                "name": "depositar",
+                "description": "Dar mais dinheiro a um agente",
+                "options": [
+                    {"type": STRING, "name": "nome", "description": "Nome do agente", "required": True},
+                    {"type": NUMBER, "name": "valor", "description": "Valor em €", "required": True, "min_value": 1},
+                ],
+            },
+            {
+                "type": SUB_COMMAND,
+                "name": "remover",
+                "description": "Desativar um agente (o histórico fica guardado)",
+                "options": [{"type": STRING, "name": "nome", "description": "Nome do agente", "required": True}],
+            },
         ],
     },
     {"name": "ajuda", "description": "Como usar este canal e o bot"},
@@ -109,6 +167,7 @@ def welcome_card() -> dict:
                 "📅 O que aparece aqui (hora de Lisboa)",
                 "**Dias úteis, 11:40** · 📊 Dicas do dia: saúde do mercado (breadth), exposição sugerida, setores e setups VCP\n"
                 "**Dias úteis, 11:40** · 🏆 Top 3 ações por setor e 📦 top 10 ETFs UCITS, com valorização do dia, semana, 3 e 6 meses\n"
+                "**Dias úteis, 12:15** · 🤖 Liga dos agentes: 10 estratégias com dinheiro fictício e preços reais\n"
                 "**Dias úteis, 15:40 · 17:40 · 19:40** · 🚨 Alertas, só quando uma ação da lista rompe o pivot com volume\n"
                 "**Sábado, 10:00** · 🗓️ Resumo semanal: índices, setores, maiores subidas e quedas, e como correram os alertas\n"
                 "Os administradores podem mudar estas horas com `/horario`.",
@@ -118,7 +177,7 @@ def welcome_card() -> dict:
                 "`/acao NVDA` · tendência, qualidade, pivot, stop e gráfico de uma ação dos EUA\n"
                 "`/etf VWCE` · tendência e gráfico de um ETF UCITS\n"
                 "`/mercado` · leitura do mercado agora\n"
-                "`/posicao capital entrada stop` · quantas ações comprar (ex.: 10000, 35.84, 34.14)\n"
+                "`/posicao capital entrada stop` · quantas ações comprar (ex.: 10000, 35.84, 34.14)\n"                "`/agentes` · liga dos agentes, ou `/agentes nome` para ver um agente\n"
                 "`/ajuda` · resumo destes comandos (só tu vês)\n"
                 "`/acao`, `/etf` e `/mercado` demoram 1-2 minutos: o bot mostra \"a pensar…\" e depois responde.",
             ),
