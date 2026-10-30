@@ -5,6 +5,11 @@ name: Notícias (Discord)
 # headlines with the owner's subscription; FinBERT is the fallback.
 on:
   workflow_dispatch:
+    inputs:
+      republicar:
+        description: "Só voltar a publicar as notícias importantes das últimas 36 h"
+        type: boolean
+        default: false
 
 concurrency:
   group: news
@@ -39,8 +44,14 @@ jobs:
           path: state/news
           key: news-latest
           restore-keys: news-
+      - name: Republicar as notícias guardadas
+        if: ${{ inputs.republicar }}
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: uv run python scripts/news.py --republicar
       - name: Analisar com o Claude
         id: claude
+        if: ${{ !inputs.republicar }}
         continue-on-error: true
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
