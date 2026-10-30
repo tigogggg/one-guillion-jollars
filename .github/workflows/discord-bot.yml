@@ -1,0 +1,40 @@
+name: Bot do Discord
+run-name: "/${{ inputs.command }} ${{ inputs.arg }}"
+
+# Started by the Cloudflare Worker (discord-bot/worker.js) for /acao, /etf and
+# /mercado; edits the bot's "a pensar…" reply with the answer.
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        required: true
+        type: string
+      arg:
+        required: false
+        type: string
+        default: ""
+      application_id:
+        required: true
+        type: string
+      token:
+        description: "Token da interação (válido 15 min)"
+        required: true
+        type: string
+
+jobs:
+  answer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Responder no Discord
+        env:
+          COMMAND: ${{ inputs.command }}
+          ARG: ${{ inputs.arg }}
+          APPLICATION_ID: ${{ inputs.application_id }}
+          INTERACTION_TOKEN: ${{ inputs.token }}
+        run: uv run python scripts/bot_command.py

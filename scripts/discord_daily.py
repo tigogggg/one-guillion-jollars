@@ -1,8 +1,9 @@
 """Post a daily market-breadth summary to a Discord channel via webhook.
 
 Runs uptrend-analyzer (and market-breadth-analyzer when its data host is
-reachable), turns the JSON reports into a short Portuguese message and posts
-it to DISCORD_WEBHOOK_URL. Use --dry-run to print the message instead.
+reachable) and vcp-screener (with FMP_API_KEY), turns the JSON reports into a
+Portuguese card with a sector chart and posts it to DISCORD_WEBHOOK_URL. Use
+--dry-run to print it and save the chart to reports/preview/.
 
     uv run python scripts/discord_daily.py --dry-run
     DISCORD_WEBHOOK_URL=... uv run python scripts/discord_daily.py
@@ -18,12 +19,12 @@ import sys
 from datetime import date
 from pathlib import Path
 
-import requests
+from charts import sector_chart
+from discord_post import BLUE, ZONE_COLORS, embed, send
 
 REPO = Path(__file__).resolve().parents[1]
 # Shared with the intraday alerts through the Actions cache.
 WATCHLIST_DIR = REPO / "state" / "watchlist"
-DISCORD_LIMIT = 2000
 
 BREADTH_DETAIL_URL = "https://tradermonty.github.io/market-breadth-analysis/market_breadth_data.csv"
 BREADTH_SUMMARY_URL = "https://tradermonty.github.io/market-breadth-analysis/market_breadth_summary.csv"
@@ -119,9 +120,9 @@ def vcp_lines(vcp: dict, zone: str) -> list[str]:
     if funnel:
         calls = vcp["metadata"].get("api_stats", {}).get("api_calls_made", "?")
         lines.append(
-            f"-# {funnel.get('universe', 0)} ações → {funnel.get('pre_filter_passed', 0)} no pré-filtro"
+            f"_{funnel.get('universe', 0)} ações → {funnel.get('pre_filter_passed', 0)} no pré-filtro"
             f" → {funnel.get('trend_template_passed', 0)} em Stage 2"
-            f" → {funnel.get('vcp_candidates', 0)} padrões · {calls} chamadas FMP"
+            f" → {funnel.get('vcp_candidates', 0)} padrões · {calls} chamadas FMP_"
         )
         if funnel.get("universe") and not funnel.get("pre_filter_passed"):
             lines.append("⚠️ Nenhuma ação passou o pré-filtro: provavelmente a FMP não devolveu dados.")
@@ -140,11 +141,12 @@ def vcp_lines(vcp: dict, zone: str) -> list[str]:
     if zone in ("Cautious", "Bear"):
         lines.append("_Mercado fraco: lista só para observar, não para entrar._")
     else:
-        lines.append("_Lista de observação, não são recomendações de compra._")
+        lines.append("_Lista de observação._")
     return lines
 
 
-def build_message(uptrend: dict, breadth: dict | None, vcp: dict | None = None) -> str:
+def build_post(uptrend: dict, breadth: dict | None, vcp: dict | None = None, title: str = "📊 Dicas do dia") -> tuple[list[dict], dict]:
+    """The tips as one embed coloured by market zone, with the sector chart attached."""
     comp = uptrend["composite"]
     mb = uptrend["components"]["market_breadth"]
     sp = uptrend["components"]["sector_participation"]
@@ -152,8 +154,6 @@ def build_message(uptrend: dict, breadth: dict | None, vcp: dict | None = None) 
     as_of = uptrend["metadata"]["latest_data_date"]
 
     lines = [
-        f"📊 **Dicas do dia — breadth do mercado (dados de {as_of})**",
-        "",
         f"**Uptrend score:** {comp['composite_score']}/100 · {zone_label(comp['zone'])}",
         f"**Exposição sugerida a ações:** {EXPOSURE_PT.get(comp['exposure_guidance'], comp['exposure_guidance'])}",
     ]
@@ -184,9 +184,14 @@ def build_message(uptrend: dict, breadth: dict | None, vcp: dict | None = None) 
     if vcp:
         lines += vcp_lines(vcp, comp["zone"])
 
-    lines += ["", "_Ferramenta de análise educativa, não é aconselhamento financeiro._"]
-    message = "\n".join(lines)
-    return message[: DISCORD_LIMIT - 1] + "…" if len(message) > DISCORD_LIMIT else message
+    chart = sector_chart([(sector(s["sector"]), s["ratio_pct"], s["trend"] == "Up") for s in details])
+    card = embed(
+        f"{title}: breadth do mercado (dados de {as_of})",
+        "\n".join(lines),
+        color=ZONE_COLORS.get(comp["zone"], BLUE),
+        image="setores.png",
+    )
+    return [card], {"setores.png": chart}
 
 
 def main() -> int:
@@ -225,26 +230,8 @@ def main() -> int:
         WATCHLIST_DIR.mkdir(parents=True, exist_ok=True)
         (WATCHLIST_DIR / "vcp-latest.json").write_text(json.dumps(vcp))
 
-    return post_to_discord(build_message(uptrend, breadth, vcp), args.dry_run)
-
-
-def post_to_discord(message: str, dry_run: bool = False) -> int:
-    """Post one message (max 2000 chars) to DISCORD_WEBHOOK_URL, or print it on a dry run."""
-    if dry_run:
-        print(message)
-        return 0
-    webhook = os.environ.get("DISCORD_WEBHOOK_URL")
-    if not webhook:
-        print("DISCORD_WEBHOOK_URL não definido; usa --dry-run para só ver a mensagem.", file=sys.stderr)
-        return 1
-
-    resp = requests.post(webhook, json={"content": message}, timeout=30)
-    if resp.status_code >= 300:
-        print(f"Discord respondeu {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
-        return 1
-    print("Mensagem enviada para o Discord.")
-    return 0
-
+    embeds, files = build_post(uptrend, breadth, vcp)
+    return send(embeds, files, dry_run=args.dry_run)
 
 if __name__ == "__main__":
     sys.exit(main())

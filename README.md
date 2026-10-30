@@ -66,3 +66,33 @@ volume, once per stock per day. `yfinance` is an unofficial Yahoo client and
 can break when Yahoo changes. Rankings are criteria-based, not buy advice.
 
 Tests: `uv run python -m pytest tests`.
+
+## Discord bot (slash commands)
+
+`/acao TICKER`, `/etf TICKER`, `/mercado`, `/posicao capital entrada stop
+[risco] [max_posicao]` and `/ajuda`. Discord calls a Cloudflare Worker
+(`discord-bot/worker.js`), which answers `/posicao` and `/ajuda` itself and
+starts `.github/workflows/discord-bot.yml` for the others; that workflow runs
+`scripts/bot_command.py` and edits the reply with a card and chart (1-2 min).
+The interaction token passed to the workflow is visible in the Actions run and
+expires after 15 minutes.
+
+Setup, once:
+
+1. Discord Developer Portal → New Application. Copy the Application ID and
+   Public Key; under Bot, reset and copy the token. Under Installation, add the
+   `applications.commands` scope and install the app on the server.
+2. GitHub → Settings → Developer settings → Fine-grained tokens: access to this
+   repository only, permission Actions: Read and write.
+3. Cloudflare → Workers & Pages → Create → Hello World worker, replace its
+   code with `discord-bot/worker.js`, deploy. Under Settings → Variables and
+   Secrets add `DISCORD_PUBLIC_KEY`, `GITHUB_REPO` (`tigogggg/one-guillion-jollars`)
+   and the secret `GITHUB_TOKEN`.
+4. Discord app → General Information → Interactions Endpoint URL: the Worker's
+   `https://….workers.dev` URL (Discord checks it on save).
+5. Repository secrets `DISCORD_APPLICATION_ID` and `DISCORD_BOT_TOKEN`, then run
+   the "Configurar o bot do Discord" workflow to register the commands and post
+   the welcome card (pin it).
+
+Messages are embeds with PNG charts (`scripts/charts.py`, `scripts/discord_post.py`);
+`--dry-run` on any script saves the charts to `reports/preview/`.

@@ -19,7 +19,9 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from discord_daily import REPO, WATCHLIST_DIR, post_to_discord
+from charts import price_chart
+from discord_daily import REPO, WATCHLIST_DIR
+from discord_post import DISCLAIMER, GREEN, embed, send
 from rankings import SECTORS_PT, download_history
 
 ALERTS_DIR = REPO / "state" / "alerts"
@@ -77,13 +79,28 @@ def check_breakout(df: pd.DataFrame, info: dict, fraction: float) -> dict | None
     return {"price": price, "pivot": pivot, "stop": stop, "risk": risk, "volume_ratio": volume_ratio}
 
 
-def alert_line(symbol: str, info: dict, a: dict) -> str:
-    origin = f"setup VCP ({info['sector']})" if info["source"] == "VCP" else f"{info['sector']}, score {info['score']:.0f}"
-    return (
-        f"• **{symbol}** ${a['price']:.2f} rompeu o pivot ${a['pivot']:.2f} ({(a['price'] / a['pivot'] - 1) * 100:+.1f}%)"
-        f" · volume projetado {a['volume_ratio']:.1f}× a média · stop ${a['stop']:.2f} (risco {a['risk'] * 100:.1f}%)"
-        f" · {origin}"
+def alert_card(symbol: str, info: dict, a: dict, df: pd.DataFrame) -> tuple[dict, str, bytes]:
+    origin = f"setup VCP · {info['sector']}" if info["source"] == "VCP" else f"{info['sector']} · score {info['score']:.0f}"
+    description = "\n".join(
+        [
+            f"**${a['price']:.2f}** rompeu o pivot ${a['pivot']:.2f} ({(a['price'] / a['pivot'] - 1) * 100:+.1f}%)",
+            f"Volume projetado **{a['volume_ratio']:.1f}×** a média de 50 dias",
+            f"Stop sugerido **${a['stop']:.2f}** (risco {a['risk'] * 100:.1f}%)",
+            f"_{origin}_",
+            "",
+            f"Tamanho da posição: `/posicao capital:… entrada:{a['price']:.2f} stop:{a['stop']:.2f}`",
+        ]
     )
+    filename = f"{symbol.lower()}.png"
+    chart = price_chart(df, f"{symbol}: rompimento", pivot=a["pivot"], stop=a["stop"])
+    card = embed(
+        f"🚨 {symbol}: possível oportunidade, rompimento com volume",
+        description,
+        color=GREEN,
+        image=filename,
+        footer="Confirma o gráfico e o tamanho da posição antes de entrar. " + DISCLAIMER,
+    )
+    return card, filename, chart
 
 
 def main() -> int:
@@ -97,29 +114,27 @@ def main() -> int:
         return 0
 
     now = datetime.now(NEW_YORK)
-    histories = download_history(sorted(watch), period="6mo")
+    histories = download_history(sorted(watch), period="2y")
     alerted_path = ALERTS_DIR / f"{now.date().isoformat()}.json"
     alerted = set(json.loads(alerted_path.read_text())) if alerted_path.exists() else set()
 
-    lines, fraction = [], session_fraction(now)
+    cards, files, fraction = [], {}, session_fraction(now)
     for symbol, info in watch.items():
         df = histories.get(symbol)
         if df is None or symbol in alerted or df.index[-1].date() != now.date():
             continue  # no data, already alerted, or no bar for today (market closed)
         a = check_breakout(df, info, fraction)
-        if a:
-            lines.append(alert_line(symbol, info, a))
+        if a and len(cards) < 10:  # Discord allows 10 embeds per message
+            card, filename, chart = alert_card(symbol, info, a, df)
+            cards.append(card)
+            files[filename] = chart
             alerted.add(symbol)
 
-    print(f"{len(watch)} ações na watchlist, {len(lines)} alertas novos", file=sys.stderr)
-    if not lines:
+    print(f"{len(watch)} ações na watchlist, {len(cards)} alertas novos", file=sys.stderr)
+    if not cards:
         return 0
 
-    message = "\n".join(
-        ["🚨 **Possível oportunidade: rompimento com volume**", "", *lines, "",
-         "_Confirma o gráfico e o tamanho da posição antes de entrar. Não é recomendação de compra._"]
-    )
-    status = post_to_discord(message[:2000], args.dry_run)
+    status = send(cards, files, dry_run=args.dry_run)
     if status == 0 and not args.dry_run:
         ALERTS_DIR.mkdir(parents=True, exist_ok=True)
         alerted_path.write_text(json.dumps(sorted(alerted)))
