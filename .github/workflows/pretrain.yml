@@ -10,6 +10,10 @@ on:
         description: "Aplicar os parâmetros escolhidos aos agentes"
         type: boolean
         default: true
+      estrategias:
+        description: "Só estas estratégias, separadas por vírgulas (vazio = todas)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -32,7 +36,8 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           APPLY: ${{ inputs.aplicar && '--apply' || '' }}
-        run: uv run python scripts/pretrain.py $APPLY
+          ESTRATEGIAS: ${{ inputs.estrategias }}
+        run: uv run python scripts/pretrain.py $APPLY --estrategias "$ESTRATEGIAS"
       - name: Guardar os resultados e os parâmetros
         if: ${{ !cancelled() }}
         run: |

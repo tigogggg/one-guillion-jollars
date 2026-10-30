@@ -81,6 +81,7 @@ PARAM_BOUNDS = {
     "alvo_pct": (0.03, 0.20, float),
     "max_dias": (5, 30, int),
     "folga": (0.05, 0.25, float),
+    "salto_pct": (0.03, 0.12, float),
 }
 
 
@@ -105,6 +106,26 @@ class Market:
 # --------------------------------------------------------------------------
 
 
+# A gap event: the open is GAP_MIN above the previous close, on GAP_VOLUME x the 50-day volume.
+GAP_MIN = 0.03
+GAP_VOLUME = 2.0
+GAP_LOOKBACK = 5
+
+
+def last_gap(df: pd.DataFrame) -> dict:
+    """The most recent gap event in the last GAP_LOOKBACK sessions (age 0 = today), or zeros."""
+    opens, closes, lows, vols = (df[c].to_numpy() for c in ("Open", "Close", "Low", "Volume"))
+    for age in range(GAP_LOOKBACK):
+        i = len(df) - 1 - age
+        if i < 51:
+            break
+        gap = opens[i] / closes[i - 1] - 1
+        avg = max(vols[i - 50:i].mean(), 1.0)
+        if gap >= GAP_MIN and vols[i] / avg >= GAP_VOLUME:
+            return {"gap_size": float(gap), "gap_low": float(lows[i]), "gap_age": age}
+    return {"gap_size": 0.0, "gap_low": 0.0, "gap_age": -1}
+
+
 def extra_metrics(df: pd.DataFrame) -> dict:
     before = df.iloc[:-1]
     last = df.iloc[-1]
@@ -114,6 +135,7 @@ def extra_metrics(df: pd.DataFrame) -> dict:
         "low10_prev": float(before["Low"].iloc[-10:].min()),
         "vol_ratio": float(last["Volume"]) / max(float(before["Volume"].iloc[-50:].mean()), 1.0),
         "range10": (float(df["High"].iloc[-10:].max()) - float(df["Low"].iloc[-10:].min())) / close,
+        **last_gap(df),
     }
 
 
@@ -567,6 +589,25 @@ def s_kamikaze(cfg, port, mkt, p):
     return rebalance(port, mkt, ranked[:n], 1.0 / n, set(), p["stop_pct"], "maior subida a 3 meses")
 
 
+def s_deriva(cfg, port, mkt, p):
+    """Post-gap drift: buy stocks that gapped up on heavy volume in the last days and held the gap."""
+    orders = [order_sell(s, f"{p['max_dias']} sessões") for s, pos in port["positions"].items()
+              if sessions_since(mkt, pos["entry_date"]) >= p["max_dias"]]
+    if mkt.zone == "Queda":
+        return orders
+    picks = [
+        s for s, m in mkt.stocks.items()
+        if m["gap_size"] >= p["salto_pct"] and 0 <= m["gap_age"] <= 3 and m["price"] > m["gap_low"]
+        and m["price"] > m["sma50"] and s not in port["positions"]
+    ]
+    eq = equity(port, mkt)
+    for s in sorted(picks, key=lambda s: mkt.stocks[s]["gap_size"], reverse=True)[: max(free_slots(port, p["n"]), 0)]:
+        m = mkt.stocks[s]
+        orders.append(order_buy(s, eq / p["n"], f"salto de {m['gap_size'] * 100:.0f}% com volume",
+                                stop=round(m["gap_low"] * 0.99, 4)))
+    return orders
+
+
 STRATEGIES = {
     "indexador": (s_indexador, "Compra e mantém o S&P 500 (referência)", {}),
     "guardiao": (s_guardiao, "ETF mundial com peso pela zona do mercado", {"max_exposicao": 1.0, "folga": 0.1}),
@@ -577,6 +618,7 @@ STRATEGIES = {
     "sniper": (s_sniper, "Contração de volatilidade (VCP)", {"n": 4, "risco_pct": 0.01, "aperto_pct": 0.06, "max_pos": 0.30}),
     "campeao": (s_campeao, "Melhores ações dos setores mais fortes", {"setores": 2, "por_setor": 2, "stop_pct": 0.12, "cada": 5}),
     "pescador": (s_pescador, "Compra quedas em ações em tendência", {"n": 5, "queda_pct": 0.05, "alvo_pct": 0.06, "stop_pct": 0.07, "max_dias": 10}),
+    "deriva": (s_deriva, "Segue saltos com volume (deriva pós-notícia/resultados)", {"n": 5, "salto_pct": 0.04, "max_dias": 20}),
     "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5, "ignora_resultados": True}),
 }
 

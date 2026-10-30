@@ -30,6 +30,7 @@ STRATEGY_CHOICES = [
     ("sniper", "contração de volatilidade (VCP)"),
     ("campeao", "melhores ações dos setores mais fortes"),
     ("pescador", "compra quedas em ações em tendência"),
+    ("deriva", "segue saltos com volume (resultados, notícias)"),
     ("kamikaze", "tudo nas maiores subidas a 3 meses"),
 ]
 WEEKDAYS = [("segunda", "seg"), ("terça", "ter"), ("quarta", "qua"), ("quinta", "qui"),
