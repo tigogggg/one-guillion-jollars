@@ -12,7 +12,15 @@ Claude Code skills for a structured trading process. The five skills in the
 | `position-sizer` | Risk-based position sizing (fixed %, ATR, Kelly) | None |
 | `trader-memory-core` | Thesis journal from idea to closed trade (local YAML) | Optional FMP API |
 | `signal-postmortem` | Post-trade outcome review | Optional FMP API |
-| `vcp-screener` | S&P 500 screen for Minervini VCP setups (pivot, stop, risk) | FMP API (~200 calls per run; free tier is 250/day) |
+| `vcp-screener` | S&P 500 screen for Minervini VCP setups (pivot, stop, risk) | FMP API (one call per stock; free tier is 250/day) |
+
+### Local changes to `vcp-screener`
+
+The FMP free tier rejects multi-symbol quotes, so `screen_vcp.py` gained
+`--history-quotes` (derive the pre-filter quote from each stock's history, one
+call per stock), `--max-universe N` (largest N by market cap, or alternating
+halves when FMP's company screener is unavailable) and `--api-budget N`.
+`fmp_client.py` gained `get_market_caps()`. Defaults are unchanged.
 
 ## Daily Discord post
 

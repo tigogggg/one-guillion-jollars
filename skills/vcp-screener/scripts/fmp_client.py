@@ -441,6 +441,37 @@ class FMPClient:
             return None
         return data or None
 
+    def get_market_caps(self, min_market_cap: int = 5_000_000_000) -> Optional[dict[str, float]]:
+        """Return {symbol: marketCap} for large US stocks in one company-screener call.
+
+        Returns None when the endpoint is unavailable on this key's plan.
+        """
+        cache_key = f"market_caps_{min_market_cap}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        data = self._rate_limited_get(
+            "https://financialmodelingprep.com/stable/company-screener",
+            {
+                "marketCapMoreThan": min_market_cap,
+                "country": "US",
+                "isEtf": "false",
+                "isFund": "false",
+                "isActivelyTrading": "true",
+                "limit": 3000,
+            },
+            quiet=True,
+        )
+        if not isinstance(data, list):
+            print(f"WARN: company screener unavailable ({self._last_error})", file=sys.stderr)
+            return None
+        caps = {
+            row["symbol"]: row["marketCap"]
+            for row in data
+            if row.get("symbol") and row.get("marketCap")
+        }
+        self.cache[cache_key] = caps
+        return caps
+
     def get_sp500_constituents(self) -> Optional[list[dict]]:
         """Fetch S&P 500 constituent list.
 

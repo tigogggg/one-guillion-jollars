@@ -3488,3 +3488,52 @@ class TestEarlyPostBreakoutCap:
             breakout_volume=False,
         )
         assert result["state"] == "Early-post-breakout"
+
+
+# --- history-derived quotes and universe limit (FMP free tier) ---
+
+from screen_vcp import pre_filter_stock, quote_from_history, select_universe
+
+
+def _bars(closes, volume=1_000_000):
+    return [
+        {"close": c, "high": c * 1.01, "low": c * 0.99, "volume": volume} for c in closes
+    ]
+
+
+class TestQuoteFromHistory:
+    def test_derives_price_range_and_avg_volume(self):
+        # most-recent-first: price 150 after rising from 100
+        hist = _bars([150 - i * 0.2 for i in range(260)], volume=500_000)
+        q = quote_from_history(hist)
+        assert q["price"] == 150
+        assert q["yearHigh"] == pytest.approx(150 * 1.01)
+        assert q["yearLow"] == pytest.approx(min(150 - i * 0.2 for i in range(252)) * 0.99)
+        assert q["avgVolume"] == 500_000
+
+    def test_uptrend_passes_pre_filter(self):
+        q = quote_from_history(_bars([150 - i * 0.2 for i in range(260)]))
+        passed, _ = pre_filter_stock(q)
+        assert passed
+
+    def test_empty_history_returns_none(self):
+        assert quote_from_history([]) is None
+
+
+class TestSelectUniverse:
+    SYMBOLS = [f"S{i}" for i in range(10)]
+
+    def test_small_universe_unchanged(self):
+        assert select_universe(self.SYMBOLS, 20)[0] == self.SYMBOLS
+
+    def test_ranks_by_market_cap(self):
+        caps = {s: i for i, s in enumerate(self.SYMBOLS)}
+        picked, how = select_universe(self.SYMBOLS, 3, caps)
+        assert picked == ["S9", "S8", "S7"]
+        assert "market cap" in how
+
+    def test_alternates_halves_without_caps(self):
+        even, _ = select_universe(self.SYMBOLS, 5, None, day_ordinal=2)
+        odd, _ = select_universe(self.SYMBOLS, 5, None, day_ordinal=3)
+        assert even == ["S0", "S2", "S4", "S6", "S8"]
+        assert odd == ["S1", "S3", "S5", "S7", "S9"]

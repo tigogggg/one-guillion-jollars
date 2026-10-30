@@ -77,6 +77,8 @@ SECTORS_PT = {
 
 VCP_GOOD_RATINGS = ("Textbook VCP", "Strong VCP", "Good VCP")
 VCP_MAX_SHOWN = 5
+# FMP free tier: 250 calls/day and no batch quotes, so one history call per stock.
+VCP_FREE_TIER_ARGS = ("--history-quotes", "--max-universe", "240", "--api-budget", "248")
 
 
 def run_skill(script: str, out_dir: Path, *args: str) -> dict | None:
@@ -208,7 +210,11 @@ def main() -> int:
 
     vcp = None
     if os.environ.get("FMP_API_KEY"):
-        vcp = run_skill("skills/vcp-screener/scripts/screen_vcp.py", out_dir)
+        vcp = run_skill(
+            "skills/vcp-screener/scripts/screen_vcp.py",
+            out_dir,
+            *VCP_FREE_TIER_ARGS,
+        )
     else:
         print("[aviso] FMP_API_KEY não definido; secção VCP omitida.", file=sys.stderr)
 
