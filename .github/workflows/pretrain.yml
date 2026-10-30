@@ -1,8 +1,8 @@
 name: Pré-treino dos agentes
 
-# Walk-forward backtest of every strategy on the last year; with "aplicar",
-# agents of strategies whose tuned parameters passed the validation period
-# get them. Run by hand (e.g. once a quarter).
+# Walk-forward backtest of every strategy on the last 5 years (the last one is
+# the exam); with "aplicar", agents of strategies whose tuned parameters passed
+# the exam get them. Started by the Worker on the first weekday of each month.
 on:
   workflow_dispatch:
     inputs:
@@ -14,6 +14,10 @@ on:
         description: "Só estas estratégias, separadas por vírgulas (vazio = todas)"
         required: false
         default: ""
+      anos:
+        description: "Anos de histórico a reproduzir"
+        required: false
+        default: "5"
 
 permissions:
   contents: write
@@ -25,7 +29,7 @@ concurrency:
 jobs:
   pretrain:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -38,7 +42,8 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           APPLY: ${{ inputs.aplicar && '--apply' || '' }}
           ESTRATEGIAS: ${{ inputs.estrategias }}
-        run: uv run python scripts/pretrain.py $APPLY --estrategias "$ESTRATEGIAS"
+          ANOS: ${{ inputs.anos || '5' }}
+        run: uv run python scripts/pretrain.py $APPLY --estrategias "$ESTRATEGIAS" --anos "$ANOS"
       - name: Guardar os resultados e os parâmetros
         if: ${{ !cancelled() }}
         run: |

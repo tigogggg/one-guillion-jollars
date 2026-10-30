@@ -36,6 +36,10 @@ STRATEGY_CHOICES = [
     ("pescador", "compra quedas em ações em tendência"),
     ("jornalista", "negoceia notícias analisadas pelo Claude"),
     ("deriva", "segue saltos com volume (resultados, notícias)"),
+    ("catalisador", "notícias positivas confirmadas pelo preço"),
+    ("cetico", "más notícias que o mercado ignorou"),
+    ("conselho", "compra o que vários agentes apoiam"),
+    ("maestro", "copia os agentes com melhores resultados"),
     ("kamikaze", "tudo nas maiores subidas a 3 meses"),
 ]
 WEEKDAYS = [("segunda", "seg"), ("terça", "ter"), ("quarta", "qua"), ("quinta", "qui"),
@@ -303,7 +307,7 @@ def welcome_card() -> dict:
                 "**Dias úteis, 11:40** · 📊 Dicas do dia: saúde do mercado (breadth), exposição sugerida, setores e setups VCP\n"
                 "**Dias úteis, 11:40** · 🏆 Top 3 ações por setor e 📦 top 10 ETFs UCITS, com valorização do dia, semana, 3 e 6 meses\n"
                 "**Dias úteis, 12:00 · 16:00 · 20:30** · 📰 Notícias que importam, lidas pelo Claude\n"
-                "**Dias úteis, 12:15** · 🤖 Liga dos agentes: 12 estratégias com dinheiro fictício e preços reais\n"
+                "**Dias úteis, 12:15** · 🤖 Liga dos agentes: 16 estratégias com dinheiro fictício e preços reais\n"
                 "**Dias úteis, 15:40 · 17:40 · 19:40** · 🚨 Alertas, só quando uma ação da lista rompe o pivot com volume\n"
                 "**Sábado, 10:00** · 🗓️ Resumo semanal: índices, setores, maiores subidas e quedas, e como correram os alertas\n"
                 "Os administradores podem mudar estas horas com `/horario`.",

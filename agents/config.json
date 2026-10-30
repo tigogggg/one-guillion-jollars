@@ -157,6 +157,62 @@
         "ignora_resultados": true
       },
       "description": "Muito agressivo: tudo nas 2 ações com maior subida a 3 meses, ignora o estado do mercado e os resultados, stop de 20%."
+    },
+    {
+      "id": "catalisador",
+      "name": "Catalisador",
+      "emoji": "⚡",
+      "strategy": "catalisador",
+      "capital": 1000,
+      "params": {
+        "n": 5,
+        "limiar": 3,
+        "stop_pct": 0.08,
+        "max_dias": 15
+      },
+      "description": "Notícias + execução: compra notícias positivas e importantes só quando o preço confirma (sobe com volume ou abre em salto)."
+    },
+    {
+      "id": "cetico",
+      "name": "Cético",
+      "emoji": "🧐",
+      "strategy": "cetico",
+      "capital": 1000,
+      "params": {
+        "n": 4,
+        "limiar": 3,
+        "stop_pct": 0.06,
+        "alvo_pct": 0.08,
+        "max_dias": 10
+      },
+      "description": "Adversarial: compra quando sai uma notícia má e importante mas a ação não cai e continua em tendência de alta."
+    },
+    {
+      "id": "conselho",
+      "name": "Conselho",
+      "emoji": "🤝",
+      "strategy": "conselho",
+      "capital": 1000,
+      "params": {
+        "n": 6,
+        "min_votos": 2,
+        "stop_pct": 0.1
+      },
+      "description": "Inteligência coletiva: compra o que pelo menos 2 agentes têm ou vão comprar, sem notícias negativas."
+    },
+    {
+      "id": "maestro",
+      "name": "Maestro",
+      "emoji": "🧠",
+      "strategy": "maestro",
+      "capital": 1000,
+      "params": {
+        "n": 8,
+        "lideres": 3,
+        "janela": 20,
+        "cada": 5
+      },
+      "description": "Coordenador: copia a carteira combinada dos 3 agentes com melhores resultados nas últimas 20 sessões."
     }
   ]
 }
