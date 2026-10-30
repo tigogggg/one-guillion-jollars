@@ -14,11 +14,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, time
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+import earnings
 from charts import price_chart
 from discord_daily import REPO, WATCHLIST_DIR
 from discord_post import DISCLAIMER, GREEN, embed, send
@@ -33,6 +34,8 @@ MAX_EXTENSION = 0.03
 MIN_VOLUME_RATIO = 1.5
 MAX_RISK = 0.10
 PIVOT_LOOKBACK = 20
+EARNINGS_WARN_DAYS = 5
+ORANGE = 0xF0B232
 STOP_LOOKBACK = 10
 
 
@@ -43,7 +46,8 @@ def load_watchlist() -> dict[str, dict]:
     if rankings.exists():
         for sector, rows in json.loads(rankings.read_text())["stocks"].items():
             for r in rows:
-                watch[r["symbol"]] = {"source": "ranking", "sector": SECTORS_PT.get(sector, sector), "score": r["score"]}
+                watch[r["symbol"]] = {"source": "ranking", "sector": SECTORS_PT.get(sector, sector), "score": r["score"],
+                                      "earnings": r.get("earnings")}
     vcp = WATCHLIST_DIR / "vcp-latest.json"
     if vcp.exists():
         for r in json.loads(vcp.read_text()).get("results", []):
@@ -83,6 +87,8 @@ def check_breakout(df: pd.DataFrame, info: dict, fraction: float) -> dict | None
 
 
 def alert_card(symbol: str, info: dict, a: dict, df: pd.DataFrame) -> tuple[dict, str, bytes]:
+    report = date.fromisoformat(info["earnings"]) if info.get("earnings") else earnings.next_earnings(symbol)
+    risky = earnings.within(report, EARNINGS_WARN_DAYS)
     origin = f"setup VCP · {info['sector']}" if info["source"] == "VCP" else f"{info['sector']} · score {info['score']:.0f}"
     description = "\n".join(
         [
@@ -90,6 +96,8 @@ def alert_card(symbol: str, info: dict, a: dict, df: pd.DataFrame) -> tuple[dict
             f"Volume projetado **{a['volume_ratio']:.1f}×** a média de 50 dias",
             f"Stop sugerido **${a['stop']:.2f}** (risco {a['risk'] * 100:.1f}%)",
             f"_{origin}_",
+            *([f"⚠️ **Atenção: {earnings.warning(report)}.** Um rompimento antes dos resultados pode desfazer-se num dia."]
+              if risky else []),
             "",
             f"Tamanho da posição: `/posicao capital:… entrada:{a['price']:.2f} stop:{a['stop']:.2f}`",
         ]
@@ -99,7 +107,7 @@ def alert_card(symbol: str, info: dict, a: dict, df: pd.DataFrame) -> tuple[dict
     card = embed(
         f"🚨 {symbol}: possível oportunidade, rompimento com volume",
         description,
-        color=GREEN,
+        color=ORANGE if risky else GREEN,
         image=filename,
         footer="Confirma o gráfico e o tamanho da posição antes de entrar. " + DISCLAIMER,
     )

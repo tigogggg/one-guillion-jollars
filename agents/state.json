@@ -591,7 +591,8 @@
    "params": {
     "n": 2,
     "stop_pct": 0.2,
-    "cada": 5
+    "cada": 5,
+    "ignora_resultados": true
    }
   }
  }

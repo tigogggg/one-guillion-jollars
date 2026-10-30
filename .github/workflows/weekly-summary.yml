@@ -19,6 +19,12 @@ jobs:
           path: state/history
           key: alert-history-latest
           restore-keys: alert-history-
+      - name: Carregar a watchlist (rankings)
+        uses: actions/cache/restore@v4
+        with:
+          path: state/watchlist
+          key: watchlist-latest
+          restore-keys: watchlist-
       - name: Publicar o resumo semanal
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
