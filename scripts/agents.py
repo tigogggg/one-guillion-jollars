@@ -38,7 +38,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 import earnings
-from charts import lines_chart
+from charts import lines_chart, returns_chart
 from discord_daily import WATCHLIST_DIR
 from discord_post import BLUE, GREEN, RED, embed, send
 from rankings import (
@@ -703,6 +703,11 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
     pending = sum(len(p["pending"]) for _, p, _ in rows)
     if pending:
         fields.append(("⏳ Ordens para a próxima abertura", f"{pending} ordens à espera de execução"))
+    if rows and rows[0][1]["pending"]:
+        cfg, port, _ = rows[0]
+        signals = [f"{'🟢 compra' if o['side'] == 'buy' else '🔴 vende'} **{o['symbol']}**"
+                   + (f" ({eur(o['eur'])})" if o["side"] == "buy" else "") for o in port["pending"]]
+        fields.append((f"📣 Sinais do líder: {cfg['emoji']} {cfg['name']} na próxima abertura", " · ".join(signals)[:1024]))
 
     series = {
         cfg["name"]: [(h["date"], (h["equity"] / h["deposits"] - 1) * 100) for h in port["history"]]
@@ -719,6 +724,44 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
         footer="Simulação com dinheiro fictício e preços reais: ordens à abertura seguinte, 0,1% de custos. "
         "Pontos: +10 por dia em lucro, ±1 por cada 0,1% do dia. Não é recomendação de compra.",
     )
+    return [card], files
+
+
+def month_changed(state: dict) -> str | None:
+    """The month that just ended, if the latest run is the first of a new month."""
+    for port in state["agents"].values():
+        h = port["history"]
+        if len(h) >= 2:
+            return h[-2]["date"][:7] if h[-1]["date"][:7] != h[-2]["date"][:7] else None
+    return None
+
+
+def monthly_report(config: dict, state: dict, month: str) -> tuple[list[dict], dict]:
+    rows = []
+    for cfg in active_agents(config):
+        port = state["agents"].get(cfg["id"])
+        ret = month_return(port, month) if port else None
+        if ret is None:
+            continue
+        sells = [t for t in port["trades"] if t["side"] == "venda" and t["date"].startswith(month)]
+        best = max(sells, key=lambda t: t["pnl_eur"], default=None)
+        worst = min(sells, key=lambda t: t["pnl_eur"], default=None)
+        pts = sum(p["pts"] for p in port["points_log"] if p["date"].startswith(month))
+        rows.append((cfg, ret, pts, best, worst, len(sells)))
+    if not rows:
+        return [], {}
+    rows.sort(key=lambda r: r[1], reverse=True)
+    bench = next((r[1] for r in rows if r[0]["strategy"] == "indexador"), None)
+    lines = []
+    for cfg, ret, pts, best, worst, n in rows:
+        vs = "" if bench is None or cfg["strategy"] == "indexador" else (" · ✅ bateu o S&P 500" if ret > bench else " · ❌ abaixo do S&P 500")
+        extra = ""
+        if best:
+            extra = f"\n   melhor **{best['symbol']}** {best['pnl_eur']:+.0f} € · pior **{worst['symbol']}** {worst['pnl_eur']:+.0f} € · {n} vendas"
+        lines.append(f"{cfg['emoji']} **{cfg['name']}** {pct(ret)} · ⭐ {pts:+d}{vs}{extra}")
+    files = {"mes.png": returns_chart([(r[0]["name"], r[1] * 100) for r in rows], f"Rentabilidade em {month}")}
+    card = embed(f"📆 Relatório mensal dos agentes · {month}", "\n".join(lines)[:4096], color=BLUE, image="mes.png",
+                 footer="Agentes que perderam dinheiro no mês ajustam os parâmetros (treino). Simulação com dinheiro fictício.")
     return [card], files
 
 
@@ -813,6 +856,7 @@ def main() -> int:
 
     config, state = load_config(), load_state()
     target = reply_target()
+    follow_up = ([], {})
     try:
         if a.mode == "daily":
             mkt = load_market()
@@ -820,6 +864,9 @@ def main() -> int:
             save(None, state)
             embeds, files = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}",
                                    moves, training, avoided)
+            ended = month_changed(state)
+            if ended:
+                follow_up = monthly_report(config, state, ended)
         else:
             args = json.loads(a.args or "{}")
             needs_market = args.get("acao", "ver") in ("ver", "criar")
@@ -832,7 +879,10 @@ def main() -> int:
             raise
         print(f"ERROR: {e!r}", file=sys.stderr)
         embeds, files = [embed("⚠️ Erro nos agentes", str(e)[:300], color=RED)], {}
-    return send(embeds, files, dry_run=a.dry_run, **target)
+    status = send(embeds, files, dry_run=a.dry_run, **target)
+    if follow_up[0]:
+        status = status or send(*follow_up, dry_run=a.dry_run)
+    return status
 
 
 if __name__ == "__main__":

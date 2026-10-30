@@ -21,6 +21,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 import earnings
+import macro
 from charts import returns_chart
 from discord_daily import WATCHLIST_DIR
 from discord_post import BLUE, GREEN, RED, embed, send
@@ -167,6 +168,12 @@ def main() -> int:
         ],
         image="setores-semana.png",
     )
+    monday, friday = earnings.next_week(as_of)
+    macro_events, from_fmp = macro.events(monday, friday)
+    if macro_events:
+        source = "calendário económico FMP" if from_fmp else "datas da Fed e regra habitual do emprego"
+        summary["fields"].append({"name": f"🏛️ Agenda macro da próxima semana ({source})",
+                                  "value": "\n".join(macro.by_day_lines(macro_events))[:1024], "inline": False})
     symbols, holders = followed_symbols(json.loads(HISTORY_PATH.read_text()) if HISTORY_PATH.exists() else [], as_of)
     upcoming = earnings_field(symbols, holders, as_of)
     if upcoming:
