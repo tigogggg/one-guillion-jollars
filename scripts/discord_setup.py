@@ -261,6 +261,25 @@ def create_channels() -> int:
     return 0
 
 
+def diagnose() -> int:
+    """Annotate the bot's server-wide permissions, to explain Missing Access errors."""
+    hook = requests.get(os.environ["DISCORD_WEBHOOK_URL"], timeout=30).json()
+    guild = hook["guild_id"]
+    bot = discord_api("GET", "/users/@me")["id"]
+    member = discord_api("GET", f"/guilds/{guild}/members/{bot}")
+    roles = {r["id"]: r for r in discord_api("GET", f"/guilds/{guild}/roles")}
+    names = {VIEW: "Ver canais", SEND: "Enviar mensagens", 1 << 4: "Gerenciar canais", 1 << 28: "Gerenciar cargos",
+             1 << 3: "Administrador", EMBED: "Inserir links", ATTACH: "Anexar arquivos", HISTORY: "Ver histórico"}
+    mine = [roles[guild]] + [roles[r] for r in member["roles"] if r in roles]
+    perms = 0
+    for r in mine:
+        perms |= int(r["permissions"])
+    print(f"::notice title=Diagnóstico::Cargos do bot: {', '.join(r['name'] for r in mine)}")
+    print("::notice title=Diagnóstico::Permissões efetivas: "
+          + ", ".join(f"{label} {'✅' if perms & bit else '❌'}" for bit, label in names.items()))
+    return 0
+
+
 def welcome_card() -> dict:
     return embed(
         "👋 Bem-vindo! Este canal recebe análise de mercado automática",
@@ -304,10 +323,17 @@ def main() -> int:
     parser.add_argument("--register", action="store_true", help="Register the slash commands")
     parser.add_argument("--welcome", action="store_true", help="Post the welcome card")
     parser.add_argument("--canais", action="store_true", help="Create the 📈 FINANÇAS category and channels")
+    parser.add_argument("--diagnostico", action="store_true", help="Show the bot's server-wide permissions")
     parser.add_argument("--dry-run", action="store_true", help="Print the welcome card instead of posting it")
     args = parser.parse_args()
 
     status = register() if args.register else 0
+    if args.diagnostico:
+        try:
+            status = diagnose()
+        except (RuntimeError, KeyError, requests.RequestException) as e:
+            print(f"::error title=Diagnóstico::{e}")
+            status = 1
     if args.canais:
         try:
             status = status or create_channels()
