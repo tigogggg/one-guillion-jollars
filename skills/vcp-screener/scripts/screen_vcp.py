@@ -175,6 +175,30 @@ def parse_arguments():
         ),
     )
 
+    parser.add_argument(
+        "--history-quotes",
+        action="store_true",
+        help=(
+            "Derive pre-filter quotes from each symbol's 260-day history instead of "
+            "batch quotes (one API call per symbol; works on the FMP free tier)"
+        ),
+    )
+    parser.add_argument(
+        "--max-universe",
+        type=int,
+        default=None,
+        help=(
+            "Screen at most N symbols: the largest by market cap when FMP's company "
+            "screener is available, otherwise alternating halves of the universe by day"
+        ),
+    )
+    parser.add_argument(
+        "--api-budget",
+        type=int,
+        default=None,
+        help="Stop fetching once this many FMP API calls have been made",
+    )
+
     hist_group = parser.add_argument_group("Historical single-ticker mode")
     # --history accepts an optional integer: scan-window length in trading days.
     # Bare --history uses DEFAULT_HISTORY_DAYS (5 years). The total fetch is
@@ -252,6 +276,55 @@ def passes_trend_filter(tt_result: dict, trend_min_score: float = 85.0) -> bool:
     flag can override the calculator's hardcoded 85-point gate.
     """
     return tt_result.get("raw_score", 0) >= trend_min_score
+
+
+def quote_from_history(historical: list[dict]) -> Optional[dict]:
+    """Build the quote fields the pre-filter needs from daily bars (most-recent-first).
+
+    Lets the screener run on one historical call per symbol when batch quotes
+    are unavailable (FMP free tier).
+    """
+    if not historical:
+        return None
+    year = historical[:252]
+    highs = [b.get("high", 0) for b in year if b.get("high")]
+    lows = [b.get("low", 0) for b in year if b.get("low")]
+    volumes = [b.get("volume", 0) for b in historical[:50]]
+    price = historical[0].get("close", 0)
+    if not price or not highs or not lows:
+        return None
+    return {
+        "price": price,
+        "yearHigh": max(highs),
+        "yearLow": min(lows),
+        "avgVolume": sum(volumes) / len(volumes) if volumes else 0,
+        "volume": historical[0].get("volume", 0),
+    }
+
+
+def select_universe(
+    symbols: list[str],
+    limit: int,
+    market_caps: Optional[dict] = None,
+    day_ordinal: Optional[int] = None,
+) -> tuple[list[str], str]:
+    """Pick at most `limit` symbols.
+
+    Largest by market cap when caps are known for the universe; otherwise one
+    of two alternating halves (by day), so the whole universe is covered every
+    two days.
+    """
+    if len(symbols) <= limit:
+        return symbols, f"all {len(symbols)}"
+    if market_caps:
+        known = [s for s in symbols if market_caps.get(s)]
+        if len(known) >= limit:
+            ranked = sorted(known, key=lambda s: market_caps[s], reverse=True)
+            return ranked[:limit], f"top {limit} by market cap"
+    if day_ordinal is None:
+        day_ordinal = datetime.now().toordinal()
+    half = day_ordinal % 2
+    return symbols[half::2][:limit], f"{limit} of half {half + 1}/2 (alternates daily)"
 
 
 def pre_filter_stock(quote: dict) -> tuple:
@@ -718,10 +791,38 @@ def main():
             sector_map[c["symbol"]] = c.get("sector", "Unknown")
             name_map[c["symbol"]] = c.get("name", c["symbol"])
 
-    # Batch fetch quotes
-    print("  Fetching quotes...", end=" ", flush=True)
-    all_quotes = client.get_batch_quotes(symbols)
-    print(f"OK ({len(all_quotes)} quotes)")
+    def over_budget() -> bool:
+        return args.api_budget is not None and client.api_calls_made >= args.api_budget
+
+    market_caps = {}
+    if args.max_universe and len(symbols) > args.max_universe:
+        market_caps = client.get_market_caps() or {}
+        symbols, how = select_universe(symbols, args.max_universe, market_caps)
+        universe_desc = f"{universe_desc}, {how}"
+        print(f"  Universe limited to {len(symbols)} stocks ({how})")
+
+    if args.history_quotes:
+        # One historical call per symbol; Phase 2 reuses these from the cache.
+        client.get_historical_prices("SPY", days=260)
+        print(f"  Fetching 260-day histories for {len(symbols)} stocks...")
+        all_quotes = {}
+        for i, sym in enumerate(symbols):
+            if over_budget():
+                print(f"WARN: API budget of {args.api_budget} calls reached after {i} stocks")
+                break
+            if (i + 1) % 40 == 0:
+                print(f"    Progress: {i + 1}/{len(symbols)}", flush=True)
+            data = client.get_historical_prices(sym, days=260)
+            quote = quote_from_history(data.get("historical", [])) if data else None
+            if quote:
+                quote["marketCap"] = market_caps.get(sym, 0)
+                all_quotes[sym] = quote
+        print(f"  OK ({len(all_quotes)} quotes derived from history)")
+    else:
+        # Batch fetch quotes
+        print("  Fetching quotes...", end=" ", flush=True)
+        all_quotes = client.get_batch_quotes(symbols)
+        print(f"OK ({len(all_quotes)} quotes)")
 
     # Apply pre-filter
     print("  Applying pre-filter...", end=" ", flush=True)
@@ -765,6 +866,9 @@ def main():
     for i, sym in enumerate(candidate_symbols):
         if (i + 1) % 20 == 0 or i == len(candidate_symbols) - 1:
             print(f"    Progress: {i + 1}/{len(candidate_symbols)}", flush=True)
+        if over_budget() and f"prices_{sym}_260" not in client.cache:
+            print(f"WARN: API budget of {args.api_budget} calls reached in Phase 2")
+            break
         data = client.get_historical_prices(sym, days=260)
         if data and "historical" in data:
             candidate_histories[sym] = data["historical"]
