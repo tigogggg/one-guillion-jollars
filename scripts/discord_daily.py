@@ -21,6 +21,8 @@ from pathlib import Path
 import requests
 
 REPO = Path(__file__).resolve().parents[1]
+# Shared with the intraday alerts through the Actions cache.
+WATCHLIST_DIR = REPO / "state" / "watchlist"
 DISCORD_LIMIT = 2000
 
 BREADTH_DETAIL_URL = "https://tradermonty.github.io/market-breadth-analysis/market_breadth_data.csv"
@@ -218,11 +220,20 @@ def main() -> int:
     else:
         print("[aviso] FMP_API_KEY não definido; secção VCP omitida.", file=sys.stderr)
 
-    message = build_message(uptrend, breadth, vcp)
-    webhook = os.environ.get("DISCORD_WEBHOOK_URL")
-    if args.dry_run:
+    if vcp:
+        # The intraday alerts read today's VCP pivots from here.
+        WATCHLIST_DIR.mkdir(parents=True, exist_ok=True)
+        (WATCHLIST_DIR / "vcp-latest.json").write_text(json.dumps(vcp))
+
+    return post_to_discord(build_message(uptrend, breadth, vcp), args.dry_run)
+
+
+def post_to_discord(message: str, dry_run: bool = False) -> int:
+    """Post one message (max 2000 chars) to DISCORD_WEBHOOK_URL, or print it on a dry run."""
+    if dry_run:
         print(message)
         return 0
+    webhook = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook:
         print("DISCORD_WEBHOOK_URL não definido; usa --dry-run para só ver a mensagem.", file=sys.stderr)
         return 1
