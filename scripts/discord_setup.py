@@ -209,16 +209,22 @@ def create_channels() -> int:
     hook = requests.get(os.environ["DISCORD_WEBHOOK_URL"], timeout=30).json()
     guild, chat = hook["guild_id"], hook["channel_id"]
     bot = discord_api("GET", "/users/@me")["id"]
-    existing = {(c["type"], c["name"]): c for c in discord_api("GET", f"/guilds/{guild}/channels")}
+    channels = discord_api("GET", f"/guilds/{guild}/channels")
+    category = next((c for c in channels if c["type"] == 4 and c["name"].lower() == CATEGORY.lower()), None) \
+        or discord_api("POST", f"/guilds/{guild}/channels", json={"name": CATEGORY, "type": 4})
 
-    category = existing.get((4, CATEGORY)) or discord_api("POST", f"/guilds/{guild}/channels", json={"name": CATEGORY, "type": 4})
+    def find(name: str, key: str) -> dict | None:
+        """An existing text channel with this name, or with the key word inside the category (renamed by Discord)."""
+        return next((c for c in channels if c["type"] == 0 and (c["name"] == name or (
+            c.get("parent_id") == category["id"] and key in c["name"]))), None)
+
     overwrites = [
         {"id": guild, "type": 0, "deny": str(SEND), "allow": str(MEMBERS_ALLOW)},  # @everyone: read, react, threads
         {"id": bot, "type": 1, "allow": str(BOT_ALLOW | PIN), "deny": "0"},
     ]
     ids = {}
     for key, name, topic in CHANNELS:
-        channel = existing.get((0, name))
+        channel = find(name, key)
         if channel is None:
             channel = discord_api("POST", f"/guilds/{guild}/channels", json={
                 "name": name, "type": 0, "parent_id": category["id"], "topic": topic, "permission_overwrites": overwrites})
@@ -228,8 +234,11 @@ def create_channels() -> int:
                 "parent_id": category["id"], "topic": topic, "permission_overwrites": overwrites})
             print(f"::notice title=Canais::Atualizado #{name}")
         ids[key] = channel["id"]
-    discord_api("PATCH", f"/channels/{chat}", json={"parent_id": category["id"], "lock_permissions": False})
-    print("Canal de conversa movido para a categoria")
+    try:
+        discord_api("PATCH", f"/channels/{chat}", json={"parent_id": category["id"], "lock_permissions": False})
+        print("::notice title=Canais::Canal de conversa movido para a categoria")
+    except RuntimeError as e:  # e.g. the bot cannot see that channel; moving it by hand works too
+        print(f"::warning title=Canais::Não consegui mover o canal de conversa ({e}); arrasta-o para a categoria à mão.")
 
     CHANNELS_PATH.parent.mkdir(parents=True, exist_ok=True)
     CHANNELS_PATH.write_text(json.dumps({"guild_id": guild, "category_id": category["id"],
