@@ -222,11 +222,11 @@ def create_channels() -> int:
         if channel is None:
             channel = discord_api("POST", f"/guilds/{guild}/channels", json={
                 "name": name, "type": 0, "parent_id": category["id"], "topic": topic, "permission_overwrites": overwrites})
-            print(f"Criado #{name}")
+            print(f"::notice title=Canais::Criado #{name}")
         else:
             discord_api("PATCH", f"/channels/{channel['id']}", json={
                 "parent_id": category["id"], "topic": topic, "permission_overwrites": overwrites})
-            print(f"Atualizado #{name}")
+            print(f"::notice title=Canais::Atualizado #{name}")
         ids[key] = channel["id"]
     discord_api("PATCH", f"/channels/{chat}", json={"parent_id": category["id"], "lock_permissions": False})
     print("Canal de conversa movido para a categoria")
@@ -292,7 +292,12 @@ def main() -> int:
 
     status = register() if args.register else 0
     if args.canais:
-        status = status or create_channels()
+        try:
+            status = status or create_channels()
+        except (RuntimeError, KeyError, requests.RequestException) as e:
+            # An annotation shows on the run page even when the job log is not reachable.
+            print(f"::error title=Criar canais::{e}")
+            status = 1
     if args.welcome:
         status = status or send([welcome_card()], dry_run=args.dry_run)
     return status
