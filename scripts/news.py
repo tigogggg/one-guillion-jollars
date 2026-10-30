@@ -70,6 +70,13 @@ Items:
 """
 
 
+def log(message: str, level: str = "notice") -> None:
+    """stderr, and a GitHub Actions annotation (visible on the run page) when in Actions."""
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::{level} title=Notícias::{message}")
+    print(message, file=sys.stderr)
+
+
 # --------------------------------------------------------------------------
 # Headlines
 # --------------------------------------------------------------------------
@@ -97,14 +104,23 @@ def parse_item(symbol: str, raw: dict) -> dict | None:
     }
 
 
+_format_reported: list[str] = []  # report an unknown Yahoo format once per run
+
+
 def headlines(symbol: str, count: int = 8, now: datetime | None = None) -> list[dict]:
     now = now or datetime.now(timezone.utc)
     try:
         raw = yf.Ticker(symbol).get_news(count=count) or []
     except Exception as e:  # yfinance raises many types, incl. rate limits
-        print(f"WARN: notícias {symbol}: {e}", file=sys.stderr)
+        log(f"notícias {symbol}: {e}", "warning")
         return []
+    if not raw:
+        print(f"{symbol}: sem notícias no Yahoo", file=sys.stderr)
     items = [parse_item(symbol, r) for r in raw]
+    if raw and not any(items) and not _format_reported:
+        _format_reported.append(symbol)
+        sample = raw[0].get("content", raw[0])
+        log(f"{symbol}: {len(raw)} notícias num formato não reconhecido; campos: {sorted(sample)[:12]}", "warning")
     return [i for i in items if i and now - datetime.fromisoformat(i["published"]) <= MAX_AGE]
 
 
@@ -151,11 +167,11 @@ def analyse_claude(items: list[dict]) -> list[dict] | None:
         )
         out = json.loads(proc.stdout or "{}")
         if proc.returncode != 0 or out.get("is_error"):
-            print(f"WARN: Claude falhou: {(out.get('result') or proc.stderr)[:300]}", file=sys.stderr)
+            log(f"Claude falhou: {(out.get('result') or proc.stderr)[:300]}", "warning")
             return None
         ratings = extract_json_array(out.get("result", ""))
     except (subprocess.TimeoutExpired, ValueError) as e:
-        print(f"WARN: Claude falhou: {e}", file=sys.stderr)
+        log(f"Claude falhou: {e}", "warning")
         return None
     return [r for r in ratings if isinstance(r, dict) and "id" in r]
 
@@ -237,9 +253,10 @@ def main() -> int:
     seen_list = json.loads(SEEN_PATH.read_text()) if SEEN_PATH.exists() else []
     seen = set(seen_list)
     symbols = list(dict.fromkeys(followed_symbols() + biggest_movers()))
-    items = [i for s in symbols for i in headlines(s, now=now) if i["id"] not in seen]
+    fetched = [i for s in symbols for i in headlines(s, now=now)]
+    items = [i for i in fetched if i["id"] not in seen]
     items = list({i["id"]: i for i in items}.values())[:MAX_HEADLINES]
-    print(f"{len(symbols)} ações, {len(items)} títulos novos", file=sys.stderr)
+    log(f"{len(symbols)} ações, {len(fetched)} títulos das últimas 36 h, {len(items)} novos ({len(seen)} já vistos)")
     if not items:
         return 0
 
@@ -267,9 +284,10 @@ def main() -> int:
     SIGNALS_PATH.write_text(json.dumps(merge_signals(previous, rated, now), indent=1, ensure_ascii=False))
     SEEN_PATH.write_text(json.dumps((seen_list + [i for i in by_id if i not in seen])[-SEEN_KEPT:]))
 
+    log(f"{len(rated)} títulos analisados ({source})")
     cards = digest(rated, source, now)
     if not cards:
-        print("Nenhuma notícia importante.", file=sys.stderr)
+        log(f"{len(rated)} títulos analisados ({source}), nenhum importante")
         return 0
     return send(cards, dry_run=args.dry_run, thread_id=discord_bot.todays_thread())
 
