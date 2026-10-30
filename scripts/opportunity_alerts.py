@@ -25,6 +25,9 @@ from discord_post import DISCLAIMER, GREEN, embed, send
 from rankings import SECTORS_PT, download_history
 
 ALERTS_DIR = REPO / "state" / "alerts"
+# Every alert sent, kept across days for the weekly summary's track record.
+HISTORY_PATH = REPO / "state" / "history" / "alerts.json"
+HISTORY_MAX = 300
 NEW_YORK = ZoneInfo("America/New_York")
 MAX_EXTENSION = 0.03
 MIN_VOLUME_RATIO = 1.5
@@ -118,7 +121,7 @@ def main() -> int:
     alerted_path = ALERTS_DIR / f"{now.date().isoformat()}.json"
     alerted = set(json.loads(alerted_path.read_text())) if alerted_path.exists() else set()
 
-    cards, files, fraction = [], {}, session_fraction(now)
+    cards, files, sent, fraction = [], {}, [], session_fraction(now)
     for symbol, info in watch.items():
         df = histories.get(symbol)
         if df is None or symbol in alerted or df.index[-1].date() != now.date():
@@ -129,6 +132,10 @@ def main() -> int:
             cards.append(card)
             files[filename] = chart
             alerted.add(symbol)
+            sent.append(
+                {"date": now.date().isoformat(), "symbol": symbol, "sector": info["sector"],
+                 "price": round(a["price"], 2), "pivot": round(a["pivot"], 2), "stop": round(a["stop"], 2)}
+            )
 
     print(f"{len(watch)} ações na watchlist, {len(cards)} alertas novos", file=sys.stderr)
     if not cards:
@@ -138,6 +145,9 @@ def main() -> int:
     if status == 0 and not args.dry_run:
         ALERTS_DIR.mkdir(parents=True, exist_ok=True)
         alerted_path.write_text(json.dumps(sorted(alerted)))
+        history = json.loads(HISTORY_PATH.read_text()) if HISTORY_PATH.exists() else []
+        HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        HISTORY_PATH.write_text(json.dumps((history + sent)[-HISTORY_MAX:], indent=1))
     return status
 
 

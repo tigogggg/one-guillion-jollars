@@ -1,0 +1,25 @@
+name: Resumo semanal (Discord)
+
+# Started by the Cloudflare Worker at the time set with /horario (default
+# Saturday 10:00 Lisbon), or by hand.
+on:
+  workflow_dispatch:
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - name: Carregar o histórico de alertas
+        uses: actions/cache/restore@v4
+        with:
+          path: state/history
+          key: alert-history-latest
+          restore-keys: alert-history-
+      - name: Publicar o resumo semanal
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: uv run python scripts/weekly_summary.py

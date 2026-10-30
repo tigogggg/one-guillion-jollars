@@ -17,7 +17,10 @@ import requests
 
 from discord_post import BLUE, embed, send
 
-STRING, NUMBER = 3, 10
+SUB_COMMAND, STRING, NUMBER = 1, 3, 10
+MANAGE_SERVER = "32"  # permission bit: only server admins see /horario
+WEEKDAYS = [("segunda", "seg"), ("terça", "ter"), ("quarta", "qua"), ("quinta", "qui"),
+            ("sexta", "sex"), ("sábado", "sab"), ("domingo", "dom")]
 
 COMMANDS = [
     {
@@ -40,6 +43,37 @@ COMMANDS = [
             {"type": NUMBER, "name": "stop", "description": "Preço do stop-loss", "required": True, "min_value": 0.01},
             {"type": NUMBER, "name": "risco", "description": "% da conta a arriscar (por defeito 1)", "min_value": 0.1, "max_value": 5},
             {"type": NUMBER, "name": "max_posicao", "description": "Máximo % da conta numa posição (por defeito 15)", "min_value": 1, "max_value": 100},
+        ],
+    },
+    {
+        "name": "horario",
+        "description": "Ver ou mudar as horas das análises (hora de Lisboa)",
+        "default_member_permissions": MANAGE_SERVER,
+        "options": [
+            {"type": SUB_COMMAND, "name": "ver", "description": "Mostrar os horários atuais"},
+            {
+                "type": SUB_COMMAND,
+                "name": "dicas",
+                "description": "Hora das dicas do dia e dos rankings (dias úteis)",
+                "options": [{"type": STRING, "name": "hora", "description": "HH:MM, ex.: 11:40", "required": True}],
+            },
+            {
+                "type": SUB_COMMAND,
+                "name": "alertas",
+                "description": "Horas da verificação de alertas (dias úteis)",
+                "options": [{"type": STRING, "name": "horas", "description": "Separadas por vírgulas, ex.: 15:40,17:40,19:40", "required": True}],
+            },
+            {
+                "type": SUB_COMMAND,
+                "name": "semanal",
+                "description": "Dia e hora do resumo semanal",
+                "options": [
+                    {"type": STRING, "name": "dia", "description": "Dia da semana", "required": True,
+                     "choices": [{"name": n, "value": v} for n, v in WEEKDAYS]},
+                    {"type": STRING, "name": "hora", "description": "HH:MM, ex.: 10:00", "required": True},
+                ],
+            },
+            {"type": SUB_COMMAND, "name": "repor", "description": "Voltar aos horários de origem"},
         ],
     },
     {"name": "ajuda", "description": "Como usar este canal e o bot"},
@@ -72,10 +106,12 @@ def welcome_card() -> dict:
         color=BLUE,
         fields=[
             (
-                "📅 O que aparece aqui (dias úteis, hora UTC)",
-                "**11:37** · 📊 Dicas do dia: saúde do mercado (breadth), exposição sugerida, setores e setups VCP\n"
-                "**11:37** · 🏆 Top 3 ações por setor e 📦 top 10 ETFs UCITS, com valorização do dia, semana, 3 e 6 meses\n"
-                "**15:37 · 17:37 · 19:37** · 🚨 Alertas, só quando uma ação da lista rompe o pivot com volume",
+                "📅 O que aparece aqui (hora de Lisboa)",
+                "**Dias úteis, 11:40** · 📊 Dicas do dia: saúde do mercado (breadth), exposição sugerida, setores e setups VCP\n"
+                "**Dias úteis, 11:40** · 🏆 Top 3 ações por setor e 📦 top 10 ETFs UCITS, com valorização do dia, semana, 3 e 6 meses\n"
+                "**Dias úteis, 15:40 · 17:40 · 19:40** · 🚨 Alertas, só quando uma ação da lista rompe o pivot com volume\n"
+                "**Sábado, 10:00** · 🗓️ Resumo semanal: índices, setores, maiores subidas e quedas, e como correram os alertas\n"
+                "Os administradores podem mudar estas horas com `/horario`.",
             ),
             (
                 "🤖 Comandos (escreve / na caixa de mensagem)",
