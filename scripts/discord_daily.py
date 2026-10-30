@@ -87,6 +87,9 @@ def run_skill(script: str, out_dir: Path, *args: str) -> dict | None:
         capture_output=True,
         text=True,
     )
+    problems = [ln for ln in proc.stderr.splitlines() if "ERROR" in ln or "WARN" in ln]
+    for line in problems[:20]:
+        print(f"[{Path(script).parent.parent.name}] {line}", file=sys.stderr)
     if proc.returncode != 0:
         print(f"[aviso] {script} falhou: {proc.stdout.strip().splitlines()[-1:]}", file=sys.stderr)
         return None
