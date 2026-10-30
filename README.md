@@ -84,10 +84,13 @@ Setup, once:
    `applications.commands` scope and install the app on the server.
 2. GitHub → Settings → Developer settings → Fine-grained tokens: access to this
    repository only, permission Actions: Read and write.
-3. Cloudflare → Workers & Pages → Create → Hello World worker, replace its
-   code with `discord-bot/worker.js`, deploy. Under Settings → Variables and
-   Secrets add `DISCORD_PUBLIC_KEY`, `GITHUB_REPO` (`tigogggg/one-guillion-jollars`)
-   and the secret `GITHUB_TOKEN`.
+3. Cloudflare → Workers & Pages → Create → Hello World worker named
+   `captain-tips-bot`. Under Settings → Variables and Secrets add
+   `DISCORD_PUBLIC_KEY`, `GITHUB_REPO` (`tigogggg/one-guillion-jollars`) and the
+   secret `GITHUB_TOKEN`. The code, the `CONFIG` KV namespace and the cron
+   trigger are deployed by `.github/workflows/deploy-worker.yml` on every change
+   to `discord-bot/` (secrets `CLOUDFLARE_API_TOKEN`, from the "Edit Cloudflare
+   Workers" template, and `CLOUDFLARE_ACCOUNT_ID`).
 4. Discord app → General Information → Interactions Endpoint URL: the Worker's
    `https://….workers.dev` URL (Discord checks it on save).
 5. Repository secrets `DISCORD_APPLICATION_ID` and `DISCORD_BOT_TOKEN`, then run
