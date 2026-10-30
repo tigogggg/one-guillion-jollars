@@ -329,9 +329,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="Print instead of posting; state is still saved")
     parser.add_argument("--finbert", action="store_true", help="Use FinBERT instead of Claude")
+    parser.add_argument("--republicar", action="store_true",
+                        help="Post again the important news of the last 36 h (no new analysis)")
     args = parser.parse_args()
 
     now = datetime.now(timezone.utc)
+    where = route("alertas") or {"thread_id": discord_bot.todays_thread()}
+    if args.republicar:
+        signals = json.loads(SIGNALS_PATH.read_text()) if SIGNALS_PATH.exists() else {}
+        recent = [i for sig in signals.values() for i in sig.get("items", [])
+                  if now - datetime.fromisoformat(i["published"]) <= MAX_AGE]
+        names = {c["symbol"]: c["name"] for c in load_constituents()}
+        sources = sorted({i.get("fonte", "FinBERT") for i in recent}) or ["Claude"]
+        cards = digest(recent, " e ".join(sources), now, names)
+        log(f"Republicar: {len(recent)} títulos guardados, {'1 cartão' if cards else 'nada importante'}")
+        return send(cards, dry_run=args.dry_run, **where) if cards else 0
     seen_list = json.loads(SEEN_PATH.read_text()) if SEEN_PATH.exists() else []
     seen = set(seen_list)
     constituents = load_constituents()
@@ -374,7 +386,7 @@ def main() -> int:
     if not cards:
         log(f"{len(rated)} títulos analisados ({source}), nenhum importante")
         return 0
-    return send(cards, dry_run=args.dry_run, **(route("alertas") or {"thread_id": discord_bot.todays_thread()}))
+    return send(cards, dry_run=args.dry_run, **where)
 
 
 if __name__ == "__main__":
