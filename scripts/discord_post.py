@@ -1,0 +1,92 @@
+"""Send Discord messages as embeds ("cards") with optional PNG attachments.
+
+Used for the channel webhook (DISCORD_WEBHOOK_URL) and for editing a slash
+command reply (interaction webhook). A dry run prints the text and saves the
+images to reports/preview/.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+import requests
+
+REPO = Path(__file__).resolve().parents[1]
+PREVIEW_DIR = REPO / "reports" / "preview"
+
+ZONE_COLORS = {
+    "Strong Bull": 0x57F287, "Strong": 0x57F287, "Bull": 0x57F287, "Healthy": 0x57F287,
+    "Neutral": 0xFEE75C,
+    "Cautious": 0xF0B232, "Weakening": 0xF0B232,
+    "Bear": 0xED4245, "Critical": 0xED4245,
+}
+BLUE = 0x5865F2
+GREEN = 0x57F287
+RED = 0xED4245
+DISCLAIMER = "Ferramenta de análise educativa, não é recomendação de compra."
+
+
+def embed(
+    title: str,
+    description: str = "",
+    color: int = BLUE,
+    image: str | None = None,
+    footer: str = DISCLAIMER,
+    fields: list[tuple[str, str]] | None = None,
+) -> dict:
+    """An embed dict; `image` names an attached file (attachment://name)."""
+    e = {"title": title[:256], "description": description[:4096], "color": color}
+    if fields:
+        e["fields"] = [{"name": n[:256], "value": (v or "—")[:1024], "inline": False} for n, v in fields[:25]]
+    if image:
+        e["image"] = {"url": f"attachment://{image}"}
+    if footer:
+        e["footer"] = {"text": footer[:2048]}
+    return e
+
+
+def send(
+    embeds: list[dict],
+    files: dict[str, bytes] | None = None,
+    dry_run: bool = False,
+    url: str | None = None,
+    method: str = "POST",
+    content: str | None = None,
+) -> int:
+    """Post (or, with method=PATCH and an interaction url, edit) one message. Returns 0 on success."""
+    files = files or {}
+    if dry_run:
+        for e in embeds:
+            print(f"### {e['title']}\n{e.get('description', '')}")
+            for f in e.get("fields", []):
+                print(f"**{f['name']}** {f['value']}")
+            print(f"[{e.get('footer', {}).get('text', '')}]\n")
+        if files:
+            PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+            for name, data in files.items():
+                (PREVIEW_DIR / name).write_bytes(data)
+            print(f"(imagens em {PREVIEW_DIR}: {', '.join(files)})")
+        return 0
+
+    url = url or os.environ.get("DISCORD_WEBHOOK_URL")
+    if not url:
+        print("DISCORD_WEBHOOK_URL não definido; usa --dry-run para só ver a mensagem.", file=sys.stderr)
+        return 1
+
+    payload = {"embeds": embeds[:10], "allowed_mentions": {"parse": []}}
+    if content is not None:
+        payload["content"] = content
+    if files:
+        payload["attachments"] = [{"id": i, "filename": name} for i, name in enumerate(files)]
+        multipart = {f"files[{i}]": (name, data, "image/png") for i, (name, data) in enumerate(files.items())}
+        resp = requests.request(method, url, data={"payload_json": json.dumps(payload)}, files=multipart, timeout=60)
+    else:
+        resp = requests.request(method, url, json=payload, timeout=60)
+    if resp.status_code >= 300:
+        print(f"Discord respondeu {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
+        return 1
+    print("Mensagem enviada para o Discord.")
+    return 0

@@ -1,0 +1,33 @@
+name: Configurar o bot do Discord
+
+on:
+  workflow_dispatch:
+    inputs:
+      registar_comandos:
+        description: "Registar os comandos /acao /etf /mercado /posicao /ajuda"
+        type: boolean
+        default: true
+      boas_vindas:
+        description: "Publicar a mensagem de boas-vindas (para afixar no canal)"
+        type: boolean
+        default: true
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - name: Registar comandos
+        if: ${{ inputs.registar_comandos }}
+        env:
+          DISCORD_APPLICATION_ID: ${{ secrets.DISCORD_APPLICATION_ID }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: uv run python scripts/discord_setup.py --register
+      - name: Publicar boas-vindas
+        if: ${{ inputs.boas_vindas }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: uv run python scripts/discord_setup.py --welcome

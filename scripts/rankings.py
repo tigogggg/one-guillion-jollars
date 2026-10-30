@@ -22,7 +22,9 @@ import pandas as pd
 import requests
 import yfinance as yf
 
-from discord_daily import WATCHLIST_DIR, post_to_discord
+from charts import returns_chart
+from discord_daily import WATCHLIST_DIR
+from discord_post import BLUE, DISCLAIMER, GREEN, embed, send
 
 CONSTITUENTS_URL = (
     "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
@@ -153,6 +155,8 @@ def trend_metrics(df: pd.DataFrame) -> dict | None:
         "sma200_rising": sma200 > float(close.iloc[-220:-20].mean()),
         "pct_from_high": (high52 - price) / high52 if high52 else 1.0,
         "pct_above_low": (price - low52) / low52 if low52 else 0.0,
+        "ret_1d": ret(1),
+        "ret_1w": ret(5),
         "ret_3m": ret(63),
         "ret_6m": ret(126),
         "dollar_volume": float(df["Volume"].iloc[-50:].mean()) * price,
@@ -163,21 +167,31 @@ def is_stage2(m: dict) -> bool:
     return m["price"] > m["sma50"] > m["sma200"] and m["sma200_rising"]
 
 
+def structure_points(m: dict) -> float:
+    """Up to 70 points for the shape of the trend."""
+    score = 0.0
+    score += 15 if m["price"] > m["sma50"] else 0
+    score += 15 if m["sma50"] > m["sma200"] else 0
+    score += 10 if m["price"] > m["sma200"] else 0
+    score += 10 if m["sma200_rising"] else 0
+    score += 10 if m["pct_from_high"] <= 0.25 else 0
+    score += 10 if m["pct_above_low"] >= 0.30 else 0
+    return score
+
+
 def add_trend_scores(metrics: dict[str, dict]) -> None:
     """Set trend_score (0-100): 70 for trend structure, 30 for momentum rank within the group."""
     momentum = {t: 0.6 * m["ret_6m"] + 0.4 * m["ret_3m"] for t, m in metrics.items()}
     ordered = sorted(momentum, key=momentum.get)
     pct = {t: i / max(len(ordered) - 1, 1) for i, t in enumerate(ordered)}
     for t, m in metrics.items():
-        score = 0.0
-        score += 15 if m["price"] > m["sma50"] else 0
-        score += 15 if m["sma50"] > m["sma200"] else 0
-        score += 10 if m["price"] > m["sma200"] else 0
-        score += 10 if m["sma200_rising"] else 0
-        score += 10 if m["pct_from_high"] <= 0.25 else 0
-        score += 10 if m["pct_above_low"] >= 0.30 else 0
-        score += 30 * pct[t]
-        m["trend_score"] = round(score, 1)
+        m["trend_score"] = round(structure_points(m) + 30 * pct[t], 1)
+
+
+def single_trend_score(m: dict, bench: dict) -> float:
+    """trend_score for one symbol: momentum points from its 3-6m excess return over the benchmark."""
+    excess = 0.6 * (m["ret_6m"] - bench["ret_6m"]) + 0.4 * (m["ret_3m"] - bench["ret_3m"])
+    return round(structure_points(m) + 30 * clamp((excess + 0.15) / 0.30), 1)
 
 
 def quality_score(info: dict) -> float:
@@ -252,40 +266,57 @@ def rank_etfs(histories: dict[str, pd.DataFrame]) -> tuple[list[dict], dict]:
     return uptrend[:TOP_ETFS], {"universe": len(UCITS_ETFS), "with_data": len(metrics)}
 
 
-def pct(x: float) -> str:
-    return f"{x * 100:+.0f}%"
+def pct(x: float, decimals: int = 0) -> str:
+    return f"{x * 100:+.{decimals}f}%"
 
 
-def stocks_message(ranking: dict, stats: dict, as_of: str) -> str:
-    lines = [f"🏆 **Top 3 por setor: tendência + qualidade** (S&P 500, fecho de {as_of})", ""]
-    for sector, rows in ranking.items():
-        picks = " · ".join(f"**{r['symbol']}** {r['score']:.0f} ({pct(r['ret_6m'])} 6m)" for r in rows)
-        lines.append(f"**{SECTORS_PT[sector]}:** {picks or 'nenhuma em tendência de alta'}")
-    lines += [
-        "",
-        f"-# {stats['with_data']} ações com dados → {stats['stage2']} em tendência de alta (preço > MM50 > MM200)."
-        " Score = 60% tendência (médias, força relativa 3-6m) + 40% qualidade (margem, ROE, crescimento, dívida).",
-        "_Ranking por critérios, não é recomendação de compra._",
-    ]
-    return "\n".join(lines)
+def returns_text(m: dict) -> str:
+    """Day, week, 3-month and 6-month change, e.g. `1d +0.4% · 1s +2.1% · 3m +9% · 6m +26%`."""
+    return f"1d {pct(m['ret_1d'], 1)} · 1s {pct(m['ret_1w'], 1)} · 3m {pct(m['ret_3m'])} · 6m {pct(m['ret_6m'])}"
 
 
-def etfs_message(etfs: list[dict], stats: dict, as_of: str) -> str:
-    lines = [f"📦 **Top {TOP_ETFS} ETFs UCITS: tendência** (compráveis na Europa, fecho de {as_of})", ""]
-    for i, r in enumerate(etfs, 1):
-        lines.append(
-            f"{i}. **{r['symbol'].split('.')[0]}** {r['name']} · {r['trend_score']:.0f}"
-            f" · {pct(r['ret_6m'])} 6m · {pct(r['ret_3m'])} 3m"
+def stocks_post(ranking: dict, stats: dict, as_of: str) -> tuple[list[dict], dict]:
+    fields = [
+        (
+            SECTORS_PT[sector],
+            "\n".join(f"**{r['symbol']}** {r['score']:.0f} · {returns_text(r)}" for r in rows)
+            or "nenhuma em tendência de alta",
         )
-    if not etfs:
-        lines.append("Nenhum ETF acima da média de 200 dias.")
-    lines += [
-        "",
-        f"-# {stats['with_data']} de {stats['universe']} ETFs com dados. Score = estrutura de tendência"
-        " (médias 50/200, máximos de 52 semanas) + força relativa 3-6m dentro da lista.",
-        "_Ranking por critérios, não é recomendação de compra._",
+        for sector, rows in ranking.items()
     ]
-    return "\n".join(lines)
+    card = embed(
+        f"🏆 Top 3 por setor: tendência + qualidade (S&P 500, fecho de {as_of})",
+        f"_{stats['with_data']} ações com dados → {stats['stage2']} em tendência de alta (preço > MM50 > MM200)._"
+        " Valorização: 1d = dia, 1s = semana.",
+        color=GREEN,
+        fields=fields,
+        footer="Score = 60% tendência (médias, força relativa 3-6m) + 40% qualidade (margem, ROE, crescimento, dívida). "
+        + DISCLAIMER,
+    )
+    return [card], {}
+
+
+def etfs_post(etfs: list[dict], stats: dict, as_of: str) -> tuple[list[dict], dict]:
+    lines = [
+        f"{i}. **{r['symbol'].split('.')[0]}** {r['name']} · score {r['trend_score']:.0f}\n"
+        f"   {returns_text(r)}"
+        for i, r in enumerate(etfs, 1)
+    ] or ["Nenhum ETF acima da média de 200 dias."]
+    lines += ["", f"_{stats['with_data']} de {stats['universe']} ETFs com dados._"]
+    files = {}
+    if etfs:
+        files["etfs.png"] = returns_chart(
+            [(r["symbol"].split(".")[0], r["ret_6m"] * 100) for r in etfs], "Valorização a 6 meses do top 10"
+        )
+    card = embed(
+        f"📦 Top {TOP_ETFS} ETFs UCITS: tendência (compráveis na Europa, fecho de {as_of})",
+        "\n".join(lines),
+        color=BLUE,
+        image="etfs.png" if files else None,
+        footer="Score = estrutura de tendência (médias 50/200, máximos de 52 semanas) + força relativa 3-6m dentro da lista. "
+        + DISCLAIMER,
+    )
+    return [card], files
 
 
 def to_json(rows):
@@ -317,8 +348,8 @@ def main() -> int:
         json.dumps({"as_of": as_of, "stocks": to_json(ranking), "etfs": to_json(etfs)}, indent=1)
     )
 
-    status = post_to_discord(stocks_message(ranking, stock_stats, as_of), args.dry_run)
-    return status or post_to_discord(etfs_message(etfs, etf_stats, as_of), args.dry_run)
+    status = send(*stocks_post(ranking, stock_stats, as_of), dry_run=args.dry_run)
+    return status or send(*etfs_post(etfs, etf_stats, as_of), dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
