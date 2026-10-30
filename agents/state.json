@@ -71,35 +71,7 @@
    "cash": 1000,
    "deposits": 1000,
    "positions": {},
-   "pending": [
-    {
-     "side": "buy",
-     "symbol": "USPY.DE",
-     "eur": 233.33,
-     "stop": null,
-     "tp": null,
-     "reason": "top ETFs",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "XDW0.DE",
-     "eur": 233.33,
-     "stop": null,
-     "tp": null,
-     "reason": "top ETFs",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "XDWH.DE",
-     "eur": 233.33,
-     "stop": null,
-     "tp": null,
-     "reason": "top ETFs",
-     "created": "2026-10-30"
-    }
-   ],
+   "pending": [],
    "history": [
     {
      "date": "2026-10-30",
@@ -111,66 +83,25 @@
    "points_log": [],
    "trades": [],
    "generation": 1,
-   "evolution": [],
-   "last_rebalance": "2026-10-30",
-   "last_decision": "2026-10-30",
+   "evolution": [
+    {
+     "date": "2026-10-30",
+     "note": "pré-treino: n 3→2, cada 5→29"
+    }
+   ],
+   "last_rebalance": null,
+   "last_decision": null,
    "started": "2026-10-30",
    "params": {
-    "n": 3,
-    "cada": 5
+    "n": 2,
+    "cada": 29
    }
   },
   "foguetao": {
    "cash": 1000,
    "deposits": 1000,
    "positions": {},
-   "pending": [
-    {
-     "side": "buy",
-     "symbol": "MRNA",
-     "eur": 140.0,
-     "stop": 199.548,
-     "tp": null,
-     "reason": "top tendência",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "CRL",
-     "eur": 140.0,
-     "stop": 323.469,
-     "tp": null,
-     "reason": "top tendência",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "CRWD",
-     "eur": 140.0,
-     "stop": 225.387,
-     "tp": null,
-     "reason": "top tendência",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "P",
-     "eur": 140.0,
-     "stop": 114.282,
-     "tp": null,
-     "reason": "top tendência",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "VEEV",
-     "eur": 140.0,
-     "stop": 281.664,
-     "tp": null,
-     "reason": "top tendência",
-     "created": "2026-10-30"
-    }
-   ],
+   "pending": [],
    "history": [
     {
      "date": "2026-10-30",
@@ -182,14 +113,19 @@
    "points_log": [],
    "trades": [],
    "generation": 1,
-   "evolution": [],
-   "last_rebalance": "2026-10-30",
-   "last_decision": "2026-10-30",
+   "evolution": [
+    {
+     "date": "2026-10-30",
+     "note": "pré-treino: stop_pct 0.1→0.0789, cada 5→21"
+    }
+   ],
+   "last_rebalance": null,
+   "last_decision": null,
    "started": "2026-10-30",
    "params": {
     "n": 5,
-    "stop_pct": 0.1,
-    "cada": 5
+    "stop_pct": 0.0789,
+    "cada": 21
    }
   },
   "joalheiro": {
@@ -351,44 +287,7 @@
    "cash": 1000,
    "deposits": 1000,
    "positions": {},
-   "pending": [
-    {
-     "side": "buy",
-     "symbol": "PTC",
-     "eur": 300.0,
-     "stop": 192.76,
-     "tp": null,
-     "reason": "contração",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "EXPD",
-     "eur": 300.0,
-     "stop": 193.69,
-     "tp": null,
-     "reason": "contração",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "BDX",
-     "eur": 235.85,
-     "stop": 189.49,
-     "tp": null,
-     "reason": "contração",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "IFF",
-     "eur": 282.74,
-     "stop": 89.73,
-     "tp": null,
-     "reason": "contração",
-     "created": "2026-10-30"
-    }
-   ],
+   "pending": [],
    "history": [
     {
      "date": "2026-10-30",
@@ -400,15 +299,20 @@
    "points_log": [],
    "trades": [],
    "generation": 1,
-   "evolution": [],
+   "evolution": [
+    {
+     "date": "2026-10-30",
+     "note": "pré-treino: n 4→3, risco_pct 0.01→0.0353, aperto_pct 0.06→0.0597, max_pos 0.3→0.1402"
+    }
+   ],
    "last_rebalance": null,
-   "last_decision": "2026-10-30",
+   "last_decision": null,
    "started": "2026-10-30",
    "params": {
-    "n": 4,
-    "risco_pct": 0.01,
-    "aperto_pct": 0.06,
-    "max_pos": 0.3
+    "n": 3,
+    "risco_pct": 0.0353,
+    "aperto_pct": 0.0597,
+    "max_pos": 0.1402
    }
   },
   "campeao": {
@@ -479,53 +383,7 @@
    "cash": 1000,
    "deposits": 1000,
    "positions": {},
-   "pending": [
-    {
-     "side": "buy",
-     "symbol": "FTNT",
-     "eur": 200.0,
-     "stop": 126.5544,
-     "tp": 144.2448,
-     "reason": "caiu -24% na semana",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "TWLO",
-     "eur": 200.0,
-     "stop": 190.6779,
-     "tp": 217.3318,
-     "reason": "caiu -22% na semana",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "HPQ",
-     "eur": 200.0,
-     "stop": 26.7654,
-     "tp": 30.5068,
-     "reason": "caiu -14% na semana",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "MRVL",
-     "eur": 200.0,
-     "stop": 182.652,
-     "tp": 208.184,
-     "reason": "caiu -14% na semana",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "DDOG",
-     "eur": 200.0,
-     "stop": 218.8011,
-     "tp": 249.3862,
-     "reason": "caiu -13% na semana",
-     "created": "2026-10-30"
-    }
-   ],
+   "pending": [],
    "history": [
     {
      "date": "2026-10-30",
@@ -537,16 +395,21 @@
    "points_log": [],
    "trades": [],
    "generation": 1,
-   "evolution": [],
+   "evolution": [
+    {
+     "date": "2026-10-30",
+     "note": "pré-treino: n 5→6, queda_pct 0.05→0.1493, alvo_pct 0.06→0.0536, stop_pct 0.07→0.2668, max_dias 10→27"
+    }
+   ],
    "last_rebalance": null,
-   "last_decision": "2026-10-30",
+   "last_decision": null,
    "started": "2026-10-30",
    "params": {
-    "n": 5,
-    "queda_pct": 0.05,
-    "alvo_pct": 0.06,
-    "stop_pct": 0.07,
-    "max_dias": 10
+    "n": 6,
+    "queda_pct": 0.1493,
+    "alvo_pct": 0.0536,
+    "stop_pct": 0.2668,
+    "max_dias": 27
    }
   },
   "kamikaze": {
