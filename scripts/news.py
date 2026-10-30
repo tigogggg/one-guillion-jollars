@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
 import os
 import re
@@ -30,9 +31,12 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
+from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
+import requests
 import yfinance as yf
 
 import discord_bot
@@ -105,23 +109,95 @@ def parse_item(symbol: str, raw: dict) -> dict | None:
 
 
 _format_reported: list[str] = []  # report an unknown Yahoo format once per run
+SOURCE_COUNTS: dict[str, int] = {}  # headlines per source in this run, for the run's annotation
+YAHOO_RSS = "https://feeds.finance.yahoo.com/rss/2.0/headline"
+GOOGLE_RSS = "https://news.google.com/rss/search"
+RSS_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; CoutoTradingBot/1.0)"}
+COMPANY_SUFFIXES = {"inc", "corp", "corporation", "co", "company", "plc", "ltd", "holdings", "group", "the", "class", "a", "b", "&"}
 
 
-def headlines(symbol: str, count: int = 8, now: datetime | None = None) -> list[dict]:
-    now = now or datetime.now(timezone.utc)
+def yahoo_api(symbol: str, count: int) -> list[dict]:
     try:
         raw = yf.Ticker(symbol).get_news(count=count) or []
     except Exception as e:  # yfinance raises many types, incl. rate limits
-        log(f"notícias {symbol}: {e}", "warning")
+        print(f"notícias yfinance {symbol}: {e}", file=sys.stderr)
         return []
-    if not raw:
-        print(f"{symbol}: sem notícias no Yahoo", file=sys.stderr)
     items = [parse_item(symbol, r) for r in raw]
     if raw and not any(items) and not _format_reported:
         _format_reported.append(symbol)
         sample = raw[0].get("content", raw[0])
         log(f"{symbol}: {len(raw)} notícias num formato não reconhecido; campos: {sorted(sample)[:12]}", "warning")
-    return [i for i in items if i and now - datetime.fromisoformat(i["published"]) <= MAX_AGE]
+    return [i for i in items if i]
+
+
+def strip_html(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html.unescape(text))).strip()
+
+
+def rss_items(xml_text: str, symbol: str, source: str) -> list[dict]:
+    """Items of an RSS 2.0 feed (Yahoo Finance or Google News)."""
+    try:
+        root = ElementTree.fromstring(xml_text)
+    except ElementTree.ParseError:
+        return []
+    out = []
+    for item in root.iter("item"):
+        title = strip_html(item.findtext("title") or "")
+        try:
+            published = parsedate_to_datetime(item.findtext("pubDate") or "")
+        except (TypeError, ValueError):
+            continue
+        if not title:
+            continue
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        publisher = (item.findtext("source") or "").strip()
+        if source == "Google" and " - " in title:  # Google appends " - Publisher" to titles
+            title, _, suffix = title.rpartition(" - ")
+            publisher = publisher or suffix
+        out.append({
+            "id": hashlib.sha1(f"{symbol}|{title}".encode()).hexdigest(),
+            "symbol": symbol,
+            "title": title,
+            "summary": strip_html(item.findtext("description") or "")[:300] if source != "Google" else "",
+            "publisher": publisher or source,
+            "url": (item.findtext("link") or "").strip(),
+            "published": published.astimezone(timezone.utc).isoformat(),
+        })
+    return out
+
+
+def fetch_rss(url: str, params: dict) -> str:
+    try:
+        resp = requests.get(url, params=params, headers=RSS_HEADERS, timeout=20)
+        return resp.text if resp.status_code == 200 else ""
+    except requests.RequestException:
+        return ""
+
+
+def short_name(name: str) -> str:
+    """'Apple Inc.' -> 'Apple', for news searches."""
+    name = re.sub(r"\s*\(.*?\)", "", name)
+    words = [w for w in name.replace(",", " ").split() if w.rstrip(".").lower() not in COMPANY_SUFFIXES]
+    return " ".join(words) or name
+
+
+def headlines(symbol: str, count: int = 8, now: datetime | None = None, name: str | None = None) -> list[dict]:
+    """Recent headlines: Yahoo's news API, then Yahoo's RSS, then Google News (by company name)."""
+    now = now or datetime.now(timezone.utc)
+    sources = (
+        ("yfinance", lambda: yahoo_api(symbol, count)),
+        ("Yahoo RSS", lambda: rss_items(fetch_rss(YAHOO_RSS, {"s": symbol, "region": "US", "lang": "en-US"}), symbol, "Yahoo")),
+        ("Google", lambda: rss_items(fetch_rss(GOOGLE_RSS, {
+            "q": f'"{short_name(name)}" when:2d' if name else f"{symbol} stock when:2d",
+            "hl": "en-US", "gl": "US", "ceid": "US:en"}), symbol, "Google")),
+    )
+    for label, get in sources:
+        items = [i for i in get() if now - datetime.fromisoformat(i["published"]) <= MAX_AGE][:count]
+        if items:
+            SOURCE_COUNTS[label] = SOURCE_COUNTS.get(label, 0) + len(items)
+            return items
+    return []
 
 
 def followed_symbols() -> list[str]:
@@ -138,8 +214,8 @@ def followed_symbols() -> list[str]:
     return [s for s in dict.fromkeys(symbols) if "." not in s]  # European ETFs (.DE …) have no company news
 
 
-def biggest_movers(n: int = MOVERS) -> list[str]:
-    hist = download_history([c["symbol"] for c in load_constituents()], period="5d")
+def biggest_movers(constituents: list[dict], n: int = MOVERS) -> list[str]:
+    hist = download_history([c["symbol"] for c in constituents], period="5d")
     moves = {s: abs(float(df["Close"].iloc[-1] / df["Close"].iloc[-2] - 1)) for s, df in hist.items() if len(df) >= 2}
     return sorted(moves, key=moves.get, reverse=True)[:n]
 
@@ -252,11 +328,14 @@ def main() -> int:
     now = datetime.now(timezone.utc)
     seen_list = json.loads(SEEN_PATH.read_text()) if SEEN_PATH.exists() else []
     seen = set(seen_list)
-    symbols = list(dict.fromkeys(followed_symbols() + biggest_movers()))
-    fetched = [i for s in symbols for i in headlines(s, now=now)]
+    constituents = load_constituents()
+    names = {c["symbol"]: c["name"] for c in constituents}
+    symbols = list(dict.fromkeys(followed_symbols() + biggest_movers(constituents)))
+    fetched = [i for s in symbols for i in headlines(s, now=now, name=names.get(s))]
     items = [i for i in fetched if i["id"] not in seen]
     items = list({i["id"]: i for i in items}.values())[:MAX_HEADLINES]
-    log(f"{len(symbols)} ações, {len(fetched)} títulos das últimas 36 h, {len(items)} novos ({len(seen)} já vistos)")
+    by_source = ", ".join(f"{k}: {v}" for k, v in SOURCE_COUNTS.items()) or "nenhuma fonte respondeu"
+    log(f"{len(symbols)} ações, {len(fetched)} títulos das últimas 36 h ({by_source}), {len(items)} novos ({len(seen)} já vistos)")
     if not items:
         return 0
 
