@@ -1,0 +1,598 @@
+{
+ "agents": {
+  "indexador": {
+   "cash": 1000,
+   "deposits": 1000,
+   "positions": {},
+   "pending": [
+    {
+     "side": "buy",
+     "symbol": "SXR8.DE",
+     "eur": 1000,
+     "stop": null,
+     "tp": null,
+     "reason": "investir",
+     "created": "2026-10-30"
+    }
+   ],
+   "history": [
+    {
+     "date": "2026-10-30",
+     "equity": 1000,
+     "deposits": 1000
+    }
+   ],
+   "points": 0,
+   "points_log": [],
+   "trades": [],
+   "generation": 1,
+   "evolution": [],
+   "last_rebalance": null,
+   "last_decision": "2026-10-30",
+   "started": "2026-10-30",
+   "params": {}
+  },
+  "guardiao": {
+   "cash": 1000,
+   "deposits": 1000,
+   "positions": {},
+   "pending": [
+    {
+     "side": "buy",
+     "symbol": "VWCE.DE",
+     "eur": 700.0,
+     "stop": null,
+     "tp": null,
+     "reason": "zona Neutra",
+     "created": "2026-10-30"
+    }
+   ],
+   "history": [
+    {
+     "date": "2026-10-30",
+     "equity": 1000,
+     "deposits": 1000
+    }
+   ],
+   "points": 0,
+   "points_log": [],
+   "trades": [],
+   "generation": 1,
+   "evolution": [],
+   "last_rebalance": "2026-10-30",
+   "last_decision": "2026-10-30",
+   "started": "2026-10-30",
+   "params": {
+    "max_exposicao": 1.0,
+    "folga": 0.1
+   }
+  },
+  "rotador": {
+   "cash": 1000,
+   "deposits": 1000,
+   "positions": {},
+   "pending": [
+    {
+     "side": "buy",
+     "symbol": "USPY.DE",
+     "eur": 233.33,
+     "stop": null,
+     "tp": null,
+     "reason": "top ETFs",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "XDW0.DE",
+     "eur": 233.33,
+     "stop": null,
+     "tp": null,
+     "reason": "top ETFs",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "XDWH.DE",
+     "eur": 233.33,
+     "stop": null,
+     "tp": null,
+     "reason": "top ETFs",
+     "created": "2026-10-30"
+    }
+   ],
+   "history": [
+    {
+     "date": "2026-10-30",
+     "equity": 1000,
+     "deposits": 1000
+    }
+   ],
+   "points": 0,
+   "points_log": [],
+   "trades": [],
+   "generation": 1,
+   "evolution": [],
+   "last_rebalance": "2026-10-30",
+   "last_decision": "2026-10-30",
+   "started": "2026-10-30",
+   "params": {
+    "n": 3,
+    "cada": 5
+   }
+  },
+  "foguetao": {
+   "cash": 1000,
+   "deposits": 1000,
+   "positions": {},
+   "pending": [
+    {
+     "side": "buy",
+     "symbol": "MRNA",
+     "eur": 140.0,
+     "stop": 199.548,
+     "tp": null,
+     "reason": "top tendência",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "CRL",
+     "eur": 140.0,
+     "stop": 323.469,
+     "tp": null,
+     "reason": "top tendência",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "CRWD",
+     "eur": 140.0,
+     "stop": 225.387,
+     "tp": null,
+     "reason": "top tendência",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "P",
+     "eur": 140.0,
+     "stop": 114.282,
+     "tp": null,
+     "reason": "top tendência",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "VEEV",
+     "eur": 140.0,
+     "stop": 281.664,
+     "tp": null,
+     "reason": "top tendência",
+     "created": "2026-10-30"
+    }
+   ],
+   "history": [
+    {
+     "date": "2026-10-30",
+     "equity": 1000,
+     "deposits": 1000
+    }
+   ],
+   "points": 0,
+   "points_log": [],
+   "trades": [],
+   "generation": 1,
+   "evolution": [],
+   "last_rebalance": "2026-10-30",
+   "last_decision": "2026-10-30",
+   "started": "2026-10-30",
+   "params": {
+    "n": 5,
+    "stop_pct": 0.1,
+    "cada": 5
+   }
+  },
+  "joalheiro": {
+   "cash": 1000,
+   "deposits": 1000,
+   "positions": {},
+   "pending": [
+    {
+     "side": "buy",
+     "symbol": "MSFT",
+     "eur": 116.67,
+     "stop": 443.6235,
+     "tp": null,
+     "reason": "qualidade",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "VLO",
+     "eur": 116.67,
+     "stop": 339.711,
+     "tp": null,
+     "reason": "qualidade",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "MNST",
+     "eur": 116.67,
+     "stop": 40.239,
+     "tp": null,
+     "reason": "qualidade",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "AAPL",
+     "eur": 116.67,
+     "stop": 292.9355,
+     "tp": null,
+     "reason": "qualidade",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "EXPD",
+     "eur": 116.67,
+     "stop": 169.0225,
+     "tp": null,
+     "reason": "qualidade",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "VEEV",
+     "eur": 116.67,
+     "stop": 266.016,
+     "tp": null,
+     "reason": "qualidade",
+     "created": "2026-10-30"
+    }
+   ],
+   "history": [
+    {
+     "date": "2026-10-30",
+     "equity": 1000,
+     "deposits": 1000
+    }
+   ],
+   "points": 0,
+   "points_log": [],
+   "trades": [],
+   "generation": 1,
+   "evolution": [],
+   "last_rebalance": "2026-10-30",
+   "last_decision": "2026-10-30",
+   "started": "2026-10-30",
+   "params": {
+    "n": 6,
+    "qualidade_min": 70,
+    "stop_pct": 0.15,
+    "cada": 20
+   }
+  },
+  "cacador": {
+   "cash": 1000,
+   "deposits": 1000,
+   "positions": {},
+   "pending": [
+    {
+     "side": "buy",
+     "symbol": "KDP",
+     "eur": 300.0,
+     "stop": 34.14,
+     "tp": 40.94,
+     "reason": "rompimento",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "MO",
+     "eur": 272.36,
+     "stop": 72.3,
+     "tp": 95.22,
+     "reason": "rompimento",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "VRTX",
+     "eur": 182.08,
+     "stop": 497.49,
+     "tp": 743.05,
+     "reason": "rompimento",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "LLY",
+     "eur": 158.88,
+     "stop": 1239.1,
+     "tp": 1952.8602,
+     "reason": "rompimento",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "BALL",
+     "eur": 290.26,
+     "stop": 61.89,
+     "tp": 80.21,
+     "reason": "rompimento",
+     "created": "2026-10-30"
+    }
+   ],
+   "history": [
+    {
+     "date": "2026-10-30",
+     "equity": 1000,
+     "deposits": 1000
+    }
+   ],
+   "points": 0,
+   "points_log": [],
+   "trades": [],
+   "generation": 1,
+   "evolution": [],
+   "last_rebalance": null,
+   "last_decision": "2026-10-30",
+   "started": "2026-10-30",
+   "params": {
+    "n": 5,
+    "risco_pct": 0.02,
+    "alvo_r": 3.0,
+    "max_pos": 0.3
+   }
+  },
+  "sniper": {
+   "cash": 1000,
+   "deposits": 1000,
+   "positions": {},
+   "pending": [
+    {
+     "side": "buy",
+     "symbol": "PTC",
+     "eur": 300.0,
+     "stop": 192.76,
+     "tp": null,
+     "reason": "contração",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "EXPD",
+     "eur": 300.0,
+     "stop": 193.69,
+     "tp": null,
+     "reason": "contração",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "BDX",
+     "eur": 235.85,
+     "stop": 189.49,
+     "tp": null,
+     "reason": "contração",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "IFF",
+     "eur": 282.74,
+     "stop": 89.73,
+     "tp": null,
+     "reason": "contração",
+     "created": "2026-10-30"
+    }
+   ],
+   "history": [
+    {
+     "date": "2026-10-30",
+     "equity": 1000,
+     "deposits": 1000
+    }
+   ],
+   "points": 0,
+   "points_log": [],
+   "trades": [],
+   "generation": 1,
+   "evolution": [],
+   "last_rebalance": null,
+   "last_decision": "2026-10-30",
+   "started": "2026-10-30",
+   "params": {
+    "n": 4,
+    "risco_pct": 0.01,
+    "aperto_pct": 0.06,
+    "max_pos": 0.3
+   }
+  },
+  "campeao": {
+   "cash": 1000,
+   "deposits": 1000,
+   "positions": {},
+   "pending": [
+    {
+     "side": "buy",
+     "symbol": "MPC",
+     "eur": 175.0,
+     "stop": 391.3624,
+     "tp": null,
+     "reason": "setor forte: Energia, Saúde",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "PSX",
+     "eur": 175.0,
+     "stop": 248.8904,
+     "tp": null,
+     "reason": "setor forte: Energia, Saúde",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "MRNA",
+     "eur": 175.0,
+     "stop": 195.1136,
+     "tp": null,
+     "reason": "setor forte: Energia, Saúde",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "CRL",
+     "eur": 175.0,
+     "stop": 316.2808,
+     "tp": null,
+     "reason": "setor forte: Energia, Saúde",
+     "created": "2026-10-30"
+    }
+   ],
+   "history": [
+    {
+     "date": "2026-10-30",
+     "equity": 1000,
+     "deposits": 1000
+    }
+   ],
+   "points": 0,
+   "points_log": [],
+   "trades": [],
+   "generation": 1,
+   "evolution": [],
+   "last_rebalance": "2026-10-30",
+   "last_decision": "2026-10-30",
+   "started": "2026-10-30",
+   "params": {
+    "setores": 2,
+    "por_setor": 2,
+    "stop_pct": 0.12,
+    "cada": 5
+   }
+  },
+  "pescador": {
+   "cash": 1000,
+   "deposits": 1000,
+   "positions": {},
+   "pending": [
+    {
+     "side": "buy",
+     "symbol": "FTNT",
+     "eur": 200.0,
+     "stop": 126.5544,
+     "tp": 144.2448,
+     "reason": "caiu -24% na semana",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "TWLO",
+     "eur": 200.0,
+     "stop": 190.6779,
+     "tp": 217.3318,
+     "reason": "caiu -22% na semana",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "HPQ",
+     "eur": 200.0,
+     "stop": 26.7654,
+     "tp": 30.5068,
+     "reason": "caiu -14% na semana",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "MRVL",
+     "eur": 200.0,
+     "stop": 182.652,
+     "tp": 208.184,
+     "reason": "caiu -14% na semana",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "DDOG",
+     "eur": 200.0,
+     "stop": 218.8011,
+     "tp": 249.3862,
+     "reason": "caiu -13% na semana",
+     "created": "2026-10-30"
+    }
+   ],
+   "history": [
+    {
+     "date": "2026-10-30",
+     "equity": 1000,
+     "deposits": 1000
+    }
+   ],
+   "points": 0,
+   "points_log": [],
+   "trades": [],
+   "generation": 1,
+   "evolution": [],
+   "last_rebalance": null,
+   "last_decision": "2026-10-30",
+   "started": "2026-10-30",
+   "params": {
+    "n": 5,
+    "queda_pct": 0.05,
+    "alvo_pct": 0.06,
+    "stop_pct": 0.07,
+    "max_dias": 10
+   }
+  },
+  "kamikaze": {
+   "cash": 1000,
+   "deposits": 1000,
+   "positions": {},
+   "pending": [
+    {
+     "side": "buy",
+     "symbol": "MRNA",
+     "eur": 500.0,
+     "stop": 177.376,
+     "tp": null,
+     "reason": "maior subida a 3 meses",
+     "created": "2026-10-30"
+    },
+    {
+     "side": "buy",
+     "symbol": "P",
+     "eur": 500.0,
+     "stop": 101.584,
+     "tp": null,
+     "reason": "maior subida a 3 meses",
+     "created": "2026-10-30"
+    }
+   ],
+   "history": [
+    {
+     "date": "2026-10-30",
+     "equity": 1000,
+     "deposits": 1000
+    }
+   ],
+   "points": 0,
+   "points_log": [],
+   "trades": [],
+   "generation": 1,
+   "evolution": [],
+   "last_rebalance": "2026-10-30",
+   "last_decision": "2026-10-30",
+   "started": "2026-10-30",
+   "params": {
+    "n": 2,
+    "stop_pct": 0.2,
+    "cada": 5
+   }
+  }
+ }
+}
