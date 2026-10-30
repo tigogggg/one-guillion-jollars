@@ -457,6 +457,31 @@
     "cada": 5,
     "ignora_resultados": true
    }
+  },
+  "deriva": {
+   "cash": 1000,
+   "deposits": 1000,
+   "positions": {},
+   "pending": [],
+   "history": [],
+   "points": 0,
+   "points_log": [],
+   "trades": [],
+   "generation": 1,
+   "evolution": [
+    {
+     "date": "2026-10-30",
+     "note": "pré-treino: n 5→2, salto_pct 0.04→0.0966, max_dias 20→21"
+    }
+   ],
+   "last_rebalance": null,
+   "last_decision": null,
+   "started": "2026-10-30",
+   "params": {
+    "n": 2,
+    "salto_pct": 0.0966,
+    "max_dias": 21
+   }
   }
  }
 }
