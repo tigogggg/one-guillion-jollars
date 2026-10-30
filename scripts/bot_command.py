@@ -20,6 +20,7 @@ import re
 import sys
 from datetime import date
 
+import earnings
 from charts import price_chart
 from discord_daily import BREADTH_DETAIL_URL, BREADTH_SUMMARY_URL, REPO, build_post, run_skill
 from discord_post import GREEN, RED, embed, send
@@ -109,6 +110,11 @@ def stock_card(ticker: str) -> tuple[list[dict], dict]:
         f"Stop ${stop:.2f} (mínimo de 10 sessões) · risco {risk * 100:.1f}%",
         f"`/posicao capital:… entrada:{m['price']:.2f} stop:{stop:.2f}`",
     ]
+    report = earnings.next_earnings(ticker)
+    if report:
+        soon = earnings.within(report, 5)
+        lines[2:2] = [f"{'⚠️' if soon else '📅'} Próximos {earnings.warning(report)}"
+                      + (": cuidado com entradas antes dos resultados" if soon else "")]
     name = info.get("longName") or info.get("shortName") or ticker
     sector = info.get("sector")
     card = embed(

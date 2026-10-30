@@ -11,6 +11,8 @@ virtual euros. Daily run, after the morning tips:
 3. Positions are marked to the latest close; points are awarded:
    +10 for a day in profit (equity above money given) and +/-1 per 0.1% daily
    change (capped at +/-10).
+   New buys skip stocks reporting earnings within EARNINGS_AVOID_DAYS, unless
+   the agent's params set ignora_resultados.
 4. On the first run of a month, agents that lost money last month mutate
    their numeric parameters (+/-20%), the "training"; winners keep theirs.
 5. The strategy decides tomorrow's orders; the league is posted to Discord.
@@ -35,6 +37,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
+import earnings
 from charts import lines_chart
 from discord_daily import WATCHLIST_DIR
 from discord_post import BLUE, GREEN, RED, embed, send
@@ -57,6 +60,7 @@ MIN_ORDER_EUR = 20.0
 EXPOSURE = {"Alta": 1.0, "Neutra": 0.7, "Cautelosa": 0.4, "Queda": 0.1}
 ZONE_ICON = {"Alta": "🟢", "Neutra": "🟡", "Cautelosa": "🟠", "Queda": "🔴"}
 MUTATION = 0.2
+EARNINGS_AVOID_DAYS = 5
 TRADES_KEPT = 200
 POINTS_LOG_KEPT = 60
 
@@ -91,6 +95,7 @@ class Market:
     stage2_share: float
     rankings: list[dict] = field(default_factory=list)
     vcp: set[str] = field(default_factory=set)
+    earnings: dict[str, date | None] = field(default_factory=dict)  # looked up once per run
 
 
 # --------------------------------------------------------------------------
@@ -563,7 +568,7 @@ STRATEGIES = {
     "sniper": (s_sniper, "Contração de volatilidade (VCP)", {"n": 4, "risco_pct": 0.01, "aperto_pct": 0.06, "max_pos": 0.30}),
     "campeao": (s_campeao, "Melhores ações dos setores mais fortes", {"setores": 2, "por_setor": 2, "stop_pct": 0.12, "cada": 5}),
     "pescador": (s_pescador, "Compra quedas em ações em tendência", {"n": 5, "queda_pct": 0.05, "alvo_pct": 0.06, "stop_pct": 0.07, "max_dias": 10}),
-    "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5}),
+    "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5, "ignora_resultados": True}),
 }
 
 
@@ -606,8 +611,22 @@ def active_agents(config: dict) -> list[dict]:
 # --------------------------------------------------------------------------
 
 
-def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, dict]], list[str]]:
-    moves, training = [], []
+def skip_earnings(orders: list[dict], mkt: Market) -> tuple[list[dict], list[str]]:
+    """Drop buys of stocks that report within EARNINGS_AVOID_DAYS; return (kept, skipped symbols)."""
+    kept, skipped = [], []
+    for o in orders:
+        if o["side"] == "buy" and not is_eur(o["symbol"]):
+            if o["symbol"] not in mkt.earnings:
+                mkt.earnings[o["symbol"]] = earnings.next_earnings(o["symbol"], mkt.as_of)
+            if earnings.within(mkt.earnings[o["symbol"]], EARNINGS_AVOID_DAYS, mkt.as_of):
+                skipped.append(o["symbol"])
+                continue
+        kept.append(o)
+    return kept, skipped
+
+
+def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, dict]], list[str], list[str]]:
+    moves, training, avoided = [], [], []
     for cfg in active_agents(config):
         port = state["agents"].setdefault(cfg["id"], new_portfolio(cfg["capital"], mkt.as_of))
         params = port.setdefault("params", dict(cfg["params"]))
@@ -619,9 +638,14 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
             training.append(f"{cfg['emoji']} **{cfg['name']}** {note}")
         if port["last_decision"] != mkt.as_of.isoformat() and not port["pending"]:
             orders = STRATEGIES[cfg["strategy"]][0](cfg, port, mkt, params)
+            if not params.get("ignora_resultados"):
+                orders, skipped = skip_earnings(orders, mkt)
+                if skipped:
+                    avoided.append(f"{cfg['emoji']} {cfg['name']}: " + ", ".join(
+                        f"{s} ({earnings.label(mkt.earnings[s])})" for s in skipped))
             port["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders if o["side"] == "sell" or o["eur"] >= MIN_ORDER_EUR]
             port["last_decision"] = mkt.as_of.isoformat()
-    return moves, training
+    return moves, training, avoided
 
 
 def eur(x: float) -> str:
@@ -639,7 +663,7 @@ def day_change(port: dict) -> float:
     return (h[-1]["equity"] - (h[-1]["deposits"] - h[-2]["deposits"])) / h[-2]["equity"] - 1
 
 
-def league(config: dict, state: dict, mkt: Market, title: str, moves=(), training=()) -> tuple[list[dict], dict]:
+def league(config: dict, state: dict, mkt: Market, title: str, moves=(), training=(), avoided=()) -> tuple[list[dict], dict]:
     rows = []
     for cfg in active_agents(config):
         port = state["agents"].get(cfg["id"])
@@ -664,6 +688,8 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
             else:
                 move_lines.append(f"🔴 {cfg['emoji']} {cfg['name']} vendeu **{t['symbol']}** · {t['pnl_eur']:+.0f} € ({t['reason']})")
         fields.append(("📥 Movimentos", "\n".join(move_lines)))
+    if avoided:
+        fields.append((f"📅 Compras evitadas: resultados nos próximos {EARNINGS_AVOID_DAYS} dias", "\n".join(avoided)[:1024]))
     if training:
         fields.append(("🧬 Treino do mês (agentes que perderam dinheiro mudam de parâmetros)", "\n".join(training)[:1024]))
     pending = sum(len(p["pending"]) for _, p, _ in rows)
@@ -782,9 +808,10 @@ def main() -> int:
     try:
         if a.mode == "daily":
             mkt = load_market()
-            moves, training = run_day(config, state, mkt)
+            moves, training, avoided = run_day(config, state, mkt)
             save(None, state)
-            embeds, files = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}", moves, training)
+            embeds, files = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}",
+                                   moves, training, avoided)
         else:
             args = json.loads(a.args or "{}")
             needs_market = args.get("acao", "ver") in ("ver", "criar")

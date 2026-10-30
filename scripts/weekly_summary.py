@@ -5,6 +5,8 @@
 - Biggest S&P 500 gainers and losers of the week.
 - Track record of the opportunity alerts sent in the last 5 weeks
   (state/history/alerts.json, shared through the Actions cache).
+- Next week's earnings of the stocks the channel follows: the latest
+  rankings, recent alerts and the agents' holdings.
 
     uv run python scripts/weekly_summary.py --dry-run
 """
@@ -18,7 +20,9 @@ from datetime import date, timedelta
 
 import pandas as pd
 
+import earnings
 from charts import returns_chart
+from discord_daily import WATCHLIST_DIR
 from discord_post import BLUE, GREEN, RED, embed, send
 from opportunity_alerts import HISTORY_PATH
 from rankings import SECTORS_PT, download_history, load_constituents
@@ -44,6 +48,8 @@ SECTOR_ETFS = {
     "XLRE": "Real Estate",
     "XLB": "Materials",
 }
+AGENTS_CONFIG = WATCHLIST_DIR.parents[1] / "agents" / "config.json"
+AGENTS_STATE = WATCHLIST_DIR.parents[1] / "agents" / "state.json"
 TRACK_RECORD_DAYS = 35
 WEEK = 5  # trading sessions
 
@@ -85,6 +91,36 @@ def track_record(history: list[dict], prices: dict[str, pd.DataFrame], today: da
         status = "🛑 stop atingido" if stopped else ("🟢" if move > 0 else "🔴")
         lines.append(f"**{a['symbol']}** ({a['date'][5:]}) {move * 100:+.1f}% desde o alerta · {status}")
     return lines, stats
+
+
+def followed_symbols(history: list[dict], today: date) -> tuple[set[str], dict[str, list[str]]]:
+    """Stocks in the latest rankings, alerts of the last 2 weeks and agents' holdings (with holder names)."""
+    symbols: set[str] = set()
+    rankings = WATCHLIST_DIR / "rankings-latest.json"
+    if rankings.exists():
+        symbols |= {r["symbol"] for rows in json.loads(rankings.read_text())["stocks"].values() for r in rows}
+    symbols |= {a["symbol"] for a in history if date.fromisoformat(a["date"]) >= today - timedelta(days=14)}
+    holders: dict[str, list[str]] = {}
+    if AGENTS_STATE.exists():
+        names = {a["id"]: a["emoji"] for a in json.loads(AGENTS_CONFIG.read_text())["agents"]}
+        for agent_id, port in json.loads(AGENTS_STATE.read_text())["agents"].items():
+            for s in port["positions"]:
+                holders.setdefault(s, []).append(names.get(agent_id, "🤖"))
+    symbols |= set(holders)
+    return {s for s in symbols if not s.endswith(earnings.NO_EARNINGS_SUFFIXES)}, holders
+
+
+def earnings_field(symbols: set[str], holders: dict[str, list[str]], today: date) -> tuple[str, str] | None:
+    monday, friday = earnings.next_week(today)
+    dates = earnings.next_earnings_many(sorted(symbols), today)
+    by_day: dict[date, list[str]] = {}
+    for s, d in dates.items():
+        if d and monday <= d <= friday:
+            by_day.setdefault(d, []).append(f"**{s}**" + ("".join(holders[s]) if s in holders else ""))
+    if not by_day:
+        return None
+    lines = [f"{earnings.label(d)}: " + ", ".join(sorted(syms)) for d, syms in sorted(by_day.items())]
+    return (f"📅 Resultados na próxima semana (ações seguidas pelo canal; emoji = agente que a tem)", "\n".join(lines))
 
 
 def fmt(x: float | None, decimals: int = 1) -> str:
@@ -131,6 +167,10 @@ def main() -> int:
         ],
         image="setores-semana.png",
     )
+    symbols, holders = followed_symbols(json.loads(HISTORY_PATH.read_text()) if HISTORY_PATH.exists() else [], as_of)
+    upcoming = earnings_field(symbols, holders, as_of)
+    if upcoming:
+        summary["fields"].append({"name": upcoming[0][:256], "value": upcoming[1][:1024], "inline": False})
     files = {"setores-semana.png": returns_chart([(n, (m or 0) * 100) for n, m in sectors], "Variação semanal por setor (ETFs SPDR)")}
     embeds = [summary]
 

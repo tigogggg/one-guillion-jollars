@@ -17,11 +17,13 @@ import io
 import json
 import sys
 import time
+from datetime import date
 
 import pandas as pd
 import requests
 import yfinance as yf
 
+import earnings
 from charts import returns_chart
 from discord_daily import WATCHLIST_DIR
 from discord_post import BLUE, DISCLAIMER, GREEN, embed, send
@@ -35,6 +37,7 @@ FUNDAMENTALS_PER_SECTOR = 8
 TOP_ETFS = 10
 MIN_DOLLAR_VOLUME = 20_000_000
 TREND_WEIGHT, QUALITY_WEIGHT = 0.6, 0.4
+EARNINGS_SOON_DAYS = 10
 
 SECTORS_PT = {
     "Information Technology": "Tecnologia",
@@ -275,11 +278,16 @@ def returns_text(m: dict) -> str:
     return f"1d {pct(m['ret_1d'], 1)} · 1s {pct(m['ret_1w'], 1)} · 3m {pct(m['ret_3m'])} · 6m {pct(m['ret_6m'])}"
 
 
+def earnings_badge(r: dict) -> str:
+    d = date.fromisoformat(r["earnings"]) if r.get("earnings") else None
+    return f" · 📅 **{earnings.label(d)}**" if earnings.within(d, EARNINGS_SOON_DAYS) else ""
+
+
 def stocks_post(ranking: dict, stats: dict, as_of: str) -> tuple[list[dict], dict]:
     fields = [
         (
             SECTORS_PT[sector],
-            "\n".join(f"**{r['symbol']}** {r['score']:.0f} · {returns_text(r)}" for r in rows)
+            "\n".join(f"**{r['symbol']}** {r['score']:.0f} · {returns_text(r)}{earnings_badge(r)}" for r in rows)
             or "nenhuma em tendência de alta",
         )
         for sector, rows in ranking.items()
@@ -287,7 +295,7 @@ def stocks_post(ranking: dict, stats: dict, as_of: str) -> tuple[list[dict], dic
     card = embed(
         f"🏆 Top 3 por setor: tendência + qualidade (S&P 500, fecho de {as_of})",
         f"_{stats['with_data']} ações com dados → {stats['stage2']} em tendência de alta (preço > MM50 > MM200)._"
-        " Valorização: 1d = dia, 1s = semana.",
+        f" Valorização: 1d = dia, 1s = semana. 📅 = resultados nos próximos {EARNINGS_SOON_DAYS} dias.",
         color=GREEN,
         fields=fields,
         footer="Score = 60% tendência (médias, força relativa 3-6m) + 40% qualidade (margem, ROE, crescimento, dívida). "
@@ -338,6 +346,10 @@ def main() -> int:
     as_of = stock_hist[BENCHMARK].index[-1].date().isoformat()
 
     ranking, stock_stats = rank_stocks(constituents, stock_hist)
+    dates = earnings.next_earnings_many([r["symbol"] for rows in ranking.values() for r in rows])
+    for rows in ranking.values():
+        for r in rows:
+            r["earnings"] = dates[r["symbol"]].isoformat() if dates.get(r["symbol"]) else None
     etfs, etf_stats = rank_etfs(etf_hist)
     missing = sorted({t for t, _ in UCITS_ETFS} - set(etf_hist))
     if missing:

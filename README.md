@@ -138,3 +138,13 @@ Quedas (pullbacks in uptrends) and Kamikaze (2 biggest 3-month gainers).
 `.github/workflows/agents.yml` runs the daily league (12:15 Lisbon by default,
 set with `/horario`) and answers `/agentes [nome]` and the admin-only `/agente
 criar|depositar|remover`.
+
+## Earnings calendar
+
+`scripts/earnings.py` looks up each stock's next earnings date on Yahoo
+Finance. The rankings mark stocks reporting within 10 days (📅), alert cards
+turn orange with a warning when the stock reports within 5 days, `/acao` shows
+the next date, the agents skip new buys of stocks reporting within 5 days
+(except Kamikaze, `ignora_resultados`), and the weekly summary lists next
+week's reports of the stocks in the rankings, recent alerts and agents'
+holdings.
