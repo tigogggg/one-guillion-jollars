@@ -1,0 +1,15 @@
+# Deployed by .github/workflows/deploy-worker.yml on every change to discord-bot/.
+name = "captain-tips-bot"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+# DISCORD_PUBLIC_KEY and GITHUB_REPO are set in the Cloudflare dashboard (and
+# GITHUB_TOKEN as a secret); keep them across deploys.
+keep_vars = true
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[kv_namespaces]]
+binding = "CONFIG"
+# Filled in by the deploy workflow (namespace "coutotrading-config", created if missing).
+id = "__KV_ID__"
