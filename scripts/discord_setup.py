@@ -282,6 +282,13 @@ def diagnose() -> int:
     print(f"::notice title=Diagnóstico::Cargos do bot: {', '.join(r['name'] for r in mine)}")
     print("::notice title=Diagnóstico::Permissões efetivas: "
           + ", ".join(f"{label} {'✅' if perms & bit else '❌'}" for bit, label in names.items()))
+    if CHANNELS_PATH.exists():
+        for key, channel in json.loads(CHANNELS_PATH.read_text())["channels"].items():
+            try:
+                name = discord_api("GET", f"/channels/{channel}")["name"]
+                print(f"::notice title=Diagnóstico::#{name} ({key}): o bot tem acesso ✅")
+            except RuntimeError as e:
+                print(f"::warning title=Diagnóstico::canal {key} ({channel}): sem acesso ❌ {e}")
     return 0
 
 
