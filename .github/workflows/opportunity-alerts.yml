@@ -1,0 +1,42 @@
+name: Alertas de oportunidade (Discord)
+
+on:
+  schedule:
+    # Durante a sessão dos EUA (aberta 13:30/14:30-20:00/21:00 UTC conforme a hora de verão).
+    - cron: "37 15,17,19 * * 1-5"
+  workflow_dispatch:
+
+concurrency: opportunity-alerts
+
+jobs:
+  alerts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - name: Carregar a watchlist da manhã
+        uses: actions/cache/restore@v4
+        with:
+          path: state/watchlist
+          key: watchlist-latest
+          restore-keys: watchlist-
+      - id: day
+        run: echo "d=$(TZ=America/New_York date +%F)" >> "$GITHUB_OUTPUT"
+      - name: Carregar os alertas já enviados hoje
+        uses: actions/cache/restore@v4
+        with:
+          path: state/alerts
+          key: alerts-${{ steps.day.outputs.d }}
+          restore-keys: alerts-${{ steps.day.outputs.d }}-
+      - name: Verificar rompimentos
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: uv run python scripts/opportunity_alerts.py
+      - name: Guardar os alertas enviados
+        if: ${{ !cancelled() && hashFiles('state/alerts/*.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: state/alerts
+          key: alerts-${{ steps.day.outputs.d }}-${{ github.run_id }}

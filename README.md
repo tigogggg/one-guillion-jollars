@@ -53,3 +53,16 @@ Tests: `uv run python -m pytest skills/<name>/scripts/tests`. The
 `scripts/validate_provenance.py` and fail here; the skills themselves do not.
 
 Not financial advice. These skills do not place orders.
+
+## Rankings and opportunity alerts
+
+`scripts/rankings.py` (Yahoo Finance via `yfinance`, no API key) posts, after
+the daily tips, the top 3 S&P 500 stocks per sector by trend + quality and the
+top 10 UCITS ETFs by trend. The watchlist it saves (plus the day's VCP setups)
+is cached for `scripts/opportunity_alerts.py`, which
+`.github/workflows/opportunity-alerts.yml` runs at 15:37, 17:37 and 19:37 UTC on
+weekdays: it posts only when a watchlist stock breaks its pivot on projected
+volume, once per stock per day. `yfinance` is an unofficial Yahoo client and
+can break when Yahoo changes. Rankings are criteria-based, not buy advice.
+
+Tests: `uv run python -m pytest tests`.
