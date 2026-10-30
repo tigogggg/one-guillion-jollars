@@ -96,6 +96,7 @@ class Market:
     rankings: list[dict] = field(default_factory=list)
     vcp: set[str] = field(default_factory=set)
     earnings: dict[str, date | None] = field(default_factory=dict)  # looked up once per run
+    closes: dict[str, float] | None = None  # as_of closes, precomputed by the backtest for speed
 
 
 # --------------------------------------------------------------------------
@@ -181,15 +182,22 @@ def is_eur(symbol: str) -> bool:
 def to_eur(mkt: Market, symbol: str, price: float, on: date) -> float:
     if is_eur(symbol):
         return price
-    fx = mkt.fx[mkt.fx.index.date <= on]
-    return price / float(fx.iloc[-1] if len(fx) else mkt.fx.iloc[0])
+    rate = mkt.fx.asof(pd.Timestamp(on))
+    return price / float(mkt.fx.iloc[0] if pd.isna(rate) else rate)
+
+
+def bars_between(df: pd.DataFrame, after: date, until: date) -> pd.DataFrame:
+    """Rows dated after `after` up to and including `until` (index sorted by date)."""
+    return df.loc[pd.Timestamp(after) + pd.Timedelta(days=1): pd.Timestamp(until) + pd.Timedelta(hours=23)]
 
 
 def last_close(mkt: Market, symbol: str) -> float | None:
+    if mkt.closes is not None:
+        return mkt.closes.get(symbol)
     df = mkt.hist.get(symbol)
     if df is None:
         return None
-    rows = df[df.index.date <= mkt.as_of]
+    rows = df.loc[: pd.Timestamp(mkt.as_of) + pd.Timedelta(hours=23)]
     return float(rows["Close"].iloc[-1]) if len(rows) else None
 
 
@@ -282,7 +290,7 @@ def fill_pending(port: dict, mkt: Market) -> list[dict]:
         df = mkt.hist.get(order["symbol"])
         if df is None:
             continue
-        after = df[(df.index.date > date.fromisoformat(order["created"])) & (df.index.date <= mkt.as_of)]
+        after = bars_between(df, date.fromisoformat(order["created"]), mkt.as_of)
         if after.empty:
             still.append(order)
             continue
@@ -306,7 +314,7 @@ def check_exits(port: dict, mkt: Market) -> list[dict]:
         df = mkt.hist.get(symbol)
         if df is None:
             continue
-        bars = df[(df.index.date > date.fromisoformat(pos["checked"])) & (df.index.date <= mkt.as_of)]
+        bars = bars_between(df, date.fromisoformat(pos["checked"]), mkt.as_of)
         for idx, bar in bars.iterrows():
             on = idx.date()
             if pos.get("stop") and bar["Low"] <= pos["stop"]:

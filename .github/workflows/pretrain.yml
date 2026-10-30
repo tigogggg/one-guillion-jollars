@@ -1,0 +1,45 @@
+name: Pré-treino dos agentes
+
+# Walk-forward backtest of every strategy on the last year; with "aplicar",
+# agents of strategies whose tuned parameters passed the validation period
+# get them. Run by hand (e.g. once a quarter).
+on:
+  workflow_dispatch:
+    inputs:
+      aplicar:
+        description: "Aplicar os parâmetros escolhidos aos agentes"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agents-state
+  cancel-in-progress: false
+
+jobs:
+  pretrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Pré-treinar
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          APPLY: ${{ inputs.aplicar && '--apply' || '' }}
+        run: uv run python scripts/pretrain.py $APPLY
+      - name: Guardar os resultados e os parâmetros
+        if: ${{ !cancelled() }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add agents/
+          git diff --cached --quiet && exit 0
+          git commit -m "Agentes: pré-treino $(date -u +%F)"
+          git pull --rebase origin main
+          git push origin HEAD:main
