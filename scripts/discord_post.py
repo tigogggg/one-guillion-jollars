@@ -48,15 +48,22 @@ def embed(
     return e
 
 
-def send(
+def post_message(
     embeds: list[dict],
     files: dict[str, bytes] | None = None,
     dry_run: bool = False,
     url: str | None = None,
     method: str = "POST",
     content: str | None = None,
-) -> int:
-    """Post (or, with method=PATCH and an interaction url, edit) one message. Returns 0 on success."""
+    thread_id: str | None = None,
+    headers: dict | None = None,
+) -> dict | None:
+    """Post (or, with method=PATCH and an interaction url, edit) one message.
+
+    Defaults to the channel webhook; `thread_id` posts inside a thread of that
+    channel, `url` + `headers` send elsewhere (e.g. a DM with the bot token).
+    Returns Discord's message object ({} on a dry run), or None on failure.
+    """
     files = files or {}
     if dry_run:
         for e in embeds:
@@ -69,12 +76,18 @@ def send(
             for name, data in files.items():
                 (PREVIEW_DIR / name).write_bytes(data)
             print(f"(imagens em {PREVIEW_DIR}: {', '.join(files)})")
-        return 0
+        return {}
 
+    webhook = url is None
     url = url or os.environ.get("DISCORD_WEBHOOK_URL")
     if not url:
         print("DISCORD_WEBHOOK_URL não definido; usa --dry-run para só ver a mensagem.", file=sys.stderr)
-        return 1
+        return None
+    params = {}
+    if webhook:
+        params["wait"] = "true"  # return the message, so callers get its id
+        if thread_id:
+            params["thread_id"] = thread_id
 
     payload = {"embeds": embeds[:10], "allowed_mentions": {"parse": []}}
     if content is not None:
@@ -82,11 +95,20 @@ def send(
     if files:
         payload["attachments"] = [{"id": i, "filename": name} for i, name in enumerate(files)]
         multipart = {f"files[{i}]": (name, data, "image/png") for i, (name, data) in enumerate(files.items())}
-        resp = requests.request(method, url, data={"payload_json": json.dumps(payload)}, files=multipart, timeout=60)
+        resp = requests.request(method, url, params=params, headers=headers, data={"payload_json": json.dumps(payload)},
+                                files=multipart, timeout=60)
     else:
-        resp = requests.request(method, url, json=payload, timeout=60)
+        resp = requests.request(method, url, params=params, headers=headers, json=payload, timeout=60)
     if resp.status_code >= 300:
         print(f"Discord respondeu {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
-        return 1
+        return None
     print("Mensagem enviada para o Discord.")
-    return 0
+    try:
+        return resp.json()
+    except ValueError:
+        return {}
+
+
+def send(embeds: list[dict], files: dict[str, bytes] | None = None, dry_run: bool = False, **kwargs) -> int:
+    """post_message, returning 0 on success and 1 on failure (exit status)."""
+    return 0 if post_message(embeds, files, dry_run=dry_run, **kwargs) is not None else 1

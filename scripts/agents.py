@@ -37,6 +37,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
+import discord_bot
 import earnings
 from charts import lines_chart, returns_chart
 from discord_daily import WATCHLIST_DIR
@@ -879,9 +880,11 @@ def main() -> int:
             raise
         print(f"ERROR: {e!r}", file=sys.stderr)
         embeds, files = [embed("⚠️ Erro nos agentes", str(e)[:300], color=RED)], {}
+    if a.mode == "daily" and not target:
+        target = {"thread_id": discord_bot.todays_thread()}
     status = send(embeds, files, dry_run=a.dry_run, **target)
     if follow_up[0]:
-        status = status or send(*follow_up, dry_run=a.dry_run)
+        status = status or send(*follow_up, dry_run=a.dry_run, **target)
     return status
 
 

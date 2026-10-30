@@ -20,6 +20,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
+import discord_bot
 import earnings
 import macro
 from charts import returns_chart
@@ -75,7 +76,8 @@ def share_above_sma50(histories: dict[str, pd.DataFrame], offset: int = 0) -> fl
 def track_record(history: list[dict], prices: dict[str, pd.DataFrame], today: date) -> tuple[list[str], dict]:
     """One line per recent alert: change since the alert, and whether the stop was hit."""
     since = today - timedelta(days=TRACK_RECORD_DAYS)
-    lines, stats = [], {"total": 0, "up": 0, "stopped": 0}
+    lines, stats = [], {"total": 0, "up": 0, "stopped": 0, "👍": 0, "👎": 0}
+    votes_by_message: dict[str, dict | None] = {}
     for a in history:
         if date.fromisoformat(a["date"]) < since or a["symbol"] not in prices:
             continue
@@ -90,7 +92,18 @@ def track_record(history: list[dict], prices: dict[str, pd.DataFrame], today: da
         stats["up"] += move > 0
         stats["stopped"] += stopped
         status = "🛑 stop atingido" if stopped else ("🟢" if move > 0 else "🔴")
-        lines.append(f"**{a['symbol']}** ({a['date'][5:]}) {move * 100:+.1f}% desde o alerta · {status}")
+        votes = ""
+        if a.get("message_id"):
+            if a["message_id"] not in votes_by_message:
+                votes_by_message[a["message_id"]] = discord_bot.count_votes(a["channel_id"], a["message_id"])
+            counted = votes_by_message[a["message_id"]]
+            if counted:
+                votes = f" · 👍{counted['👍']} 👎{counted['👎']}"
+                if a["message_id"] not in stats.setdefault("_seen", set()):
+                    stats["_seen"].add(a["message_id"])
+                    stats["👍"] += counted["👍"]
+                    stats["👎"] += counted["👎"]
+        lines.append(f"**{a['symbol']}** ({a['date'][5:]}) {move * 100:+.1f}% desde o alerta · {status}{votes}")
     return lines, stats
 
 
@@ -189,7 +202,8 @@ def main() -> int:
                 f"🎯 Alertas das últimas {TRACK_RECORD_DAYS // 7} semanas: como correram",
                 "\n".join(lines[-15:])
                 + f"\n\n**{stats['up']} de {stats['total']}** acima do preço do alerta"
-                f" · **{stats['stopped']}** chegaram ao stop",
+                f" · **{stats['stopped']}** chegaram ao stop"
+                + (f"\nVotos do grupo: 👍 {stats['👍']} · 👎 {stats['👎']}" if stats["👍"] or stats["👎"] else ""),
                 color=BLUE,
                 footer="Preço de fecho de hoje vs preço no momento do alerta. Resultados passados não garantem nada.",
             )

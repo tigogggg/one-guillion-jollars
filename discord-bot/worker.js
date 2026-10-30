@@ -41,6 +41,7 @@ const WORKFLOWS = {
 };
 const LATE_LIMIT_MIN = 20; // still start a job this many minutes after its time (missed cron ticks)
 const MAX_ALERT_TIMES = 6;
+const MAX_FOLLOWS = 20;
 
 const HELP = [
   "👋 **Bem-vindo! Este canal recebe análise de mercado automática.**",
@@ -57,6 +58,7 @@ const HELP = [
   "• `/mercado` · leitura do mercado agora",
   "• `/posicao capital entrada stop` · quantas ações comprar (ex.: `/posicao 10000 35.84 34.14`)",
   "• `/agentes` · liga dos agentes simulados (ou `/agentes nome` para ver um agente)",
+  "• `/seguir adicionar NVDA` · a tua lista pessoal: avisos por mensagem privada (`/seguir lista`, `/seguir remover`)",
   "• `/horario` e `/agente` · horários e gestão dos agentes (só administradores)",
   "• `/ajuda` · esta mensagem",
   "",
@@ -100,6 +102,11 @@ export default {
       ctx.waitUntil(startInteractionWorkflow(env, interaction, "agents.yml", { mode: "config", args: JSON.stringify(args) }));
       return json({ type: DEFERRED_CHANNEL_MESSAGE });
     }
+    if (name === "seguir") {
+      const user = interaction.member?.user?.id || interaction.user?.id;
+      const content = await followCommand(env, user, interaction.data.options?.[0]);
+      return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
+    }
     if (name === "horario") {
       return json({ type: CHANNEL_MESSAGE, data: { content: await scheduleCommand(env, interaction.data.options?.[0]) } });
     }
@@ -134,6 +141,38 @@ export default {
     }
   },
 };
+
+// /seguir: a personal list of tickers in KV (follows:<user id>); the alerts
+// workflow DMs each user about their stocks.
+async function followCommand(env, user, sub) {
+  if (!env.CONFIG || !user) return "⚠️ As listas pessoais ainda não estão ativas.";
+  const key = `follows:${user}`;
+  const list = (await env.CONFIG.get(key, "json")) || [];
+  const ticker = String(sub?.options?.find((o) => o.name === "ticker")?.value || "").trim().toUpperCase();
+  const action = sub?.name || "lista";
+
+  if (action === "adicionar" || action === "remover") {
+    if (!/^[A-Z0-9][A-Z0-9.\-]{0,9}$/.test(ticker)) return `⚠️ \`${ticker.slice(0, 12)}\` não parece um ticker (ex.: NVDA).`;
+    if (action === "adicionar") {
+      if (list.includes(ticker)) return `**${ticker}** já está na tua lista.`;
+      if (list.length >= MAX_FOLLOWS) return `⚠️ A lista tem no máximo ${MAX_FOLLOWS} ações. Remove alguma primeiro.`;
+      list.push(ticker);
+    } else if (!list.includes(ticker)) {
+      return `**${ticker}** não está na tua lista.`;
+    } else {
+      list.splice(list.indexOf(ticker), 1);
+    }
+    if (list.length) await env.CONFIG.put(key, JSON.stringify(list));
+    else await env.CONFIG.delete(key);
+  }
+  const header = action === "adicionar" ? `✅ **${ticker}** adicionada.` : action === "remover" ? `🗑️ **${ticker}** removida.` : "";
+  const body = list.length
+    ? `A tua lista (${list.length}/${MAX_FOLLOWS}): ${list.map((t) => `**${t}**`).join(", ")}`
+    : "A tua lista está vazia. Usa `/seguir adicionar NVDA`.";
+  return [header, body, "-# Recebes uma mensagem privada quando uma destas ações rompe com volume ou mexe 5% ou mais no dia (verificado 3 vezes por dia útil)."]
+    .filter(Boolean)
+    .join("\n");
+}
 
 async function scheduleCommand(env, sub) {
   if (!env.CONFIG) {

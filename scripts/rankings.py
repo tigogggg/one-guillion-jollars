@@ -23,6 +23,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+import discord_bot
 import earnings
 from charts import returns_chart
 from discord_daily import WATCHLIST_DIR
@@ -360,8 +361,9 @@ def main() -> int:
         json.dumps({"as_of": as_of, "stocks": to_json(ranking), "etfs": to_json(etfs)}, indent=1)
     )
 
-    status = send(*stocks_post(ranking, stock_stats, as_of), dry_run=args.dry_run)
-    return status or send(*etfs_post(etfs, etf_stats, as_of), dry_run=args.dry_run)
+    thread = discord_bot.todays_thread()  # inside the day's thread when the tips opened one
+    status = send(*stocks_post(ranking, stock_stats, as_of), dry_run=args.dry_run, thread_id=thread)
+    return status or send(*etfs_post(etfs, etf_stats, as_of), dry_run=args.dry_run, thread_id=thread)
 
 
 if __name__ == "__main__":

@@ -251,13 +251,15 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
         y, v = r["year"], r["valid"]
         verdict = "✅ parâmetros novos" if r["adopted"] else "↩️ mantém os originais"
         lines.append(
-            f"{cfg['emoji']} **{cfg['name']}** · ano {pct(y['return'])} · queda máx. {pct(-y['max_drawdown'])}"
+            f"{cfg['emoji']} **{cfg['name']}** · ano* {pct(y['return'])} · queda máx. {pct(-y['max_drawdown'])}"
             f" · exame: {v['best']['points']} vs {v['default']['points']} pts · {verdict}"
         )
     fields = [("🧪 Como foi feito",
                f"Treino {results['train'][0]} a {results['train'][1]} · exame {results['valid'][0]} a {results['valid'][1]}.\n"
                f"~{VARIANTS} variações por estratégia, avaliadas pelos pontos da liga. Ordens à abertura do dia seguinte, "
-               "0,1% de custos, sem ver o futuro.")]
+               "0,1% de custos, sem ver o futuro.\n"
+               "*O ano inclui o período em que os parâmetros foram escolhidos, por isso é otimista; "
+               "o que conta é o exame (pontos com os parâmetros escolhidos vs os originais).")]
     if applied:
         fields.append(("⚙️ Parâmetros aplicados aos agentes", "\n".join(applied)[:1024]))
     fields.append(("⚠️ Limites",
