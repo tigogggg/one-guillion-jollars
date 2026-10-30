@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 
 import matplotlib
+import matplotlib.dates
+import matplotlib.ticker
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -116,4 +118,30 @@ def returns_chart(rows: list[tuple[str, float]], title: str) -> bytes:
     ax.set_xlim(min(0, min(values)) - span * 0.15, max(0, max(values)) + span * 0.2)
     ax.set_title(title, color=FG, fontsize=10, loc="left")
     ax.grid(axis="y", visible=False)
+    return _png(fig)
+
+
+def lines_chart(series: dict[str, list[tuple]], title: str) -> bytes:
+    """One line per name of (date, % value), with a zero line and end labels."""
+    palette = ["#4cc0a8", "#e2b84a", "#5865f2", "#ed4245", "#57f287", "#eb459e", "#f0b232", "#9b84ee", "#3ba5d8", "#dbdee1"]
+    fig = _figure()
+    ax = fig.add_subplot(1, 1, 1)
+    _style(ax)
+    ax.axhline(0, color=NEUTRAL, linewidth=0.8)
+    for i, (name, points) in enumerate(series.items()):
+        if not points:
+            continue
+        dates = pd.to_datetime([d for d, _ in points])
+        values = [v for _, v in points]
+        color = palette[i % len(palette)]
+        ax.plot(dates, values, color=color, linewidth=1.4, marker="o" if len(points) < 3 else None, markersize=3)
+        ax.annotate(f"{name} {values[-1]:+.1f}%", (dates[-1], values[-1]), xytext=(4, 0), textcoords="offset points",
+                    color=color, fontsize=7, va="center")
+    ax.set_title(title, color=FG, fontsize=10, loc="left")
+    ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:+.1f}%"))
+    ax.xaxis.set_major_locator(matplotlib.dates.AutoDateLocator(minticks=2, maxticks=8))
+    ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%d/%m"))
+    if len({d for pts in series.values() for d, _ in pts}) < 3:
+        ax.xaxis.set_major_locator(matplotlib.dates.DayLocator())
+    ax.margins(x=0.18)
     return _png(fig)

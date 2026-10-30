@@ -1,0 +1,94 @@
+{
+  "agents": [
+    {
+      "id": "indexador",
+      "name": "Indexador",
+      "emoji": "🐢",
+      "strategy": "indexador",
+      "capital": 1000,
+      "params": {},
+      "description": "Referência: compra o S&P 500 (SXR8) e nunca vende. Quem não bater este agente não acrescenta valor."
+    },
+    {
+      "id": "guardiao",
+      "name": "Guardião",
+      "emoji": "🛡️",
+      "strategy": "guardiao",
+      "capital": 1000,
+      "params": {"max_exposicao": 1.0, "folga": 0.1},
+      "description": "Conservador: só tem o ETF mundial VWCE e ajusta o peso à zona do mercado (100% em alta, 10% em queda)."
+    },
+    {
+      "id": "rotador",
+      "name": "Rotador",
+      "emoji": "🔄",
+      "strategy": "rotador",
+      "capital": 1000,
+      "params": {"n": 3, "cada": 5},
+      "description": "Moderado: roda semanalmente entre os 3 ETFs UCITS com melhor tendência."
+    },
+    {
+      "id": "foguetao",
+      "name": "Foguetão",
+      "emoji": "🚀",
+      "strategy": "foguetao",
+      "capital": 1000,
+      "params": {"n": 5, "stop_pct": 0.10, "cada": 5},
+      "description": "Agressivo: as 5 ações com maior score de tendência, revistas todas as semanas, stop de 10%."
+    },
+    {
+      "id": "joalheiro",
+      "name": "Joalheiro",
+      "emoji": "💎",
+      "strategy": "joalheiro",
+      "capital": 1000,
+      "params": {"n": 6, "qualidade_min": 70, "stop_pct": 0.15, "cada": 20},
+      "description": "Conservador: as 6 melhores do ranking com qualidade alta (≥70), revistas uma vez por mês."
+    },
+    {
+      "id": "cacador",
+      "name": "Caçador",
+      "emoji": "⚡",
+      "strategy": "cacador",
+      "capital": 1000,
+      "params": {"n": 5, "risco_pct": 0.02, "alvo_r": 3.0, "max_pos": 0.30},
+      "description": "Agressivo: compra rompimentos com volume (2% de risco por trade), stop no mínimo de 10 dias, alvo em 3R."
+    },
+    {
+      "id": "sniper",
+      "name": "Sniper",
+      "emoji": "🎯",
+      "strategy": "sniper",
+      "capital": 1000,
+      "params": {"n": 4, "risco_pct": 0.01, "aperto_pct": 0.06, "max_pos": 0.30},
+      "description": "Seletivo: padrões de contração de volatilidade (VCP) perto do pivot, 1% de risco, sai se perder a média de 50 dias."
+    },
+    {
+      "id": "campeao",
+      "name": "Campeão Setorial",
+      "emoji": "🏆",
+      "strategy": "campeao",
+      "capital": 1000,
+      "params": {"setores": 2, "por_setor": 2, "stop_pct": 0.12, "cada": 5},
+      "description": "Moderado: as 2 melhores ações dos 2 setores mais fortes, revistas todas as semanas."
+    },
+    {
+      "id": "pescador",
+      "name": "Pescador de Quedas",
+      "emoji": "🧲",
+      "strategy": "pescador",
+      "capital": 1000,
+      "params": {"n": 5, "queda_pct": 0.05, "alvo_pct": 0.06, "stop_pct": 0.07, "max_dias": 10},
+      "description": "Contrário: compra ações em tendência de alta que caíram 5%+ na semana; vende a +6%, a -7% ou ao fim de 10 sessões."
+    },
+    {
+      "id": "kamikaze",
+      "name": "Kamikaze",
+      "emoji": "🎲",
+      "strategy": "kamikaze",
+      "capital": 1000,
+      "params": {"n": 2, "stop_pct": 0.20, "cada": 5},
+      "description": "Muito agressivo: tudo nas 2 ações com maior subida a 3 meses, ignora o estado do mercado, stop de 20%."
+    }
+  ]
+}

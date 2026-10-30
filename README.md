@@ -110,3 +110,28 @@ summary Saturday 10:00. Server admins change them with `/horario`.
 share of S&P 500 stocks above their 50-day average vs a week ago, the top
 gainers and losers, and how the alerts of the last 5 weeks did
 (`state/history/alerts.json`, kept in the Actions cache).
+
+## Agents (paper trading league)
+
+`scripts/agents.py` runs simulated agents with virtual euros on real prices
+(`agents/config.json` defines them, `agents/state.json` holds portfolios,
+trades, points and training history; the workflow commits both). Orders
+decided on the latest close fill at the next session's open with 0.1% costs;
+US stocks are bought in EUR at that day's EUR/USD rate, fractional shares
+allowed. Stops and targets are checked against each session's low and high.
+
+Points: +10 for each day in profit (equity above money given) and ±1 per 0.1%
+of the day's change (capped at ±10). Training: on the first run of each month,
+agents that lost money the previous month mutate their numeric parameters by
+up to ±20% within bounds (`PARAM_BOUNDS`); winners keep theirs.
+
+The ten starting agents (1000 € each): Indexador (S&P 500 buy & hold, the
+benchmark), Guardião (VWCE sized by market zone), Rotador (top 3 UCITS ETFs),
+Foguetão (top 5 trend scores), Joalheiro (top ranking with quality ≥ 70),
+Caçador (breakouts on volume, 2% risk), Sniper (volatility contraction, 1%
+risk), Campeão Setorial (best stocks of the strongest sectors), Pescador de
+Quedas (pullbacks in uptrends) and Kamikaze (2 biggest 3-month gainers).
+
+`.github/workflows/agents.yml` runs the daily league (12:15 UTC for now, later
+from `/horario`) and answers `/agentes [nome]` and the admin-only `/agente
+criar|depositar|remover`.
