@@ -1,0 +1,21 @@
+name: Dicas do dia (Discord)
+
+on:
+  schedule:
+    # Seg-Sex às 11:37 UTC (manhã em Lisboa, antes da abertura dos EUA),
+    # com os dados do fecho anterior.
+    - cron: "37 11 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - name: Publicar no Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: uv run python scripts/discord_daily.py
