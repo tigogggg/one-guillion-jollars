@@ -118,6 +118,19 @@
       "description": "Contrário: compra ações em tendência de alta que caíram 5%+ na semana; vende a +6%, a -7% ou ao fim de 10 sessões."
     },
     {
+      "id": "deriva",
+      "name": "Deriva",
+      "emoji": "🧭",
+      "strategy": "deriva",
+      "capital": 1000,
+      "params": {
+        "n": 5,
+        "salto_pct": 0.04,
+        "max_dias": 20
+      },
+      "description": "Momentum de eventos: compra ações que abriram com salto de 4%+ e volume forte (resultados, notícias) e aguentaram o salto; até 20 sessões, stop abaixo do mínimo do dia do salto."
+    },
+    {
       "id": "kamikaze",
       "name": "Kamikaze",
       "emoji": "🎲",

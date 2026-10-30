@@ -132,3 +132,16 @@ def test_monthly_report_compares_with_benchmark():
     text = embeds[0]["description"]
     assert text.index("🎲") < text.index("🐢") and "bateu o S&P 500" in text
     assert "melhor **AAA** +30 €" in text and "mes.png" in files
+
+
+def test_deriva_buys_held_gaps_with_stop_under_gap_day():
+    hist = {"GAP": frame([100] * 3, [100] * 3, [100] * 3, [100] * 3)}
+    m = {"price": 110.0, "sma50": 100.0, "gap_size": 0.06, "gap_low": 104.0, "gap_age": 1,
+         "sector": "Energy", "stage2": True, "trend_score": 80}
+    filled = {"price": 103.0, "sma50": 100.0, "gap_size": 0.06, "gap_low": 104.0, "gap_age": 1}  # fell back into the gap
+    mkt = market(hist, DATES[2].date(), stocks={"GAP": m, "FILL": {**m, **filled}})
+    mkt.closes = {"GAP": 110.0, "FILL": 103.0}
+    port = new_portfolio(1000, DATES[0].date())
+    orders = agents.s_deriva({}, port, mkt, {"n": 5, "salto_pct": 0.04, "max_dias": 20})
+    assert [o["symbol"] for o in orders] == ["GAP"]
+    assert orders[0]["stop"] == pytest.approx(104 * 0.99) and orders[0]["eur"] == pytest.approx(200)

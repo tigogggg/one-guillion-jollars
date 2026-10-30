@@ -74,6 +74,14 @@ def features(df: pd.DataFrame) -> pd.DataFrame:
     f["low10_prev"] = low.shift(1).rolling(10).min()
     f["vol_ratio"] = vol / vol.shift(1).rolling(50).mean().clip(lower=1)
     f["range10"] = (high.rolling(10).max() - low.rolling(10).min()) / close
+    gap = df["Open"] / close.shift(1) - 1
+    event = (gap >= agents.GAP_MIN) & (vol / vol.shift(1).rolling(50).mean().clip(lower=1) >= agents.GAP_VOLUME)
+    event &= pd.Series(range(len(df)), index=df.index) >= 51
+    pos = pd.Series(range(len(df)), index=df.index, dtype=float)
+    last_pos = pos.where(event).ffill(limit=agents.GAP_LOOKBACK - 1)
+    f["gap_size"] = gap.where(event).ffill(limit=agents.GAP_LOOKBACK - 1).fillna(0.0)
+    f["gap_low"] = low.where(event).ffill(limit=agents.GAP_LOOKBACK - 1).fillna(0.0)
+    f["gap_age"] = (pos - last_pos).fillna(-1).astype(int)
     f["valid"] = pd.Series(range(len(df)), index=df.index) >= WARMUP - 1
     return f
 
@@ -173,12 +181,14 @@ def variants(strategy: str, n: int) -> list[dict]:
     return out
 
 
-def pretrain(markets: list[Market]) -> dict:
+def pretrain(markets: list[Market], only: set[str] | None = None) -> dict:
     split = int(len(markets) * TRAIN_SHARE)
     train, valid = markets[:split], markets[split:]
     results = {"train": [train[0].as_of.isoformat(), train[-1].as_of.isoformat()],
                "valid": [valid[0].as_of.isoformat(), valid[-1].as_of.isoformat()], "strategies": {}}
     for strategy in STRATEGIES:
+        if only and strategy not in only:
+            continue
         if strategy in SKIP:
             results["strategies"][strategy] = {"skipped": SKIP[strategy]}
             continue
@@ -218,9 +228,9 @@ def apply(results: dict, today: date) -> list[str]:
     changed = []
     for cfg in agents.active_agents(config):
         r = results["strategies"].get(cfg["strategy"], {})
-        port = state["agents"].get(cfg["id"])
-        if not port or not r.get("adopted"):
+        if not r.get("adopted"):
             continue
+        port = state["agents"].setdefault(cfg["id"], new_portfolio(cfg["capital"], today))
         old = port.get("params", cfg["params"])
         params = {**old, **r["chosen"]}
         note = "pré-treino: " + ", ".join(f"{k} {old.get(k)}→{v}" for k, v in r["chosen"].items() if old.get(k) != v)
@@ -279,11 +289,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--apply", action="store_true", help="Set the agents' parameters in agents/state.json")
     parser.add_argument("--dry-run", action="store_true", help="Print the report instead of posting")
+    parser.add_argument("--estrategias", default="", help="Comma-separated strategies to train (default: all)")
     args = parser.parse_args()
 
     markets = build_markets()
     print(f"{len(markets)} dias de {markets[0].as_of} a {markets[-1].as_of}", file=sys.stderr)
-    results = pretrain(markets)
+    only = {s.strip() for s in args.estrategias.split(",") if s.strip()} or None
+    results = pretrain(markets, only | {"indexador"} if only else None)
     REPORT_PATH.write_text(json.dumps({k: v for k, v in results.items()}, indent=1, default=str) + "\n")
     applied = apply(results, markets[-1].as_of) if args.apply else None
     return send(*report(results, applied), dry_run=args.dry_run)
