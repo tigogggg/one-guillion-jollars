@@ -161,3 +161,14 @@ original parameters on the remaining ~32% it never saw. Results go to
 `agents/pretrain.json` and Discord; run "Pré-treino dos agentes" by hand.
 Joalheiro is skipped (no historical fundamentals), the earnings rule is off and
 today's S&P 500 list is used (survivorship bias).
+
+## Leader signals, monthly report and macro agenda
+
+The daily league shows the leading agent's orders for the next open, and
+alert cards list the agents holding (or about to buy) the stock. On the first
+run of a month the agents post a monthly report (return, points, best and
+worst trade, vs the Indexador). `scripts/macro.py` adds high-impact US events
+(Fed, CPI, jobs, GDP) to the daily tips (today/tomorrow) and the weekly
+summary (next week), from FMP's economic calendar or, if unavailable, the
+Fed's 2026 meeting dates and the usual first-Friday jobs report. The VCP
+budget is 246 calls to leave room for it in the FMP free tier.

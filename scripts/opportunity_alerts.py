@@ -86,7 +86,22 @@ def check_breakout(df: pd.DataFrame, info: dict, fraction: float) -> dict | None
     return {"price": price, "pivot": pivot, "stop": stop, "risk": risk, "volume_ratio": volume_ratio}
 
 
-def alert_card(symbol: str, info: dict, a: dict, df: pd.DataFrame) -> tuple[dict, str, bytes]:
+def agent_holders() -> dict[str, list[str]]:
+    """{symbol: ["🚀 Foguetão", …]} for agents holding it or with a buy order for the next open."""
+    config, state = REPO / "agents" / "config.json", REPO / "agents" / "state.json"
+    if not state.exists():
+        return {}
+    names = {a["id"]: f"{a['emoji']} {a['name']}" for a in json.loads(config.read_text())["agents"] if a.get("active", True)}
+    out: dict[str, list[str]] = {}
+    for agent_id, port in json.loads(state.read_text())["agents"].items():
+        symbols = set(port["positions"]) | {o["symbol"] for o in port["pending"] if o["side"] == "buy"}
+        for sym in symbols:
+            if agent_id in names:
+                out.setdefault(sym, []).append(names[agent_id])
+    return out
+
+
+def alert_card(symbol: str, info: dict, a: dict, df: pd.DataFrame, holders: list[str] = ()) -> tuple[dict, str, bytes]:
     report = date.fromisoformat(info["earnings"]) if info.get("earnings") else earnings.next_earnings(symbol)
     risky = earnings.within(report, EARNINGS_WARN_DAYS)
     origin = f"setup VCP · {info['sector']}" if info["source"] == "VCP" else f"{info['sector']} · score {info['score']:.0f}"
@@ -96,6 +111,7 @@ def alert_card(symbol: str, info: dict, a: dict, df: pd.DataFrame) -> tuple[dict
             f"Volume projetado **{a['volume_ratio']:.1f}×** a média de 50 dias",
             f"Stop sugerido **${a['stop']:.2f}** (risco {a['risk'] * 100:.1f}%)",
             f"_{origin}_",
+            *([f"🤖 Na carteira (ou a comprar) de: {', '.join(holders)}"] if holders else []),
             *([f"⚠️ **Atenção: {earnings.warning(report)}.** Um rompimento antes dos resultados pode desfazer-se num dia."]
               if risky else []),
             "",
@@ -130,13 +146,14 @@ def main() -> int:
     alerted = set(json.loads(alerted_path.read_text())) if alerted_path.exists() else set()
 
     cards, files, sent, fraction = [], {}, [], session_fraction(now)
+    holders = agent_holders()
     for symbol, info in watch.items():
         df = histories.get(symbol)
         if df is None or symbol in alerted or df.index[-1].date() != now.date():
             continue  # no data, already alerted, or no bar for today (market closed)
         a = check_breakout(df, info, fraction)
         if a and len(cards) < 10:  # Discord allows 10 embeds per message
-            card, filename, chart = alert_card(symbol, info, a, df)
+            card, filename, chart = alert_card(symbol, info, a, df, holders.get(symbol, []))
             cards.append(card)
             files[filename] = chart
             alerted.add(symbol)

@@ -113,3 +113,22 @@ def test_run_day_indexador_invests_next_open():
     run_day(config, state, market(hist, DATES[1].date()))
     assert "SXR8.DE" in port["positions"] and port["cash"] == 0
     assert equity(port, market(hist, DATES[1].date())) == pytest.approx(1000 / 1.001, rel=1e-3)
+
+
+def test_monthly_report_compares_with_benchmark():
+    config = {"agents": [{"id": "i", "name": "I", "emoji": "🐢", "strategy": "indexador", "capital": 1000, "params": {}},
+                         {"id": "k", "name": "K", "emoji": "🎲", "strategy": "kamikaze", "capital": 1000, "params": {}}]}
+    def port(end):
+        p = new_portfolio(1000, date(2026, 10, 1))
+        p["history"] = [{"date": "2026-10-01", "equity": 1000, "deposits": 1000},
+                        {"date": "2026-10-30", "equity": end, "deposits": 1000},
+                        {"date": "2026-11-02", "equity": end, "deposits": 1000}]
+        p["trades"] = [{"date": "2026-10-20", "side": "venda", "symbol": "AAA", "pnl_eur": 30.0},
+                       {"date": "2026-10-21", "side": "venda", "symbol": "BBB", "pnl_eur": -12.0}]
+        return p
+    state = {"agents": {"i": port(1020), "k": port(1100)}}
+    assert agents.month_changed(state) == "2026-10"
+    embeds, files = agents.monthly_report(config, state, "2026-10")
+    text = embeds[0]["description"]
+    assert text.index("🎲") < text.index("🐢") and "bateu o S&P 500" in text
+    assert "melhor **AAA** +30 €" in text and "mes.png" in files

@@ -19,6 +19,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import macro
 from charts import sector_chart
 from discord_post import BLUE, ZONE_COLORS, embed, send
 
@@ -81,7 +82,7 @@ SECTORS_PT = {
 VCP_GOOD_RATINGS = ("Textbook VCP", "Strong VCP", "Good VCP")
 VCP_MAX_SHOWN = 5
 # FMP free tier: 250 calls/day and no batch quotes, so one history call per stock.
-VCP_FREE_TIER_ARGS = ("--history-quotes", "--max-universe", "240", "--api-budget", "248")
+VCP_FREE_TIER_ARGS = ("--history-quotes", "--max-universe", "240", "--api-budget", "246")
 
 
 def run_skill(script: str, out_dir: Path, *args: str) -> dict | None:
@@ -145,7 +146,9 @@ def vcp_lines(vcp: dict, zone: str) -> list[str]:
     return lines
 
 
-def build_post(uptrend: dict, breadth: dict | None, vcp: dict | None = None, title: str = "📊 Dicas do dia") -> tuple[list[dict], dict]:
+def build_post(
+    uptrend: dict, breadth: dict | None, vcp: dict | None = None, title: str = "📊 Dicas do dia", macro_line: str | None = None
+) -> tuple[list[dict], dict]:
     """The tips as one embed coloured by market zone, with the sector chart attached."""
     comp = uptrend["composite"]
     mb = uptrend["components"]["market_breadth"]
@@ -176,6 +179,9 @@ def build_post(uptrend: dict, breadth: dict | None, vcp: dict | None = None, tit
     warnings = [WARNINGS_PT[w["flag"]] for w in comp.get("active_warnings", []) if w["flag"] in WARNINGS_PT]
     if warnings:
         lines += ["", "⚠️ **Avisos:**"] + [f"• {w}" for w in warnings]
+
+    if macro_line:
+        lines += ["", macro_line]
 
     action = ACTIONS_PT.get(comp["zone"])
     if action:
@@ -215,6 +221,9 @@ def main() -> int:
         BREADTH_SUMMARY_URL,
     )
 
+    # Before the VCP screen, which spends almost all of the FMP free tier's daily calls.
+    macro_line = macro.today_tomorrow_line()
+
     vcp = None
     if os.environ.get("FMP_API_KEY"):
         vcp = run_skill(
@@ -230,7 +239,7 @@ def main() -> int:
         WATCHLIST_DIR.mkdir(parents=True, exist_ok=True)
         (WATCHLIST_DIR / "vcp-latest.json").write_text(json.dumps(vcp))
 
-    embeds, files = build_post(uptrend, breadth, vcp)
+    embeds, files = build_post(uptrend, breadth, vcp, macro_line=macro_line)
     return send(embeds, files, dry_run=args.dry_run)
 
 if __name__ == "__main__":
