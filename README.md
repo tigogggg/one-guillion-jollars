@@ -148,3 +148,16 @@ the next date, the agents skip new buys of stocks reporting within 5 days
 (except Kamikaze, `ignora_resultados`), and the weekly summary lists next
 week's reports of the stocks in the rankings, recent alerts and agents'
 holdings.
+
+## Pre-training (`scripts/pretrain.py`)
+
+A walk-forward backtest over the last 250 sessions with the live engine: on
+each day the agents see only data up to that close and their orders fill at
+the next open. Rolling-window features reproduce the live metrics exactly
+(`tests/test_pretrain.py`). Each strategy tries ~24 random parameter sets
+within `PARAM_BOUNDS`, scored by league points on the first ~68% of the
+period; the best set is adopted only if it scores at least as well as the
+original parameters on the remaining ~32% it never saw. Results go to
+`agents/pretrain.json` and Discord; run "Pré-treino dos agentes" by hand.
+Joalheiro is skipped (no historical fundamentals), the earnings rule is off and
+today's S&P 500 list is used (survivorship bias).
