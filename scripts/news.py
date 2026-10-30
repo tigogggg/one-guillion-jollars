@@ -232,7 +232,8 @@ def extract_json_array(text: str) -> list:
 
 def analyse_claude(items: list[dict]) -> list[dict] | None:
     """Ratings from Claude via the Claude Code CLI, or None if it is not available."""
-    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or not shutil.which("claude"):
+    token = re.sub(r"\s+", "", os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", ""))  # copies often carry line breaks
+    if not token or not shutil.which("claude"):
         return None
     payload = [{"id": i["id"], "acao": i["symbol"], "titulo": i["title"], "resumo": i["summary"]} for i in items]
     try:
@@ -240,6 +241,7 @@ def analyse_claude(items: list[dict]) -> list[dict] | None:
             ["claude", "-p", "--output-format", "json", "--model", CLAUDE_MODEL, "--max-turns", "1"],
             input=PROMPT + json.dumps(payload, ensure_ascii=False),
             capture_output=True, text=True, timeout=600,
+            env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token},
         )
         out = json.loads(proc.stdout or "{}")
         if proc.returncode != 0 or out.get("is_error"):
@@ -363,7 +365,7 @@ def main() -> int:
     SIGNALS_PATH.write_text(json.dumps(merge_signals(previous, rated, now), indent=1, ensure_ascii=False))
     SEEN_PATH.write_text(json.dumps((seen_list + [i for i in by_id if i not in seen])[-SEEN_KEPT:]))
 
-    log(f"{len(rated)} títulos analisados ({source})")
+    log(f"{len(rated)} títulos analisados ({source}), {sum(i['importancia'] >= 2 and i['sentimento'] != 0 for i in rated)} importantes")
     cards = digest(rated, source, now)
     if not cards:
         log(f"{len(rated)} títulos analisados ({source}), nenhum importante")
