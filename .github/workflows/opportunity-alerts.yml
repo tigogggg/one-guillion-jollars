@@ -1,9 +1,8 @@
 name: Alertas de oportunidade (Discord)
 
+# Started by the Cloudflare Worker at the times set with /horario (default
+# 15:40, 17:40 and 19:40 Lisbon on weekdays, during the US session), or by hand.
 on:
-  schedule:
-    # Durante a sessão dos EUA (aberta 13:30/14:30-20:00/21:00 UTC conforme a hora de verão).
-    - cron: "37 15,17,19 * * 1-5"
   workflow_dispatch:
 
 concurrency: opportunity-alerts

@@ -1,10 +1,8 @@
 name: Dicas do dia (Discord)
 
+# Started by the Cloudflare Worker at the time set with /horario (default
+# 11:40 Lisbon on weekdays), or by hand.
 on:
-  schedule:
-    # Seg-Sex às 11:37 UTC (manhã em Lisboa, antes da abertura dos EUA),
-    # com os dados do fecho anterior.
-    - cron: "37 11 * * 1-5"
   workflow_dispatch:
     inputs:
       so_rankings:

@@ -4,11 +4,9 @@ run-name: "Agentes: ${{ inputs.mode || 'daily' }} ${{ inputs.args }}"
 # Daily: simulated agents trade on the latest data and the league is posted.
 # Config: /agentes and /agente from the Discord bot (Cloudflare Worker).
 # The agents' state (agents/) is committed back to the repository.
+# Daily runs are started by the Cloudflare Worker at the time set with
+# /horario (default 12:15 Lisbon on weekdays).
 on:
-  schedule:
-    # Seg-Sex 12:15 UTC, depois das dicas e dos rankings. Passa para o Worker
-    # (/horario) quando o agendador da Cloudflare estiver ativo.
-    - cron: "15 12 * * 1-5"
   workflow_dispatch:
     inputs:
       mode:
