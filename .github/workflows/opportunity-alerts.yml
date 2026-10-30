@@ -38,6 +38,9 @@ jobs:
       - name: Verificar rompimentos
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: uv run python scripts/opportunity_alerts.py
       - name: Guardar os alertas enviados
         if: ${{ !cancelled() && hashFiles('state/alerts/*.json') != '' }}

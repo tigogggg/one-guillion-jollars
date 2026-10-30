@@ -19,10 +19,11 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+import discord_bot
 import earnings
 from charts import price_chart
 from discord_daily import REPO, WATCHLIST_DIR
-from discord_post import DISCLAIMER, GREEN, embed, send
+from discord_post import DISCLAIMER, GREEN, embed, post_message
 from rankings import SECTORS_PT, download_history
 
 ALERTS_DIR = REPO / "state" / "alerts"
@@ -35,6 +36,7 @@ MIN_VOLUME_RATIO = 1.5
 MAX_RISK = 0.10
 PIVOT_LOOKBACK = 20
 EARNINGS_WARN_DAYS = 5
+PERSONAL_MOVE = 0.05  # /seguir: also DM on a daily move of 5% or more
 ORANGE = 0xF0B232
 STOP_LOOKBACK = 10
 
@@ -130,22 +132,72 @@ def alert_card(symbol: str, info: dict, a: dict, df: pd.DataFrame, holders: list
     return card, filename, chart
 
 
+def personal_card(symbol: str, df: pd.DataFrame, breakout: dict | None, move: float) -> tuple[dict, str, bytes]:
+    price = float(df["Close"].iloc[-1])
+    lines = [f"**${price:.2f}** · {move * 100:+.1f}% hoje"]
+    if breakout:
+        lines.append(f"Rompeu o pivot ${breakout['pivot']:.2f} com volume {breakout['volume_ratio']:.1f}× a média"
+                     f" · stop sugerido ${breakout['stop']:.2f} (risco {breakout['risk'] * 100:.1f}%)")
+    report = earnings.next_earnings(symbol)
+    if earnings.within(report, EARNINGS_WARN_DAYS):
+        lines.append(f"⚠️ {earnings.warning(report)}")
+    lines.append("_Da tua lista `/seguir`. Para deixar de receber: `/seguir remover`._")
+    what = "rompimento com volume" if breakout else ("subida forte" if move > 0 else "queda forte")
+    filename = f"seguir-{symbol.lower()}.png"
+    chart = price_chart(df, f"{symbol}: {what}", pivot=breakout["pivot"] if breakout else None,
+                        stop=breakout["stop"] if breakout else None)
+    card = embed(f"🔔 {symbol}: {what}", "\n".join(lines), color=GREEN if move >= 0 else ORANGE, image=filename)
+    return card, filename, chart
+
+
+def personal_alerts(now: datetime, fraction: float, dry_run: bool) -> None:
+    """DM each /seguir user about their stocks breaking out or moving PERSONAL_MOVE or more today."""
+    follows = discord_bot.load_follows()
+    if not follows:
+        return
+    symbols = sorted({s for syms in follows.values() for s in syms})
+    histories = download_history(symbols, period="2y")
+    done_path = ALERTS_DIR / f"{now.date().isoformat()}-seguir.json"
+    done = json.loads(done_path.read_text()) if done_path.exists() else {}
+    for user, syms in follows.items():
+        cards, files = [], {}
+        for symbol in syms:
+            df = histories.get(symbol)
+            if df is None or len(df) < 60 or symbol in done.get(user, []) or df.index[-1].date() != now.date():
+                continue
+            move = float(df["Close"].iloc[-1] / df["Close"].iloc[-2] - 1)
+            breakout = check_breakout(df, {}, fraction)
+            if (breakout or abs(move) >= PERSONAL_MOVE) and len(cards) < 10:
+                card, filename, chart = personal_card(symbol, df, breakout, move)
+                cards.append(card)
+                files[filename] = chart
+        if cards and discord_bot.send_dm(user, cards, files, dry_run=dry_run):
+            done.setdefault(user, []).extend(c["title"].split()[1].rstrip(":") for c in cards)
+    print(f"/seguir: {len(follows)} listas verificadas", file=sys.stderr)
+    if not dry_run and done:
+        ALERTS_DIR.mkdir(parents=True, exist_ok=True)
+        done_path.write_text(json.dumps(done))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="Print the message instead of posting")
     args = parser.parse_args()
+
+    now = datetime.now(NEW_YORK)
+    fraction = session_fraction(now)
+    personal_alerts(now, fraction, args.dry_run)
 
     watch = load_watchlist()
     if not watch:
         print("Sem watchlist de hoje (a execução da manhã correu?); nada a verificar.", file=sys.stderr)
         return 0
 
-    now = datetime.now(NEW_YORK)
     histories = download_history(sorted(watch), period="2y")
     alerted_path = ALERTS_DIR / f"{now.date().isoformat()}.json"
     alerted = set(json.loads(alerted_path.read_text())) if alerted_path.exists() else set()
 
-    cards, files, sent, fraction = [], {}, [], session_fraction(now)
+    cards, files, sent = [], {}, []
     holders = agent_holders()
     for symbol, info in watch.items():
         df = histories.get(symbol)
@@ -166,14 +218,19 @@ def main() -> int:
     if not cards:
         return 0
 
-    status = send(cards, files, dry_run=args.dry_run)
-    if status == 0 and not args.dry_run:
+    message = post_message(cards, files, dry_run=args.dry_run)
+    if message is None:
+        return 1
+    if not args.dry_run:
+        discord_bot.add_votes(message)  # 👍/👎, counted in the weekly summary
+        for entry in sent:
+            entry.update(message_id=message.get("id"), channel_id=message.get("channel_id"))
         ALERTS_DIR.mkdir(parents=True, exist_ok=True)
         alerted_path.write_text(json.dumps(sorted(alerted)))
         history = json.loads(HISTORY_PATH.read_text()) if HISTORY_PATH.exists() else []
         HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
         HISTORY_PATH.write_text(json.dumps((history + sent)[-HISTORY_MAX:], indent=1))
-    return status
+    return 0
 
 
 if __name__ == "__main__":

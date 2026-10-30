@@ -134,6 +134,17 @@ COMMANDS = [
             },
         ],
     },
+    {
+        "name": "seguir",
+        "description": "A tua lista pessoal de ações: avisos por mensagem privada",
+        "options": [
+            {"type": SUB_COMMAND, "name": "adicionar", "description": "Seguir uma ação",
+             "options": [{"type": STRING, "name": "ticker", "description": "Ex.: NVDA", "required": True}]},
+            {"type": SUB_COMMAND, "name": "remover", "description": "Deixar de seguir uma ação",
+             "options": [{"type": STRING, "name": "ticker", "description": "Ex.: NVDA", "required": True}]},
+            {"type": SUB_COMMAND, "name": "lista", "description": "Ver a tua lista"},
+        ],
+    },
     {"name": "ajuda", "description": "Como usar este canal e o bot"},
 ]
 
@@ -178,6 +189,7 @@ def welcome_card() -> dict:
                 "`/etf VWCE` · tendência e gráfico de um ETF UCITS\n"
                 "`/mercado` · leitura do mercado agora\n"
                 "`/posicao capital entrada stop` · quantas ações comprar (ex.: 10000, 35.84, 34.14)\n"                "`/agentes` · liga dos agentes, ou `/agentes nome` para ver um agente\n"
+                "`/seguir adicionar NVDA` · lista pessoal com avisos por mensagem privada\n"
                 "`/ajuda` · resumo destes comandos (só tu vês)\n"
                 "`/acao`, `/etf` e `/mercado` demoram 1-2 minutos: o bot mostra \"a pensar…\" e depois responde.",
             ),

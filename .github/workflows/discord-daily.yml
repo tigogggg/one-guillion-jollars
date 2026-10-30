@@ -23,6 +23,7 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: uv run python scripts/discord_daily.py
       - name: Rankings de ações e ETFs
         if: ${{ !cancelled() }}

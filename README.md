@@ -172,3 +172,20 @@ worst trade, vs the Indexador). `scripts/macro.py` adds high-impact US events
 summary (next week), from FMP's economic calendar or, if unavailable, the
 Fed's 2026 meeting dates and the usual first-Friday jobs report. The VCP
 budget is 246 calls to leave room for it in the FMP free tier.
+
+## Daily thread, votes and personal lists (bot user)
+
+These need the app installed on the server with the `bot` scope (View
+Channels, Send Messages, Send Messages in Threads, Create Public Threads, Read
+Message History, Add Reactions, Embed Links, Attach Files) and use
+`DISCORD_BOT_TOKEN` (`scripts/discord_bot.py`); without it everything still
+posts, just without these extras.
+
+- Daily thread: the tips message opens a thread; rankings and the agents'
+  league post inside it (thread id shared via the watchlist cache). Alerts and
+  the weekly summary stay in the channel.
+- Votes: the bot adds 👍/👎 to each alert; the weekly summary counts people's
+  votes per alert.
+- `/seguir adicionar|remover|lista`: personal ticker lists (up to 20) kept in
+  the Worker's KV; each alerts run DMs users whose stocks break out or move 5%+
+  (once per stock per day), reading the lists through the Cloudflare API.
