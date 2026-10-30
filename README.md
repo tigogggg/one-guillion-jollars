@@ -189,3 +189,22 @@ posts, just without these extras.
 - `/seguir adicionar|remover|lista`: personal ticker lists (up to 20) kept in
   the Worker's KV; each alerts run DMs users whose stocks break out or move 5%+
   (once per stock per day), reading the lists through the Cloudflare API.
+
+## News (`scripts/news.py`) and the Jornalista and Deriva agents
+
+Three times per weekday (Worker job `noticias`, default 12:00, 16:00 and 20:30
+Lisbon) `news.yml` collects recent Yahoo Finance headlines for the rankings,
+the agents' holdings, the `/seguir` lists and the day's top S&P 500 movers,
+and asks Claude (Claude Code CLI, `--model haiku`, authenticated with the
+owner's subscription via the `CLAUDE_CODE_OAUTH_TOKEN` secret from
+`claude setup-token`) to rate each one: sentiment -2..2, importance 0..3,
+surprise and a Portuguese one-liner. If Claude fails, FinBERT
+(`ProsusAI/finbert`, CPU) rates the tone instead. Important items are posted
+to the day's thread; per-symbol scores (sentiment x importance, 36 h) go to
+`state/news/signals.json` in the Actions cache.
+
+- Jornalista buys stocks whose news score reaches `limiar` with importance
+  ≥ 2 and sells on negative news; it cannot be pre-trained (no news history).
+- Deriva (price only, pre-trained) buys stocks that gapped up ≥ 4% on 2x
+  volume in the last days and held above the gap day's low.
+- `/seguir` DMs include the stock's latest headline.

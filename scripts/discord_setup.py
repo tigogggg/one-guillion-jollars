@@ -30,6 +30,7 @@ STRATEGY_CHOICES = [
     ("sniper", "contração de volatilidade (VCP)"),
     ("campeao", "melhores ações dos setores mais fortes"),
     ("pescador", "compra quedas em ações em tendência"),
+    ("jornalista", "negoceia notícias analisadas pelo Claude"),
     ("deriva", "segue saltos com volume (resultados, notícias)"),
     ("kamikaze", "tudo nas maiores subidas a 3 meses"),
 ]
@@ -82,6 +83,12 @@ COMMANDS = [
                 "name": "alertas",
                 "description": "Horas da verificação de alertas (dias úteis)",
                 "options": [{"type": STRING, "name": "horas", "description": "Separadas por vírgulas, ex.: 15:40,17:40,19:40", "required": True}],
+            },
+            {
+                "type": SUB_COMMAND,
+                "name": "noticias",
+                "description": "Horas da análise de notícias (dias úteis)",
+                "options": [{"type": STRING, "name": "horas", "description": "Separadas por vírgulas, ex.: 12:00,16:00,20:30", "required": True}],
             },
             {
                 "type": SUB_COMMAND,
@@ -179,7 +186,8 @@ def welcome_card() -> dict:
                 "📅 O que aparece aqui (hora de Lisboa)",
                 "**Dias úteis, 11:40** · 📊 Dicas do dia: saúde do mercado (breadth), exposição sugerida, setores e setups VCP\n"
                 "**Dias úteis, 11:40** · 🏆 Top 3 ações por setor e 📦 top 10 ETFs UCITS, com valorização do dia, semana, 3 e 6 meses\n"
-                "**Dias úteis, 12:15** · 🤖 Liga dos agentes: 10 estratégias com dinheiro fictício e preços reais\n"
+                "**Dias úteis, 12:00 · 16:00 · 20:30** · 📰 Notícias que importam, lidas pelo Claude\n"
+                "**Dias úteis, 12:15** · 🤖 Liga dos agentes: 12 estratégias com dinheiro fictício e preços reais\n"
                 "**Dias úteis, 15:40 · 17:40 · 19:40** · 🚨 Alertas, só quando uma ação da lista rompe o pivot com volume\n"
                 "**Sábado, 10:00** · 🗓️ Resumo semanal: índices, setores, maiores subidas e quedas, e como correram os alertas\n"
                 "Os administradores podem mudar estas horas com `/horario`.",

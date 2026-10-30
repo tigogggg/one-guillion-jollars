@@ -145,3 +145,19 @@ def test_deriva_buys_held_gaps_with_stop_under_gap_day():
     orders = agents.s_deriva({}, port, mkt, {"n": 5, "salto_pct": 0.04, "max_dias": 20})
     assert [o["symbol"] for o in orders] == ["GAP"]
     assert orders[0]["stop"] == pytest.approx(104 * 0.99) and orders[0]["eur"] == pytest.approx(200)
+
+
+def test_jornalista_buys_good_news_and_sells_bad_news():
+    hist = {"GOOD": frame([100] * 3, [100] * 3, [100] * 3, [100] * 3)}
+    stock = {"price": 100.0, "sma50": 90.0, "sector": "Energy", "stage2": True, "trend_score": 80}
+    mkt = market(hist, DATES[2].date(), stocks={"GOOD": stock, "BAD": stock, "MEH": stock})
+    mkt.closes = {"GOOD": 100.0, "BAD": 100.0}
+    mkt.news = {"GOOD": {"score": 6, "importance": 3, "items": [{"resumo": "Contrato enorme"}]},
+                "MEH": {"score": 6, "importance": 1, "items": []},
+                "BAD": {"score": -5, "importance": 3, "items": []}}
+    port = new_portfolio(1000, DATES[0].date())
+    port["positions"]["BAD"] = {"qty": 1, "entry": 100, "entry_date": "2026-10-28", "cost_eur": 80, "stop": None,
+                                "tp": None, "checked": "2026-10-28"}
+    orders = agents.s_jornalista({}, port, mkt, {"n": 5, "limiar": 4, "stop_pct": 0.08, "max_dias": 10})
+    assert [(o["side"], o["symbol"]) for o in orders] == [("sell", "BAD"), ("buy", "GOOD")]
+    assert orders[1]["reason"] == "Contrato enorme" and orders[1]["stop"] == pytest.approx(92)

@@ -47,7 +47,10 @@ BACKTEST_DAYS = 250
 TRAIN_SHARE = 0.68
 VARIANTS = 24
 WARMUP = 220
-SKIP = {"joalheiro": "precisa dos fundamentais do passado, que o Yahoo não tem"}
+SKIP = {
+    "joalheiro": "precisa dos fundamentais do passado, que o Yahoo não tem",
+    "jornalista": "não há histórico gratuito de notícias; só se avalia ao vivo",
+}
 REPORT_PATH = agents.REPO_AGENTS / "pretrain.json"
 
 
