@@ -301,7 +301,7 @@ def merge_signals(previous: dict, rated: list[dict], now: datetime) -> dict:
     return signals
 
 
-def digest(rated: list[dict], source: str, now: datetime) -> list[dict]:
+def digest(rated: list[dict], source: str, now: datetime, names: dict[str, str] | None = None) -> list[dict]:
     important = sorted((i for i in rated if i["importancia"] >= 2 and i["sentimento"] != 0),
                        key=lambda i: (i["importancia"], abs(i["sentimento"])), reverse=True)[:12]
     if not important:
@@ -311,7 +311,8 @@ def digest(rated: list[dict], source: str, now: datetime) -> list[dict]:
         icon = "🟢" if i["sentimento"] > 0 else "🔴"
         flag = " ⚡ surpresa" if i.get("surpresa") else ""
         link = f" · [{i['publisher'] or 'fonte'}]({i['url']})" if i.get("url") else ""
-        lines.append(f"{icon} **{i['symbol']}** {i['resumo']}{flag}{link}")
+        company = f" ({short_name(names[i['symbol']])})" if names and names.get(i["symbol"]) else ""
+        lines.append(f"{icon} **{i['symbol']}**{company} {i['resumo']}{flag}{link}")
     lisbon = now.astimezone(ZoneInfo("Europe/Lisbon"))
     return [embed(
         f"📰 Notícias que importam · {lisbon:%d/%m %H:%M}",
@@ -366,7 +367,7 @@ def main() -> int:
     SEEN_PATH.write_text(json.dumps((seen_list + [i for i in by_id if i not in seen])[-SEEN_KEPT:]))
 
     log(f"{len(rated)} títulos analisados ({source}), {sum(i['importancia'] >= 2 and i['sentimento'] != 0 for i in rated)} importantes")
-    cards = digest(rated, source, now)
+    cards = digest(rated, source, now, names)
     if not cards:
         log(f"{len(rated)} títulos analisados ({source}), nenhum importante")
         return 0

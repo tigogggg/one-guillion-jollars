@@ -58,8 +58,10 @@ def test_digest_keeps_only_important_moves():
     base = {"symbol": "AAA", "publisher": "R", "url": "u", "surpresa": False}
     cards = news.digest([{**base, "id": "1", "sentimento": 2, "importancia": 3, "resumo": "Grande contrato"},
                          {**base, "id": "2", "sentimento": 0, "importancia": 3, "resumo": "Neutra"},
-                         {**base, "id": "3", "sentimento": -1, "importancia": 1, "resumo": "Ruído"}], "Claude", NOW)
-    assert "Grande contrato" in cards[0]["description"] and "Neutra" not in cards[0]["description"]
+                         {**base, "id": "3", "sentimento": -1, "importancia": 1, "resumo": "Ruído"}], "Claude", NOW,
+                        {"AAA": "Alpha Widgets Inc."})
+    assert "**AAA** (Alpha Widgets) Grande contrato" in cards[0]["description"]
+    assert "Neutra" not in cards[0]["description"]
     assert "Ruído" not in cards[0]["description"]
 
 
