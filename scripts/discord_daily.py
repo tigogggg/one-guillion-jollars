@@ -108,6 +108,16 @@ def vcp_lines(vcp: dict, zone: str) -> list[str]:
     picks = [r for r in vcp["results"] if r.get("rating") in VCP_GOOD_RATINGS]
     picks.sort(key=lambda r: (not r.get("entry_ready"), -r["composite_score"]))
     lines = ["", f"🔍 **Setups VCP no S&P 500:** {len(picks)} com qualidade Good ou melhor"]
+    funnel = vcp.get("metadata", {}).get("funnel", {})
+    if funnel:
+        calls = vcp["metadata"].get("api_stats", {}).get("api_calls_made", "?")
+        lines.append(
+            f"-# {funnel.get('universe', 0)} ações → {funnel.get('pre_filter_passed', 0)} no pré-filtro"
+            f" → {funnel.get('trend_template_passed', 0)} em Stage 2"
+            f" → {funnel.get('vcp_candidates', 0)} padrões · {calls} chamadas FMP"
+        )
+        if funnel.get("universe") and not funnel.get("pre_filter_passed"):
+            lines.append("⚠️ Nenhuma ação passou o pré-filtro: provavelmente a FMP não devolveu dados.")
     if not picks:
         return lines + ["Nenhum setup de qualidade hoje."]
     for r in picks[:VCP_MAX_SHOWN]:
