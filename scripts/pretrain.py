@@ -299,7 +299,10 @@ def main() -> int:
     print(f"{len(markets)} dias de {markets[0].as_of} a {markets[-1].as_of}", file=sys.stderr)
     only = {s.strip() for s in args.estrategias.split(",") if s.strip()} or None
     results = pretrain(markets, only | {"indexador"} if only else None)
-    REPORT_PATH.write_text(json.dumps({k: v for k, v in results.items()}, indent=1, default=str) + "\n")
+    if only and REPORT_PATH.exists():  # a partial run updates its strategies and keeps the others
+        previous = json.loads(REPORT_PATH.read_text())
+        results = {**results, "strategies": {**previous.get("strategies", {}), **results["strategies"]}}
+    REPORT_PATH.write_text(json.dumps(results, indent=1, default=str) + "\n")
     applied = apply(results, markets[-1].as_of) if args.apply else None
     return send(*report(results, applied), dry_run=args.dry_run)
 
