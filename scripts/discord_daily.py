@@ -23,7 +23,7 @@ import discord_bot
 import earnings
 import macro
 from charts import sector_chart
-from discord_post import BLUE, ZONE_COLORS, embed, post_message
+from discord_post import BLUE, ZONE_COLORS, embed, post_message, route
 
 REPO = Path(__file__).resolve().parents[1]
 # Shared with the intraday alerts through the Actions cache.
@@ -242,10 +242,11 @@ def main() -> int:
         (WATCHLIST_DIR / "vcp-latest.json").write_text(json.dumps(vcp))
 
     embeds, files = build_post(uptrend, breadth, vcp, macro_line=macro_line)
-    message = post_message(embeds, files, dry_run=args.dry_run)
+    channel = route("mercado")
+    message = post_message(embeds, files, dry_run=args.dry_run, **channel)
     if message is None:
         return 1
-    if not args.dry_run:
+    if not args.dry_run and not channel:  # a day thread only while everything shares one channel
         today = date.today()
         discord_bot.start_daily_thread(message, f"📅 {earnings.label(today)} · análise do dia", today)
     return 0

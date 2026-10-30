@@ -61,6 +61,7 @@ jobs:
           APPLICATION_ID: ${{ inputs.application_id }}
           INTERACTION_TOKEN: ${{ inputs.token }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: uv run python scripts/agents.py "$MODE" "$ARGS"
       - name: Guardar o estado dos agentes
         if: ${{ !cancelled() }}

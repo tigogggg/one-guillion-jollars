@@ -24,7 +24,7 @@ import earnings
 import news
 from charts import price_chart
 from discord_daily import REPO, WATCHLIST_DIR
-from discord_post import DISCLAIMER, GREEN, embed, post_message
+from discord_post import DISCLAIMER, GREEN, embed, post_message, route
 from rankings import SECTORS_PT, download_history
 
 ALERTS_DIR = REPO / "state" / "alerts"
@@ -223,7 +223,7 @@ def main() -> int:
     if not cards:
         return 0
 
-    message = post_message(cards, files, dry_run=args.dry_run)
+    message = post_message(cards, files, dry_run=args.dry_run, **route("alertas"))
     if message is None:
         return 1
     if not args.dry_run:

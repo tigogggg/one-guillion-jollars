@@ -41,7 +41,7 @@ import discord_bot
 import earnings
 from charts import lines_chart, returns_chart
 from discord_daily import WATCHLIST_DIR
-from discord_post import BLUE, GREEN, RED, embed, send
+from discord_post import BLUE, GREEN, RED, embed, route, send
 from rankings import (
     SECTORS_PT,
     UCITS_ETFS,
@@ -948,7 +948,7 @@ def main() -> int:
         print(f"ERROR: {e!r}", file=sys.stderr)
         embeds, files = [embed("⚠️ Erro nos agentes", str(e)[:300], color=RED)], {}
     if a.mode == "daily" and not target:
-        target = {"thread_id": discord_bot.todays_thread()}
+        target = route("agentes") or {"thread_id": discord_bot.todays_thread()}
     status = send(embeds, files, dry_run=a.dry_run, **target)
     if follow_up[0]:
         status = status or send(*follow_up, dry_run=a.dry_run, **target)

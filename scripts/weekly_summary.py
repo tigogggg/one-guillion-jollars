@@ -25,7 +25,7 @@ import earnings
 import macro
 from charts import returns_chart
 from discord_daily import WATCHLIST_DIR
-from discord_post import BLUE, GREEN, RED, embed, send
+from discord_post import BLUE, GREEN, RED, embed, route, send
 from opportunity_alerts import HISTORY_PATH
 from rankings import SECTORS_PT, download_history, load_constituents
 
@@ -208,7 +208,7 @@ def main() -> int:
                 footer="Preço de fecho de hoje vs preço no momento do alerta. Resultados passados não garantem nada.",
             )
         )
-    return send(embeds, files, dry_run=args.dry_run)
+    return send(embeds, files, dry_run=args.dry_run, **route("mercado"))
 
 
 if __name__ == "__main__":

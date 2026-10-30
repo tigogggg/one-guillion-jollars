@@ -208,3 +208,14 @@ to the day's thread; per-symbol scores (sentiment x importance, 36 h) go to
 - Deriva (price only, pre-trained) buys stocks that gapped up ≥ 4% on 2x
   volume in the last days and held above the gap day's low.
 - `/seguir` DMs include the stock's latest headline.
+
+## Channels (`discord_setup.py --canais`)
+
+Run "Configurar o bot do Discord" with `criar_canais` to create the
+📈 FINANÇAS category with read-only channels (members can react and comment in
+threads) — 📊-mercado (tips, rankings, weekly summary), 🚨-alertas-e-notícias
+(alerts, news) and 🤖-agentes (league, monthly report, pre-training) — and to
+move the webhook's channel into it for conversation and commands. The ids go to
+`discord/channels.json`; `discord_post.route()` then posts each kind with the
+bot user into its channel (needs Manage Channels and Manage Roles to create
+them). Without that file everything posts to the webhook channel as before.

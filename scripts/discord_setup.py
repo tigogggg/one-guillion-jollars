@@ -2,6 +2,9 @@
 
     --register  PUT the commands below (needs DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN)
     --welcome   post the welcome card to DISCORD_WEBHOOK_URL, to pin in the channel
+    --canais    create the 📈 FINANÇAS category with read-only channels for the bot's
+                posts (needs the bot with Manage Channels and Manage Roles) and
+                write their ids to discord/channels.json
 
 Run from the "Configurar o bot do Discord" workflow. Keep the command list in
 step with discord-bot/worker.js.
@@ -10,12 +13,13 @@ step with discord-bot/worker.js.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
 import requests
 
-from discord_post import BLUE, embed, send
+from discord_post import BLUE, CHANNELS_PATH, embed, send
 
 SUB_COMMAND, STRING, NUMBER = 1, 3, 10
 MANAGE_SERVER = "32"  # permission bit: only server admins see /horario
@@ -176,6 +180,70 @@ def register() -> int:
     return 0
 
 
+# Channels of the 📈 FINANÇAS category: (key used by discord_post.route, name, topic).
+CATEGORY = "📈 FINANÇAS"
+CHANNELS = [
+    ("mercado", "📊-mercado", "Dicas do dia, rankings de ações e ETFs e resumo semanal. Só o bot publica; comenta em tópicos ou no #billions."),
+    ("alertas", "🚨-alertas-e-notícias", "Rompimentos com volume (vota 👍/👎) e notícias que importam. Só o bot publica."),
+    ("agentes", "🤖-agentes", "Liga dos agentes simulados: resultados diários, relatório mensal e pré-treino. Só o bot publica."),
+]
+VIEW, SEND, EMBED, ATTACH, REACT, HISTORY = 1 << 10, 1 << 11, 1 << 14, 1 << 15, 1 << 6, 1 << 16
+PUBLIC_THREADS, SEND_IN_THREADS, PIN = 1 << 35, 1 << 38, 1 << 51
+BOT_ALLOW = VIEW | SEND | EMBED | ATTACH | REACT | HISTORY | PUBLIC_THREADS | SEND_IN_THREADS
+MEMBERS_ALLOW = REACT | PUBLIC_THREADS | SEND_IN_THREADS
+
+
+def discord_api(method: str, path: str, **kwargs) -> dict | list:
+    resp = requests.request(method, f"https://discord.com/api/v10{path}", timeout=30,
+                            headers={"Authorization": f"Bot {os.environ['DISCORD_BOT_TOKEN']}"}, **kwargs)
+    if resp.status_code >= 300:
+        raise RuntimeError(f"{method} {path}: {resp.status_code} {resp.text[:300]}")
+    return resp.json() if resp.content else {}
+
+
+def create_channels() -> int:
+    """Create (or reuse) the 📈 FINANÇAS category and its read-only channels; move the webhook's channel in."""
+    if not os.environ.get("DISCORD_BOT_TOKEN") or not os.environ.get("DISCORD_WEBHOOK_URL"):
+        print("Faltam DISCORD_BOT_TOKEN e/ou DISCORD_WEBHOOK_URL.", file=sys.stderr)
+        return 1
+    hook = requests.get(os.environ["DISCORD_WEBHOOK_URL"], timeout=30).json()
+    guild, chat = hook["guild_id"], hook["channel_id"]
+    bot = discord_api("GET", "/users/@me")["id"]
+    existing = {(c["type"], c["name"]): c for c in discord_api("GET", f"/guilds/{guild}/channels")}
+
+    category = existing.get((4, CATEGORY)) or discord_api("POST", f"/guilds/{guild}/channels", json={"name": CATEGORY, "type": 4})
+    overwrites = [
+        {"id": guild, "type": 0, "deny": str(SEND), "allow": str(MEMBERS_ALLOW)},  # @everyone: read, react, threads
+        {"id": bot, "type": 1, "allow": str(BOT_ALLOW | PIN), "deny": "0"},
+    ]
+    ids = {}
+    for key, name, topic in CHANNELS:
+        channel = existing.get((0, name))
+        if channel is None:
+            channel = discord_api("POST", f"/guilds/{guild}/channels", json={
+                "name": name, "type": 0, "parent_id": category["id"], "topic": topic, "permission_overwrites": overwrites})
+            print(f"Criado #{name}")
+        else:
+            discord_api("PATCH", f"/channels/{channel['id']}", json={
+                "parent_id": category["id"], "topic": topic, "permission_overwrites": overwrites})
+            print(f"Atualizado #{name}")
+        ids[key] = channel["id"]
+    discord_api("PATCH", f"/channels/{chat}", json={"parent_id": category["id"], "lock_permissions": False})
+    print("Canal de conversa movido para a categoria")
+
+    CHANNELS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CHANNELS_PATH.write_text(json.dumps({"guild_id": guild, "category_id": category["id"],
+                                         "channels": {**ids, "discussao": chat}}, indent=2) + "\n")
+    for key, name, topic in CHANNELS:
+        message = discord_api("POST", f"/channels/{ids[key]}/messages",
+                              json={"embeds": [embed(f"Bem-vindo a #{name}", topic, color=BLUE, footer="")]})
+        try:
+            discord_api("PUT", f"/channels/{ids[key]}/messages/pins/{message['id']}")
+        except RuntimeError as e:
+            print(f"Não consegui fixar a mensagem em #{name}: {e}", file=sys.stderr)
+    return 0
+
+
 def welcome_card() -> dict:
     return embed(
         "👋 Bem-vindo! Este canal recebe análise de mercado automática",
@@ -218,10 +286,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--register", action="store_true", help="Register the slash commands")
     parser.add_argument("--welcome", action="store_true", help="Post the welcome card")
+    parser.add_argument("--canais", action="store_true", help="Create the 📈 FINANÇAS category and channels")
     parser.add_argument("--dry-run", action="store_true", help="Print the welcome card instead of posting it")
     args = parser.parse_args()
 
     status = register() if args.register else 0
+    if args.canais:
+        status = status or create_channels()
     if args.welcome:
         status = status or send([welcome_card()], dry_run=args.dry_run)
     return status
