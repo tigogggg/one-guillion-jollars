@@ -235,6 +235,9 @@ def analyse_claude(items: list[dict]) -> list[dict] | None:
     token = re.sub(r"\s+", "", os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", ""))  # copies often carry line breaks
     if not token or not shutil.which("claude"):
         return None
+    # Shape only (never the value): a subscription token from `claude setup-token` starts with sk-ant-oat.
+    shape = "formato certo (sk-ant-oat…)" if token.startswith("sk-ant-oat") else f"formato inesperado (começa por {token[:3]!r}…)"
+    log(f"Token do Claude: {shape}, {len(token)} caracteres")
     payload = [{"id": i["id"], "acao": i["symbol"], "titulo": i["title"], "resumo": i["summary"]} for i in items]
     try:
         proc = subprocess.run(
