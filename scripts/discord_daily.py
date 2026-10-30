@@ -75,6 +75,10 @@ SECTORS_PT = {
 }
 
 
+VCP_GOOD_RATINGS = ("Textbook VCP", "Strong VCP", "Good VCP")
+VCP_MAX_SHOWN = 5
+
+
 def run_skill(script: str, out_dir: Path, *args: str) -> dict | None:
     """Run a skill script and return its newest JSON report, or None on failure."""
     before = set(out_dir.glob("*.json"))
@@ -100,7 +104,30 @@ def sector(name: str) -> str:
     return SECTORS_PT.get(name, name)
 
 
-def build_message(uptrend: dict, breadth: dict | None) -> str:
+def vcp_lines(vcp: dict, zone: str) -> list[str]:
+    picks = [r for r in vcp["results"] if r.get("rating") in VCP_GOOD_RATINGS]
+    picks.sort(key=lambda r: (not r.get("entry_ready"), -r["composite_score"]))
+    lines = ["", f"🔍 **Setups VCP no S&P 500:** {len(picks)} com qualidade Good ou melhor"]
+    if not picks:
+        return lines + ["Nenhum setup de qualidade hoje."]
+    for r in picks[:VCP_MAX_SHOWN]:
+        piv = r.get("pivot_proximity", {})
+        parts = [f"• **{r['symbol']}** ${r['price']:.2f}", f"{r['rating']} ({r['composite_score']:.0f})"]
+        if piv.get("pivot_price"):
+            parts.append(f"pivot ${piv['pivot_price']:.2f}")
+        if piv.get("stop_loss_price"):
+            parts.append(f"stop ${piv['stop_loss_price']:.2f} (risco {piv.get('risk_pct', 0):.1f}%)")
+        if r.get("entry_ready"):
+            parts.append("✅ perto da entrada")
+        lines.append(" · ".join(parts))
+    if zone in ("Cautious", "Bear"):
+        lines.append("_Mercado fraco: lista só para observar, não para entrar._")
+    else:
+        lines.append("_Lista de observação, não são recomendações de compra._")
+    return lines
+
+
+def build_message(uptrend: dict, breadth: dict | None, vcp: dict | None = None) -> str:
     comp = uptrend["composite"]
     mb = uptrend["components"]["market_breadth"]
     sp = uptrend["components"]["sector_participation"]
@@ -137,6 +164,9 @@ def build_message(uptrend: dict, breadth: dict | None) -> str:
     if action:
         lines += ["", f"🎯 **O que fazer:** {action}"]
 
+    if vcp:
+        lines += vcp_lines(vcp, comp["zone"])
+
     lines += ["", "_Ferramenta de análise educativa, não é aconselhamento financeiro._"]
     message = "\n".join(lines)
     return message[: DISCORD_LIMIT - 1] + "…" if len(message) > DISCORD_LIMIT else message
@@ -163,7 +193,13 @@ def main() -> int:
         BREADTH_SUMMARY_URL,
     )
 
-    message = build_message(uptrend, breadth)
+    vcp = None
+    if os.environ.get("FMP_API_KEY"):
+        vcp = run_skill("skills/vcp-screener/scripts/screen_vcp.py", out_dir)
+    else:
+        print("[aviso] FMP_API_KEY não definido; secção VCP omitida.", file=sys.stderr)
+
+    message = build_message(uptrend, breadth, vcp)
     webhook = os.environ.get("DISCORD_WEBHOOK_URL")
     if args.dry_run:
         print(message)

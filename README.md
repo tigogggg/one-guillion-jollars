@@ -1,7 +1,7 @@
 # Claude Skills
 
 Claude Code skills for a structured trading process. The five skills in the
-"No API Key Starter Path" were copied from
+"No API Key Starter Path" plus `vcp-screener` were copied from
 [tradermonty/claude-trading-skills](https://github.com/tradermonty/claude-trading-skills)
 (commit `c9b8419`, MIT, see `LICENSE-claude-trading-skills`) without changes.
 
@@ -12,6 +12,14 @@ Claude Code skills for a structured trading process. The five skills in the
 | `position-sizer` | Risk-based position sizing (fixed %, ATR, Kelly) | None |
 | `trader-memory-core` | Thesis journal from idea to closed trade (local YAML) | Optional FMP API |
 | `signal-postmortem` | Post-trade outcome review | Optional FMP API |
+| `vcp-screener` | S&P 500 screen for Minervini VCP setups (pivot, stop, risk) | FMP API (~200 calls per run; free tier is 250/day) |
+
+## Daily Discord post
+
+`scripts/discord_daily.py` runs the breadth skills (and `vcp-screener` when
+`FMP_API_KEY` is set) and posts a Portuguese summary to `DISCORD_WEBHOOK_URL`.
+`.github/workflows/discord-daily.yml` runs it on weekdays at 11:37 UTC; both
+values are GitHub Actions secrets. Preview with `--dry-run`.
 
 ## Layout
 
