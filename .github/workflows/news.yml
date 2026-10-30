@@ -1,0 +1,58 @@
+name: Notícias (Discord)
+
+# Started by the Cloudflare Worker at the times set with /horario (default
+# 12:00, 16:00 and 20:30 Lisbon on weekdays), or by hand. Claude reads the
+# headlines with the owner's subscription; FinBERT is the fallback.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: news
+  cancel-in-progress: false
+
+jobs:
+  news:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Instalar o Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Carregar a watchlist e o fio do dia
+        uses: actions/cache/restore@v4
+        with:
+          path: state/watchlist
+          key: watchlist-latest
+          restore-keys: watchlist-
+      - name: Carregar as notícias já analisadas
+        uses: actions/cache/restore@v4
+        with:
+          path: state/news
+          key: news-latest
+          restore-keys: news-
+      - name: Analisar com o Claude
+        id: claude
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: uv run python scripts/news.py
+      - name: Reserva FinBERT (se o Claude falhar)
+        if: ${{ steps.claude.outcome == 'failure' }}
+        run: |
+          uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install "transformers>=4.44,<5"
+          uv run --no-sync python scripts/news.py --finbert
+      - name: Guardar as notícias analisadas
+        if: ${{ !cancelled() && hashFiles('state/news/*.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: state/news
+          key: news-${{ github.run_id }}

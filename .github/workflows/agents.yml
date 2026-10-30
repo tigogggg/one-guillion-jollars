@@ -48,6 +48,12 @@ jobs:
           path: state/watchlist
           key: watchlist-latest
           restore-keys: watchlist-
+      - name: Carregar os sinais das notícias (Jornalista)
+        uses: actions/cache/restore@v4
+        with:
+          path: state/news
+          key: news-latest
+          restore-keys: news-
       - name: Correr os agentes
         env:
           MODE: ${{ inputs.mode || 'daily' }}

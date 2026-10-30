@@ -82,6 +82,7 @@ PARAM_BOUNDS = {
     "max_dias": (5, 30, int),
     "folga": (0.05, 0.25, float),
     "salto_pct": (0.03, 0.12, float),
+    "limiar": (2, 9, int),
 }
 
 
@@ -99,6 +100,7 @@ class Market:
     vcp: set[str] = field(default_factory=set)
     earnings: dict[str, date | None] = field(default_factory=dict)  # looked up once per run
     closes: dict[str, float] | None = None  # as_of closes, precomputed by the backtest for speed
+    news: dict[str, dict] = field(default_factory=dict)  # news.py signals: {symbol: {score, importance, items}}
 
 
 # --------------------------------------------------------------------------
@@ -188,6 +190,9 @@ def load_market() -> Market:
     if rankings.exists():
         data = json.loads(rankings.read_text())
         market.rankings = [r for rows in data["stocks"].values() for r in rows]
+    signals = WATCHLIST_DIR.parent / "news" / "signals.json"
+    if signals.exists():
+        market.news = json.loads(signals.read_text())
     vcp = WATCHLIST_DIR / "vcp-latest.json"
     if vcp.exists():
         market.vcp = {
@@ -608,6 +613,25 @@ def s_deriva(cfg, port, mkt, p):
     return orders
 
 
+def s_jornalista(cfg, port, mkt, p):
+    """Trade the news: buy strong positive, important news; sell on negative news or after max_dias."""
+    orders = [order_sell(s, "notícias negativas") for s in port["positions"]
+              if mkt.news.get(s, {}).get("score", 0) <= -p["limiar"] / 2]
+    orders += [order_sell(s, f"{p['max_dias']} sessões") for s, pos in port["positions"].items()
+               if sessions_since(mkt, pos["entry_date"]) >= p["max_dias"] and s not in {o["symbol"] for o in orders}]
+    if mkt.zone == "Queda":
+        return orders
+    picks = [s for s, sig in mkt.news.items()
+             if sig.get("score", 0) >= p["limiar"] and sig.get("importance", 0) >= 2
+             and s in mkt.stocks and s not in port["positions"]]
+    eq = equity(port, mkt)
+    for s in sorted(picks, key=lambda s: mkt.news[s]["score"], reverse=True)[: max(free_slots(port, p["n"]), 0)]:
+        price = mkt.stocks[s]["price"]
+        headline = mkt.news[s]["items"][0]["resumo"] if mkt.news[s].get("items") else "notícias positivas"
+        orders.append(order_buy(s, eq / p["n"], headline[:80], stop=round(price * (1 - p["stop_pct"]), 4)))
+    return orders
+
+
 STRATEGIES = {
     "indexador": (s_indexador, "Compra e mantém o S&P 500 (referência)", {}),
     "guardiao": (s_guardiao, "ETF mundial com peso pela zona do mercado", {"max_exposicao": 1.0, "folga": 0.1}),
@@ -618,6 +642,7 @@ STRATEGIES = {
     "sniper": (s_sniper, "Contração de volatilidade (VCP)", {"n": 4, "risco_pct": 0.01, "aperto_pct": 0.06, "max_pos": 0.30}),
     "campeao": (s_campeao, "Melhores ações dos setores mais fortes", {"setores": 2, "por_setor": 2, "stop_pct": 0.12, "cada": 5}),
     "pescador": (s_pescador, "Compra quedas em ações em tendência", {"n": 5, "queda_pct": 0.05, "alvo_pct": 0.06, "stop_pct": 0.07, "max_dias": 10}),
+    "jornalista": (s_jornalista, "Negoceia notícias analisadas pelo Claude", {"n": 5, "limiar": 4, "stop_pct": 0.08, "max_dias": 10}),
     "deriva": (s_deriva, "Segue saltos com volume (deriva pós-notícia/resultados)", {"n": 5, "salto_pct": 0.04, "max_dias": 20}),
     "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5, "ignora_resultados": True}),
 }

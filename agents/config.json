@@ -131,6 +131,20 @@
       "description": "Momentum de eventos: compra ações que abriram com salto de 4%+ e volume forte (resultados, notícias) e aguentaram o salto; até 20 sessões, stop abaixo do mínimo do dia do salto."
     },
     {
+      "id": "jornalista",
+      "name": "Jornalista",
+      "emoji": "🗞️",
+      "strategy": "jornalista",
+      "capital": 1000,
+      "params": {
+        "n": 5,
+        "limiar": 4,
+        "stop_pct": 0.08,
+        "max_dias": 10
+      },
+      "description": "Notícias: compra ações com notícias importantes e claramente positivas (lidas pelo Claude) e vende com notícias negativas; stop 8%, até 10 sessões."
+    },
+    {
       "id": "kamikaze",
       "name": "Kamikaze",
       "emoji": "🎲",

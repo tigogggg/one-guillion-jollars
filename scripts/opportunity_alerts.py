@@ -21,6 +21,7 @@ import pandas as pd
 
 import discord_bot
 import earnings
+import news
 from charts import price_chart
 from discord_daily import REPO, WATCHLIST_DIR
 from discord_post import DISCLAIMER, GREEN, embed, post_message
@@ -141,6 +142,10 @@ def personal_card(symbol: str, df: pd.DataFrame, breakout: dict | None, move: fl
     report = earnings.next_earnings(symbol)
     if earnings.within(report, EARNINGS_WARN_DAYS):
         lines.append(f"⚠️ {earnings.warning(report)}")
+    latest = news.headlines(symbol, count=3)
+    if latest:
+        h = latest[0]
+        lines.append(f"📰 [{h['title'][:150]}]({h['url']})" if h.get("url") else f"📰 {h['title'][:150]}")
     lines.append("_Da tua lista `/seguir`. Para deixar de receber: `/seguir remover`._")
     what = "rompimento com volume" if breakout else ("subida forte" if move > 0 else "queda forte")
     filename = f"seguir-{symbol.lower()}.png"

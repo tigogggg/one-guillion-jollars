@@ -29,6 +29,7 @@ const DEFAULT_SCHEDULE = {
   dicas: "11:40",
   agentes: "12:15",
   alertas: ["15:40", "17:40", "19:40"],
+  noticias: ["12:00", "16:00", "20:30"],
   semanal: { dia: "sab", hora: "10:00" },
 };
 const DAYS = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
@@ -37,6 +38,7 @@ const WORKFLOWS = {
   dicas: "discord-daily.yml",
   agentes: "agents.yml",
   alertas: "opportunity-alerts.yml",
+  noticias: "news.yml",
   semanal: "weekly-summary.yml",
 };
 const LATE_LIMIT_MIN = 20; // still start a job this many minutes after its time (missed cron ticks)
@@ -49,7 +51,8 @@ const HELP = [
   "**O que aparece aqui** (hora de Lisboa; `/horario ver` mostra os horários atuais):",
   "• Dias úteis de manhã · 📊 Dicas do dia, 🏆 top 3 ações por setor e 📦 top 10 ETFs UCITS",
   "• Durante a sessão dos EUA · 🚨 alertas, só quando uma ação da lista rompe com volume",
-  "• Dias úteis · 🤖 liga dos agentes: 10 estratégias com dinheiro fictício e preços reais",
+  "• Dias úteis · 🤖 liga dos agentes: 12 estratégias com dinheiro fictício e preços reais",
+  "• Dias úteis, 3 vezes · 📰 notícias que importam, lidas pelo Claude",
   "• Ao fim de semana · 🗓️ resumo semanal com o desempenho dos alertas",
   "",
   "**Comandos** (escreve `/` na caixa de mensagem):",
@@ -128,6 +131,7 @@ export default {
       jobs.push(["dicas", schedule.dicas]);
       jobs.push(["agentes", schedule.agentes]);
       for (const t of schedule.alertas) jobs.push(["alertas", t]);
+      for (const t of schedule.noticias) jobs.push(["noticias", t]);
     }
     if (now.day === schedule.semanal.dia) jobs.push(["semanal", schedule.semanal.hora]);
 
@@ -185,12 +189,12 @@ async function scheduleCommand(env, sub) {
   if (action === "dicas" || action === "agentes") {
     if (!isTime(args.hora)) return badTime(args.hora);
     schedule[action] = normaliseTime(args.hora);
-  } else if (action === "alertas") {
+  } else if (action === "alertas" || action === "noticias") {
     const times = (args.horas || "").split(/[,\s]+/).filter(Boolean);
     if (!times.length || times.length > MAX_ALERT_TIMES || !times.every(isTime)) {
       return `⚠️ Indica entre 1 e ${MAX_ALERT_TIMES} horas separadas por vírgulas, ex.: \`15:30,17:30,20:00\`.`;
     }
-    schedule.alertas = [...new Set(times.map(normaliseTime))].sort();
+    schedule[action] = [...new Set(times.map(normaliseTime))].sort();
   } else if (action === "semanal") {
     if (!DAYS.includes(args.dia)) return "⚠️ Dia inválido.";
     if (!isTime(args.hora)) return badTime(args.hora);
@@ -205,6 +209,7 @@ async function scheduleCommand(env, sub) {
     `📊 Dicas do dia e rankings: **${schedule.dicas}** (dias úteis)`,
     `🤖 Liga dos agentes: **${schedule.agentes}** (dias úteis, depois das dicas)`,
     `🚨 Verificação de alertas: **${schedule.alertas.join(" · ")}** (dias úteis; a sessão dos EUA é das 14:30 às 21:00)`,
+    `📰 Notícias: **${schedule.noticias.join(" · ")}** (dias úteis)`,
     `🗓️ Resumo semanal: **${DAY_NAMES[schedule.semanal.dia]} às ${schedule.semanal.hora}**`,
     "-# As análises arrancam até 5 minutos depois da hora marcada e demoram alguns minutos a chegar.",
   ].join("\n");
