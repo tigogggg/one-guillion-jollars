@@ -11,6 +11,7 @@ import discord_bot  # noqa: E402
 class Resp:
     def __init__(self, data, status=200):
         self._data, self.status_code, self.text = data, status, json.dumps(data)
+        self.content = self.text.encode()
 
     def json(self):
         return self._data
@@ -54,3 +55,48 @@ def test_load_follows_reads_kv(monkeypatch):
         return Resp(["NVDA", "KDP"])
     monkeypatch.setattr(discord_bot.requests, "get", fake_get)
     assert discord_bot.load_follows() == {"42": ["NVDA", "KDP"]}
+
+
+def test_create_channels_is_idempotent_and_read_only(monkeypatch, tmp_path):
+    import discord_post
+    import discord_setup
+
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "t")
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/1/x")
+    monkeypatch.setattr(discord_setup, "CHANNELS_PATH", tmp_path / "channels.json")
+    guild_channels = [{"id": "500", "type": 0, "name": "billions"}]
+    calls = []
+
+    def fake_request(method, url, **kw):
+        path = url.split("/api/v10")[1]
+        calls.append((method, path, kw.get("json")))
+        if method == "GET" and path == "/users/@me":
+            return Resp({"id": "BOT"})
+        if method == "GET" and path.endswith("/channels"):
+            return Resp(guild_channels)
+        if method == "POST" and path == "/guilds/G/channels":
+            new = {"id": str(600 + len(guild_channels)), "type": kw["json"]["type"], "name": kw["json"]["name"]}
+            guild_channels.append(new)
+            return Resp(new)
+        return Resp({"id": "M"})
+    monkeypatch.setattr(discord_setup.requests, "request", fake_request)
+    monkeypatch.setattr(discord_setup.requests, "get", lambda url, **kw: Resp({"guild_id": "G", "channel_id": "500"}))
+
+    assert discord_setup.create_channels() == 0
+    created = [c for c in calls if c[0] == "POST" and c[1] == "/guilds/G/channels"]
+    assert [c[2]["name"] for c in created] == ["📈 FINANÇAS", "📊-mercado", "🚨-alertas-e-notícias", "🤖-agentes"]
+    everyone = created[1][2]["permission_overwrites"][0]
+    assert everyone["id"] == "G" and int(everyone["deny"]) & discord_setup.SEND
+    category_id = guild_channels[1]["id"]  # the first channel created is the category
+    assert ("PATCH", "/channels/500", {"parent_id": category_id, "lock_permissions": False}) in calls
+    saved = json.loads((tmp_path / "channels.json").read_text())
+    assert saved["channels"]["discussao"] == "500" and set(saved["channels"]) == {"mercado", "alertas", "agentes", "discussao"}
+
+    calls.clear()
+    assert discord_setup.create_channels() == 0  # second run reuses everything
+    assert not [c for c in calls if c[0] == "POST" and c[1] == "/guilds/G/channels"]
+
+    monkeypatch.setattr(discord_post, "CHANNELS_PATH", tmp_path / "channels.json")
+    assert discord_post.route("alertas")["url"].endswith(f"/channels/{saved['channels']['alertas']}/messages")
+    monkeypatch.delenv("DISCORD_BOT_TOKEN")
+    assert discord_post.route("alertas") == {}

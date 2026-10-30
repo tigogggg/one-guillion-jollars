@@ -29,6 +29,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: uv run python scripts/rankings.py
       - name: Guardar a watchlist para os alertas
         if: ${{ !cancelled() && hashFiles('state/watchlist/*.json') != '' }}

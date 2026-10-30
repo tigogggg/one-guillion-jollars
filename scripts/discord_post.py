@@ -29,6 +29,25 @@ RED = 0xED4245
 DISCLAIMER = "Ferramenta de análise educativa, não é recomendação de compra."
 
 
+CHANNELS_PATH = REPO / "discord" / "channels.json"
+API = "https://discord.com/api/v10"
+
+
+def route(kind: str) -> dict:
+    """send()/post_message() arguments for the channel of `kind` ("mercado", "alertas", "agentes").
+
+    Uses the bot to post into the channels created by discord_setup.py --canais
+    (discord/channels.json); empty, i.e. the default webhook channel, until then.
+    """
+    token = os.environ.get("DISCORD_BOT_TOKEN")
+    if not token or not CHANNELS_PATH.exists():
+        return {}
+    channel = json.loads(CHANNELS_PATH.read_text()).get("channels", {}).get(kind)
+    if not channel:
+        return {}
+    return {"url": f"{API}/channels/{channel}/messages", "headers": {"Authorization": f"Bot {token}"}}
+
+
 def embed(
     title: str,
     description: str = "",

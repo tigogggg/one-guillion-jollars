@@ -27,7 +27,7 @@ import discord_bot
 import earnings
 from charts import returns_chart
 from discord_daily import WATCHLIST_DIR
-from discord_post import BLUE, DISCLAIMER, GREEN, embed, send
+from discord_post import BLUE, DISCLAIMER, GREEN, embed, route, send
 
 CONSTITUENTS_URL = (
     "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
@@ -361,9 +361,10 @@ def main() -> int:
         json.dumps({"as_of": as_of, "stocks": to_json(ranking), "etfs": to_json(etfs)}, indent=1)
     )
 
-    thread = discord_bot.todays_thread()  # inside the day's thread when the tips opened one
-    status = send(*stocks_post(ranking, stock_stats, as_of), dry_run=args.dry_run, thread_id=thread)
-    return status or send(*etfs_post(etfs, etf_stats, as_of), dry_run=args.dry_run, thread_id=thread)
+    # The market channel, or the day's thread when everything shares one channel.
+    where = route("mercado") or {"thread_id": discord_bot.todays_thread()}
+    status = send(*stocks_post(ranking, stock_stats, as_of), dry_run=args.dry_run, **where)
+    return status or send(*etfs_post(etfs, etf_stats, as_of), dry_run=args.dry_run, **where)
 
 
 if __name__ == "__main__":

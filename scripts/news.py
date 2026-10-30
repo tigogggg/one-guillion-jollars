@@ -40,7 +40,7 @@ import requests
 import yfinance as yf
 
 import discord_bot
-from discord_post import BLUE, embed, send
+from discord_post import BLUE, embed, route, send
 from rankings import download_history, load_constituents
 
 REPO = Path(__file__).resolve().parents[1]
@@ -374,7 +374,7 @@ def main() -> int:
     if not cards:
         log(f"{len(rated)} títulos analisados ({source}), nenhum importante")
         return 0
-    return send(cards, dry_run=args.dry_run, thread_id=discord_bot.todays_thread())
+    return send(cards, dry_run=args.dry_run, **(route("alertas") or {"thread_id": discord_bot.todays_thread()}))
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ from agents import (
     zone_for,
 )
 from charts import lines_chart
-from discord_post import BLUE, embed, send
+from discord_post import BLUE, embed, route, send
 from rankings import UCITS_ETFS, download_history, load_constituents
 
 BACKTEST_DAYS = 250
@@ -304,7 +304,7 @@ def main() -> int:
         results = {**results, "strategies": {**previous.get("strategies", {}), **results["strategies"]}}
     REPORT_PATH.write_text(json.dumps(results, indent=1, default=str) + "\n")
     applied = apply(results, markets[-1].as_of) if args.apply else None
-    return send(*report(results, applied), dry_run=args.dry_run)
+    return send(*report(results, applied), dry_run=args.dry_run, **route("agentes"))
 
 
 if __name__ == "__main__":
