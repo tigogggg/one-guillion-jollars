@@ -23,6 +23,10 @@ on:
         description: "Criar o canal 🧪-testes (guardado no ramo em que corre)"
         type: boolean
         default: false
+      portal:
+        description: "Criar o canal 🏟️-portal e afixar a mensagem do portal (banner e botões)"
+        type: boolean
+        default: false
       canal_estado:
         description: "Criar o canal 🔧-estado (verificação diária do bot)"
         type: boolean
@@ -85,6 +89,22 @@ jobs:
           git add discord/channels.json
           git diff --cached --quiet && exit 0
           git commit -m "Discord: canal de testes"
+          git pull --rebase origin "$BRANCH"
+          git push origin "HEAD:$BRANCH"
+      - name: Canal e mensagem do portal
+        if: ${{ inputs.portal }}
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          uv run python scripts/discord_setup.py --portal
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add discord/channels.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Discord: canal do portal"
           git pull --rebase origin "$BRANCH"
           git push origin "HEAD:$BRANCH"
       - name: Criar o canal de estado

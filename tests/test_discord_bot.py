@@ -223,3 +223,15 @@ def test_delete_older_keeps_the_new_post_pins_and_other_titles(monkeypatch):
     new = {"id": "9", "channel_id": "c", "author": bot}
     assert discord_post.delete_older(new, "🤖 Liga dos agentes") == 2
     assert deleted == ["8", "4"]
+
+
+def test_portal_card_mentions_every_channel_with_the_schedule():
+    import discord_setup
+    import limits
+
+    channels = {"mercado": "1", "alertas": "2", "agentes": "3", "estado": "4", "discussao": "5"}
+    card = discord_setup.portal_card("https://w/p/x", limits.DEFAULT_SCHEDULE, channels)
+    where = card["fields"][0]["value"]
+    assert all(f"<#{i}>" in where for i in "12345")
+    assert "**11:40**" in where and "**12:00 · 16:00 · 20:30**" in where and "**23:00**" in where
+    assert card["image"]["url"] == "attachment://portal-banner.png"

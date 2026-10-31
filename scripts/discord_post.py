@@ -102,6 +102,7 @@ def post_message(
     kind: str | None = None,
     reply_to: str | None = None,
     buttons: list[tuple[str, str]] | None = None,
+    components: list[dict] | None = None,
 ) -> dict | None:
     """Post (or, with method=PATCH and an interaction url, edit) one message.
 
@@ -143,7 +144,9 @@ def post_message(
     payload = {"embeds": embeds[:10], "allowed_mentions": {"parse": []}}
     if content is not None:
         payload["content"] = content
-    if buttons and not webhook:
+    if components and not webhook:
+        payload["components"] = components
+    elif buttons and not webhook:
         payload["components"] = [{"type": 1, "components": [
             {"type": 2, "style": 5, "label": label[:80], "url": link} for label, link in buttons[:5]]}]
     if reply_to:

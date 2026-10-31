@@ -20,6 +20,7 @@ import { portfolioCommand, portfolioRoute } from "./portfolio.js";
 
 const PING = 1;
 const APPLICATION_COMMAND = 2;
+const MESSAGE_COMPONENT = 3;
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
 const DEFERRED_CHANNEL_MESSAGE = 5;
@@ -111,6 +112,14 @@ export default {
 
     if (interaction.type === PING) {
       return json({ type: PONG });
+    }
+    // Buttons of the pinned portal message: answered only to whoever pressed them.
+    if (interaction.type === MESSAGE_COMPONENT) {
+      const id = interaction.data?.custom_id;
+      let content = "Botão desconhecido.";
+      if (id === "carteira") content = env.CONFIG ? await portfolioCommand(env, interaction, new URL(request.url).origin) : "⚠️ As carteiras ainda não estão ativas.";
+      if (id === "ajuda") content = HELP;
+      return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
     }
     if (interaction.type !== APPLICATION_COMMAND) {
       return json({ type: CHANNEL_MESSAGE, data: { content: "Interação não suportada.", flags: EPHEMERAL } });

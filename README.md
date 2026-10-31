@@ -166,6 +166,15 @@ volatility 20, distance to the 52-week high 15, liquidity 10, company quality
 15, results date 5, news 5, market zone 5 (rules in `opportunities.CRITERIA`
 and on the page).
 
+`discord_setup.py --portal` (workflow input `portal`) creates the read-only
+`🏟️-portal` channel at the top of the 📈 FINANÇAS category and pins one
+message there: the banner `discord/portal-banner.png` (drawn from
+`discord/banner/portal-banner.html` with Chromium at 2x; Press Start 2P, SIL
+OFL), where each summary arrives and when, and three buttons: open the portal
+(link), "A minha carteira" (the Worker answers the member with their private
+link, only to them) and "Como funciona" (the help). Running it again replaces
+the message with a fresh one (new times, new link).
+
 `/carteira` works only inside the server, so only its members get one: each
 member gets one private link (`/c/<token>`, KV `portfolio-user:<discord id>`
 and `portfolio:<token>`), `novo_link:True` replaces it.

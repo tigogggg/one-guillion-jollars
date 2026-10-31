@@ -8,6 +8,9 @@
     --canal-testes  create the read-only 🧪-testes channel in that category; posts
                 go there instead of their usual channel when DISCORD_TESTES is set
     --canal-estado  create the read-only 🔧-estado channel for the daily health check
+    --portal    create the read-only 🏟️-portal channel at the top of the category and
+                pin the portal message there: banner, what is where, and buttons to
+                open the portal, get one's private /carteira link and the help
     --apagar-canais IDS  delete these channels (comma-separated ids; categories last),
                 e.g. the old ones after moving to another server; refuses any
                 channel of the server in discord/channels.json
@@ -28,7 +31,7 @@ import sys
 
 import requests
 
-from discord_post import BLUE, CHANNELS_PATH, MIRROR_PATH, embed, send
+from discord_post import BLUE, CHANNELS_PATH, MIRROR_PATH, REPO, embed, post_message, send
 
 SUB_COMMAND, STRING, BOOLEAN, NUMBER = 1, 3, 5, 10
 MANAGE_SERVER = "32"  # permission bit: only server admins see /horario
@@ -311,6 +314,87 @@ TEST_CHANNEL = ("testes", "🧪-testes", "Testes de funcionalidades novas antes 
 STATUS_CHANNEL = ("estado", "🔧-estado", "Verificação diária do bot: as tarefas do dia correram e os dados estão em dia? Só o bot publica.")
 
 
+PORTAL_CHANNEL = ("portal", "🏟️-portal", "A entrada: abre o portal, pede a tua carteira e vê onde aparece cada coisa. Só o bot publica.")
+BANNER = REPO / "discord" / "portal-banner.png"  # drawn from discord/banner/portal-banner.html
+PINK = 0xFF2E88
+
+
+def portal_card(url: str | None, sched: dict, channels: dict[str, str]) -> dict:
+    """The pinned portal message; `channels` fills in the channel mentions."""
+    from limits import DAY_NAMES
+
+    ch = lambda key: f"<#{channels[key]}>" if channels.get(key) else f"#{key}"  # noqa: E731
+    alerts, news = " · ".join(sched["alertas"]), " · ".join(sched["noticias"])
+    weekly = sched["semanal"]
+    return embed(
+        "🏟️ Portal CoutoTrading",
+        "**O portal é o centro**: tudo o que o bot sabe, numa página.\n"
+        "🏁 corrida e fichas completas dos 16 agentes · 📰 notícias que importam · 🎯 oportunidades de compra e venda com "
+        "**score de segurança** explicado · ⏱️ contagem para cada atualização · 💼 a tua carteira pessoal\n\n"
+        "**O Discord é o hub**: aqui chegam os resumos às horas marcadas e aqui se discute.",
+        color=PINK,
+        image="portal-banner.png",
+        fields=[
+            ("📍 Onde aparece cada coisa (hora de Lisboa, dias úteis)",
+             f"📊 {ch('mercado')} · dicas do dia e rankings às **{sched['dicas']}**, resumo semanal ao "
+             f"{DAY_NAMES.get(weekly['dia'], weekly['dia'])} às **{weekly['hora']}**\n"
+             f"🚨 {ch('alertas')} · notícias às **{news}**, alertas às **{alerts}**, acompanhamento às **{sched['acompanhamento']}**\n"
+             f"🤖 {ch('agentes')} · liga dos agentes às **{sched['agentes']}**\n"
+             f"🔧 {ch('estado')} · estado do bot às **{sched['estado']}**\n"
+             f"💬 {ch('discussao')} · conversa livre"),
+            ("🎮 Começar",
+             "1. **Abrir o portal** (botão em baixo): guarda-o nos favoritos.\n"
+             "2. **A minha carteira**: recebes o teu link privado para registar compras e vendas.\n"
+             "3. Escreve `/` em qualquer canal para ver os comandos (`/acao`, `/agentes`, `/limites`…)."),
+        ],
+        footer="Ferramenta educativa com dinheiro fictício nos agentes. Nada aqui é recomendação de compra.",
+    ) if url else embed("🏟️ Portal CoutoTrading", "O portal ainda não está ligado (faltam as credenciais da Cloudflare).", color=PINK)
+
+
+def create_portal() -> int:
+    """Create (or reuse) 🏟️-portal at the top of the category and pin a fresh portal message there."""
+    import interactive
+    from limits import schedule
+
+    if not os.environ.get("DISCORD_BOT_TOKEN") or not CHANNELS_PATH.exists():
+        print("Faltam DISCORD_BOT_TOKEN e/ou discord/channels.json (corre --canais primeiro).", file=sys.stderr)
+        return 1
+    status = create_test_channel(PORTAL_CHANNEL)
+    if status:
+        return status
+    saved = json.loads(CHANNELS_PATH.read_text())
+    guild, category, channel = saved["guild_id"], saved["category_id"], saved["channels"]["portal"]
+    # top of the category: the portal first, the others in their current order
+    inside = sorted((c for c in discord_api("GET", f"/guilds/{guild}/channels") if c.get("parent_id") == category),
+                    key=lambda c: c["position"])
+    order = [channel] + [c["id"] for c in inside if c["id"] != channel]
+    discord_api("PATCH", f"/guilds/{guild}/channels", json=[{"id": cid, "position": i} for i, cid in enumerate(order)])
+    # replace the bot's earlier messages there (the welcome note included)
+    bot = discord_api("GET", "/users/@me")["id"]
+    for m in discord_api("GET", f"/channels/{channel}/messages", params={"limit": 50}):
+        if m["author"]["id"] == bot:
+            discord_api("DELETE", f"/channels/{channel}/messages/{m['id']}")
+    url = interactive.portal_url()
+    card = portal_card(url, schedule(), saved["channels"])
+    buttons = [{"type": 2, "style": 2, "label": "💼 A minha carteira", "custom_id": "carteira"},
+               {"type": 2, "style": 2, "label": "❓ Como funciona", "custom_id": "ajuda"}]
+    if url:
+        buttons.insert(0, {"type": 2, "style": 5, "label": "🏟️ Abrir o portal", "url": url})
+    message = post_message([card], {"portal-banner.png": BANNER.read_bytes()} if BANNER.exists() else {},
+                           url=f"https://discord.com/api/v10/channels/{channel}/messages",
+                           headers={"Authorization": f"Bot {os.environ['DISCORD_BOT_TOKEN']}"},
+                           components=[{"type": 1, "components": buttons}])
+    if not message:
+        print("::error title=Portal::Não consegui publicar a mensagem do portal.")
+        return 1
+    try:
+        discord_api("PUT", f"/channels/{channel}/messages/pins/{message['id']}")
+    except RuntimeError as e:
+        print(f"::warning title=Portal::Não consegui afixar a mensagem: {e}")
+    print(f"::notice title=Portal::Mensagem do portal publicada e afixada em #{PORTAL_CHANNEL[1]}")
+    return 0
+
+
 def create_test_channel(spec: tuple[str, str, str] = TEST_CHANNEL) -> int:
     """Create (or reuse) one extra read-only channel (🧪-testes by default) in the category and add it to discord/channels.json.
 
@@ -484,6 +568,7 @@ def main() -> int:
     parser.add_argument("--canais", action="store_true", help="Create the 📈 FINANÇAS category and channels")
     parser.add_argument("--canal-testes", action="store_true", help="Create the 🧪-testes channel (for DISCORD_TESTES)")
     parser.add_argument("--canal-estado", action="store_true", help="Create the 🔧-estado channel (health check)")
+    parser.add_argument("--portal", action="store_true", help="Create 🏟️-portal and pin the portal message with its banner")
     parser.add_argument("--apagar-canais", metavar="IDS", help="Delete these channels (comma-separated ids)")
     parser.add_argument("--espelho", metavar="GUILD_ID", help="Create the channels in a second server and copy posts there")
     parser.add_argument("--diagnostico", action="store_true", help="Show the bot's server-wide permissions")
@@ -509,6 +594,12 @@ def main() -> int:
             status = status or create_test_channel()
         except (RuntimeError, KeyError, requests.RequestException) as e:
             print(f"::error title=Canal de testes::{e}")
+            status = 1
+    if args.portal:
+        try:
+            status = status or create_portal()
+        except (RuntimeError, KeyError, requests.RequestException) as e:
+            print(f"::error title=Portal::{e}")
             status = 1
     if args.canal_estado:
         try:
