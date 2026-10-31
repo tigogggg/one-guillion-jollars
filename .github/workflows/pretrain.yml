@@ -24,6 +24,10 @@ on:
         description: "Só voltar a publicar o relatório do último pré-treino (sem treinar)"
         type: boolean
         default: false
+      juntar_de:
+        description: "Só juntar e aplicar os resultados de uma execução anterior (ID da execução; os artefactos duram 3 dias)"
+        required: false
+        default: ""
       canal:
         description: "Canal onde voltar a publicar o relatório (com só relatório)"
         type: choice
@@ -36,6 +40,7 @@ on:
 
 permissions:
   contents: write
+  actions: read  # juntar_de: artifacts of an earlier run
 
 concurrency:
   group: agents-state
@@ -63,7 +68,7 @@ jobs:
         run: uv run python scripts/pretrain.py --republicar --canal "$CANAL"
 
   plan:
-    if: ${{ !inputs.so_relatorio }}
+    if: ${{ !inputs.so_relatorio && !inputs.juntar_de }}
     runs-on: ubuntu-latest
     outputs:
       strategies: ${{ steps.list.outputs.strategies }}
@@ -114,9 +119,17 @@ jobs:
           enable-cache: true
       - run: uv sync
       - uses: actions/download-artifact@v4
+        if: ${{ !inputs.juntar_de }}
         with:
           pattern: pretrain-*
           path: out
+      - uses: actions/download-artifact@v4
+        if: ${{ inputs.juntar_de }}
+        with:
+          pattern: pretrain-*
+          path: out
+          run-id: ${{ inputs.juntar_de }}
+          github-token: ${{ github.token }}
       - name: Juntar, aplicar e publicar
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -126,6 +139,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: uv run python scripts/pretrain.py --juntar out $APPLY
       - name: Guardar os resultados e os parâmetros
+        if: ${{ !cancelled() }}  # also when posting the report failed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

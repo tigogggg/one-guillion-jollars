@@ -235,3 +235,13 @@ def test_portal_card_mentions_every_channel_with_the_schedule():
     assert all(f"<#{i}>" in where for i in "12345")
     assert "**11:40**" in where and "**12:00 · 16:00 · 20:30**" in where and "**23:00**" in where
     assert card["image"]["url"] == "attachment://portal-banner.png"
+
+
+def test_fit_shortens_the_longest_texts_to_discords_limit():
+    import discord_post
+
+    big = {"title": "t", "description": "d" * 3000, "fields": [{"name": "a", "value": "x" * 1000}, {"name": "b", "value": "y" * 1024}] * 3}
+    out = discord_post.fit([big])
+    total = len(out[0]["description"]) + sum(len(f["name"]) + len(f["value"]) for f in out[0]["fields"]) + 1
+    assert total <= discord_post.EMBED_TOTAL and out[0]["description"].endswith("…")
+    assert len(big["description"]) == 3000  # the original is untouched

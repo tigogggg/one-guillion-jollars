@@ -141,7 +141,7 @@ def post_message(
         if thread_id:
             params["thread_id"] = thread_id
 
-    payload = {"embeds": embeds[:10], "allowed_mentions": {"parse": []}}
+    payload = {"embeds": fit(embeds[:10]), "allowed_mentions": {"parse": []}}
     if content is not None:
         payload["content"] = content
     if components and not webhook:
@@ -168,6 +168,25 @@ def post_message(
         return resp.json()
     except ValueError:
         return {}
+
+
+EMBED_TOTAL = 5800  # Discord refuses a message whose embeds add up to more than 6000 characters
+
+
+def fit(embeds: list[dict], limit: int = EMBED_TOTAL) -> list[dict]:
+    """Shorten the longest field values (then descriptions) until the embeds fit in one Discord message."""
+    def size(e: dict) -> int:
+        return (len(e.get("title", "")) + len(e.get("description", "")) + len((e.get("footer") or {}).get("text", ""))
+                + sum(len(f["name"]) + len(f["value"]) for f in e.get("fields", [])))
+    embeds = [{**e, "fields": [dict(f) for f in e.get("fields", [])]} for e in embeds]
+    while sum(size(e) for e in embeds) > limit:
+        excess = sum(size(e) for e in embeds) - limit
+        texts = [(len(f["value"]), f, "value") for e in embeds for f in e["fields"]] + [(len(e.get("description", "")), e, "description") for e in embeds]
+        n, holder, key = max(texts, key=lambda t: t[0])
+        if n <= 60:
+            break
+        holder[key] = holder[key][: max(40, n - excess - 2)].rstrip() + "…"
+    return embeds
 
 
 def delete_older(message: dict | None, title_prefix: str, scan: int = 100) -> int:
