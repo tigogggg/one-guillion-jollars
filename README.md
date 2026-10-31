@@ -271,3 +271,12 @@ them). Without that file everything posts to the webhook channel as before.
 - The 2000 crash is not covered (it would need data from 1999 and more memory),
   and most companies that failed in 2008 have no prices on Yahoo, so crisis
   results remain somewhat optimistic; the report shows the coverage.
+
+## Readiness panel (`/prontidao`)
+
+Posted with each monthly report and on demand: for every agent, ✅/❌ on
+1) 126 live sessions, 2) beating the Indexador's live return with an equal or
+better Sharpe, 3) a live return no worse than the backtest's Monte Carlo
+worst-1-in-20 year (prorated), 4) 30 closed trades (not for low-turnover
+agents) and 5) a live max drawdown of 25% or less. Agents passing all checks
+are listed as ready for phase 2: small real-money ideas, human decisions.
