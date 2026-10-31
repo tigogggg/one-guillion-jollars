@@ -27,6 +27,10 @@ on:
         description: "Criar o canal 🔧-estado (verificação diária do bot)"
         type: boolean
         default: false
+      apagar_canais:
+        description: "IDs de canais a apagar, separados por vírgulas (nunca do servidor atual)"
+        required: false
+        default: ""
       espelho:
         description: "ID de um segundo servidor: criar lá os mesmos canais e copiar para lá cada publicação (guardado no ramo em que corre)"
         required: false
@@ -97,6 +101,12 @@ jobs:
           git commit -m "Discord: canal de estado"
           git pull --rebase origin "$BRANCH"
           git push origin "HEAD:$BRANCH"
+      - name: Apagar canais
+        if: ${{ inputs.apagar_canais != '' }}
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          APAGAR: ${{ inputs.apagar_canais }}
+        run: uv run python scripts/discord_setup.py --apagar-canais "$APAGAR"
       - name: Criar os canais no servidor espelho
         if: ${{ inputs.espelho != '' }}
         env:

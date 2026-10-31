@@ -8,6 +8,9 @@
     --canal-testes  create the read-only 🧪-testes channel in that category; posts
                 go there instead of their usual channel when DISCORD_TESTES is set
     --canal-estado  create the read-only 🔧-estado channel for the daily health check
+    --apagar-canais IDS  delete these channels (comma-separated ids; categories last),
+                e.g. the old ones after moving to another server; refuses any
+                channel of the server in discord/channels.json
     --espelho ID    create the same category and channels (plus #billions) in a
                 second server and write them to discord/mirror.json; every bot
                 post is then copied there
@@ -443,6 +446,27 @@ def welcome_card() -> dict:
     )
 
 
+def delete_channels(ids: list[str]) -> int:
+    """Delete channels by id, categories last; never one of the current server (discord/channels.json)."""
+    current = json.loads(CHANNELS_PATH.read_text()).get("guild_id") if CHANNELS_PATH.exists() else None
+    found = []
+    for channel_id in ids:
+        channel = discord_api("GET", f"/channels/{channel_id}")
+        if channel.get("guild_id") == current:
+            print(f"::error title=Apagar canais::#{channel['name']} é do servidor atual; não apago nada.")
+            return 1
+        found.append(channel)
+    failed = 0
+    for channel in sorted(found, key=lambda c: c["type"] == 4):  # channels before their category
+        try:
+            discord_api("DELETE", f"/channels/{channel['id']}")
+            print(f"::notice title=Apagar canais::Apagado #{channel['name']}")
+        except RuntimeError as e:
+            print(f"::error title=Apagar canais::#{channel['name']}: {e}")
+            failed += 1
+    return 1 if failed else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--register", action="store_true", help="Register the slash commands")
@@ -450,6 +474,7 @@ def main() -> int:
     parser.add_argument("--canais", action="store_true", help="Create the 📈 FINANÇAS category and channels")
     parser.add_argument("--canal-testes", action="store_true", help="Create the 🧪-testes channel (for DISCORD_TESTES)")
     parser.add_argument("--canal-estado", action="store_true", help="Create the 🔧-estado channel (health check)")
+    parser.add_argument("--apagar-canais", metavar="IDS", help="Delete these channels (comma-separated ids)")
     parser.add_argument("--espelho", metavar="GUILD_ID", help="Create the channels in a second server and copy posts there")
     parser.add_argument("--diagnostico", action="store_true", help="Show the bot's server-wide permissions")
     parser.add_argument("--dry-run", action="store_true", help="Print the welcome card instead of posting it")
@@ -480,6 +505,12 @@ def main() -> int:
             status = status or create_test_channel(STATUS_CHANNEL)
         except (RuntimeError, KeyError, requests.RequestException) as e:
             print(f"::error title=Canal de estado::{e}")
+            status = 1
+    if args.apagar_canais:
+        try:
+            status = status or delete_channels([i.strip() for i in args.apagar_canais.split(",") if i.strip()])
+        except (RuntimeError, KeyError, requests.RequestException) as e:
+            print(f"::error title=Apagar canais::{e}")
             status = 1
     if args.espelho:
         try:
