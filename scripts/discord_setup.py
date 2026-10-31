@@ -379,6 +379,9 @@ def diagnose() -> int:
     hook = requests.get(os.environ["DISCORD_WEBHOOK_URL"], timeout=30).json()
     guild = hook["guild_id"]
     bot = discord_api("GET", "/users/@me")["id"]
+    server = discord_api("GET", f"/guilds/{guild}")["name"]
+    chat = discord_api("GET", f"/channels/{hook['channel_id']}")["name"]
+    print(f"::notice title=Diagnóstico::O webhook publica em {server} → #{chat}")
     member = discord_api("GET", f"/guilds/{guild}/members/{bot}")
     roles = {r["id"]: r for r in discord_api("GET", f"/guilds/{guild}/roles")}
     names = {VIEW: "Ver canais", SEND: "Enviar mensagens", 1 << 4: "Gerenciar canais", 1 << 28: "Gerenciar cargos",
