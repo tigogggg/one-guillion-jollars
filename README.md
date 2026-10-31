@@ -300,3 +300,15 @@ read-only `🧪-testes` channel in the 📈 FINANÇAS category and saves its id 
 instead of posting to the real channel when it is missing. The pre-training
 workflow's `testes` input does this for the report-only run, so a branch can be
 tried out with `gh workflow run pretrain.yml --ref <branch> -f so_relatorio=true -f testes=true`.
+
+## Mirror server (`discord/mirror.json`)
+
+`discord_setup.py --espelho <server id>` (workflow input `espelho`) creates the
+📈 FINANÇAS category in a second server with `#billions` (open for chat) and
+read-only copies of `📊-mercado`, `🚨-alertas-e-notícias`, `🤖-agentes` and
+`🧪-testes`, checks the bot can post in each, and saves the ids to
+`discord/mirror.json` on the branch it ran from. From then on every post that
+goes through `discord_post.route()` is also sent to the channel of the same
+kind there; a failed copy only warns. DMs, slash-command replies and the
+👍/👎 vote reactions are not copied. The bot must first be added to that server
+with an OAuth invite (Manage Channels and Manage Roles).

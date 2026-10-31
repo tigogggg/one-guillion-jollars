@@ -140,3 +140,54 @@ def test_test_channel_is_created_once_and_takes_every_post(monkeypatch, tmp_path
     path.write_text(json.dumps({"guild_id": "G", "category_id": "C", "channels": {"agentes": "601"}}))
     with pytest.raises(RuntimeError):  # never fall back to the real channel
         discord_post.route("agentes")
+
+
+def test_mirror_server_gets_the_same_channels_and_a_copy_of_each_post(monkeypatch, tmp_path):
+    import discord_post
+    import discord_setup
+
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "t")
+    monkeypatch.delenv("DISCORD_TESTES", raising=False)
+    mirror_path = tmp_path / "mirror.json"
+    monkeypatch.setattr(discord_setup, "MIRROR_PATH", mirror_path)
+    monkeypatch.setattr(discord_post, "MIRROR_PATH", mirror_path)
+    monkeypatch.setattr(discord_post, "CHANNELS_PATH", tmp_path / "channels.json")
+    (tmp_path / "channels.json").write_text(json.dumps({"channels": {"alertas": "11"}}))
+    guild_channels = [{"id": "900", "type": 0, "name": "general"}]
+    created, posted = [], []
+
+    def fake_request(method, url, **kw):
+        path = url.split("/api/v10")[1]
+        if path == "/users/@me":
+            return Resp({"id": "BOT"})
+        if method == "GET":
+            return Resp(guild_channels)
+        if path == "/guilds/N/channels":
+            new = {"id": str(800 + len(guild_channels)), "type": kw["json"]["type"], "name": kw["json"]["name"]}
+            guild_channels.append(new)
+            created.append(kw["json"])
+            return Resp(new)
+        posted.append(path)
+        return Resp({"id": "M", "channel_id": path.split("/")[2]})
+    monkeypatch.setattr(discord_setup.requests, "request", fake_request)
+    monkeypatch.setattr(discord_post.requests, "request", fake_request)
+
+    assert discord_setup.create_mirror_channels("N") == 0
+    assert [c["name"] for c in created] == ["📈 FINANÇAS", "billions", "📊-mercado", "🚨-alertas-e-notícias", "🤖-agentes", "🧪-testes"]
+    assert "permission_overwrites" not in created[1]  # people can talk in #billions
+    assert all(int(c["permission_overwrites"][0]["deny"]) & discord_setup.SEND for c in created[2:])
+    ids = json.loads(mirror_path.read_text())["channels"]
+    assert set(ids) == {"discussao", "mercado", "alertas", "agentes", "testes"}
+
+    created.clear()
+    posted.clear()
+    assert discord_setup.create_mirror_channels("N") == 0 and not created  # second run reuses everything
+
+    posted.clear()
+    message = discord_post.post_message([{"title": "x"}], **discord_post.route("alertas"))
+    assert message["channel_id"] == "11"  # callers keep the original server's message
+    assert posted == ["/channels/11/messages", f"/channels/{ids['alertas']}/messages"]
+
+    posted.clear()
+    discord_post.post_message([{"title": "dm"}], url=f"{discord_post.API}/channels/55/messages")
+    assert posted == ["/channels/55/messages"]  # DMs and replies are not copied
