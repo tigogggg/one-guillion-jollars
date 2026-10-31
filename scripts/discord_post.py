@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import requests
@@ -158,6 +159,52 @@ def post_message(
         return {}
 
 
-def send(embeds: list[dict], files: dict[str, bytes] | None = None, dry_run: bool = False, **kwargs) -> int:
-    """post_message, returning 0 on success and 1 on failure (exit status)."""
-    return 0 if post_message(embeds, files, dry_run=dry_run, **kwargs) is not None else 1
+def delete_older(message: dict | None, title_prefix: str, scan: int = 100) -> int:
+    """Delete the bot's earlier posts in the message's channel whose first embed title starts with title_prefix.
+
+    Keeps `message` itself and pinned posts; only looks at the last `scan`
+    messages. Needs the bot token (posts made through route()); a bot can
+    always delete its own messages. Returns how many were deleted.
+    """
+    token = os.environ.get("DISCORD_BOT_TOKEN")
+    if not token or not message or not message.get("channel_id") or not message.get("author"):
+        return 0
+    headers = {"Authorization": f"Bot {token}"}
+    channel, bot = message["channel_id"], message["author"]["id"]
+    try:
+        resp = requests.get(f"{API}/channels/{channel}/messages", params={"limit": scan}, headers=headers, timeout=30)
+        resp.raise_for_status()
+        history = resp.json()
+    except (requests.RequestException, ValueError) as e:
+        print(f"WARN: não consegui ler o canal para limpar ({e})", file=sys.stderr)
+        return 0
+    old = [m for m in history
+           if m["id"] != message["id"] and m.get("author", {}).get("id") == bot and not m.get("pinned")
+           and m.get("embeds") and (m["embeds"][0].get("title") or "").startswith(title_prefix)]
+    deleted = 0
+    for m in old:
+        for _ in range(3):  # Discord rate-limits deletes; wait as told and try again
+            resp = requests.delete(f"{API}/channels/{channel}/messages/{m['id']}", headers=headers, timeout=30)
+            if resp.status_code != 429:
+                break
+            time.sleep(float(resp.json().get("retry_after", 1)) + 0.1)
+        if resp.status_code < 300:
+            deleted += 1
+        else:
+            print(f"WARN: não consegui apagar a mensagem antiga {m['id']}: {resp.status_code}", file=sys.stderr)
+    if deleted:
+        print(f"Apagadas {deleted} publicações antigas de \"{title_prefix}\".")
+    return deleted
+
+
+def send(embeds: list[dict], files: dict[str, bytes] | None = None, dry_run: bool = False,
+         replace: str | None = None, **kwargs) -> int:
+    """post_message, returning 0 on success and 1 on failure (exit status).
+
+    `replace`: a title prefix; once posted, the bot's older posts with that
+    title in the same channel are deleted, so only the latest stays.
+    """
+    message = post_message(embeds, files, dry_run=dry_run, **kwargs)
+    if message and replace and not dry_run:
+        delete_older(message, replace)
+    return 0 if message is not None else 1

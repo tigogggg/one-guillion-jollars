@@ -543,6 +543,9 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
     return [card], files
 
 
+REPORT_TITLE = "🧠 Pré-treino dos agentes"  # only the latest report stays in the channel
+
+
 def finish(results: dict, today: date, apply_params: bool, dry_run: bool, partial: bool) -> int:
     """Save the results (keeping other strategies on a partial run), apply them and post the report."""
     if partial and REPORT_PATH.exists():
@@ -550,7 +553,7 @@ def finish(results: dict, today: date, apply_params: bool, dry_run: bool, partia
         results = {**results, "strategies": {**previous.get("strategies", {}), **results["strategies"]}}
     REPORT_PATH.write_text(json.dumps(results, indent=1, default=str) + "\n")
     applied = apply(results, today) if apply_params else None
-    return send(*report(results, applied), dry_run=dry_run, **route("agentes"))
+    return send(*report(results, applied), dry_run=dry_run, **route("agentes"), replace=REPORT_TITLE)
 
 
 def main() -> int:
@@ -566,7 +569,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.republicar:
-        return send(*report(json.loads(REPORT_PATH.read_text()), None), dry_run=args.dry_run, **route("agentes"))
+        return send(*report(json.loads(REPORT_PATH.read_text()), None), dry_run=args.dry_run, **route("agentes"), replace=REPORT_TITLE)
 
     if args.juntar:
         parts = [json.loads(f.read_text()) for f in sorted(Path(args.juntar).rglob("*.json"))]

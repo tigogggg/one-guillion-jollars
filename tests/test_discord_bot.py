@@ -191,3 +191,35 @@ def test_mirror_server_gets_the_same_channels_and_a_copy_of_each_post(monkeypatc
     posted.clear()
     discord_post.post_message([{"title": "dm"}], url=f"{discord_post.API}/channels/55/messages")
     assert posted == ["/channels/55/messages"]  # DMs and replies are not copied
+
+
+def test_delete_older_keeps_the_new_post_pins_and_other_titles(monkeypatch):
+    import discord_post
+
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "x")
+    bot = {"id": "bot"}
+    history = [
+        {"id": "9", "author": bot, "embeds": [{"title": "🤖 Liga dos agentes · fecho de 2026-11-03"}]},  # the new one
+        {"id": "8", "author": bot, "embeds": [{"title": "🤖 Liga dos agentes · fecho de 2026-11-02"}]},
+        {"id": "7", "author": bot, "embeds": [{"title": "📆 Relatório mensal dos agentes · 2026-10"}]},
+        {"id": "6", "author": bot, "pinned": True, "embeds": [{"title": "🤖 Liga dos agentes · fixada"}]},
+        {"id": "5", "author": {"id": "someone"}, "embeds": [{"title": "🤖 Liga dos agentes · de alguém"}]},
+        {"id": "4", "author": bot, "embeds": [{"title": "🤖 Liga dos agentes · fecho de 2026-10-30"}]},
+    ]
+    deleted = []
+
+    class Resp:
+        def __init__(self, status, data=None):
+            self.status_code, self._data = status, data
+
+        def json(self):
+            return self._data
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(discord_post.requests, "get", lambda url, **kw: Resp(200, history))
+    monkeypatch.setattr(discord_post.requests, "delete", lambda url, **kw: deleted.append(url.rsplit("/", 1)[1]) or Resp(204))
+    new = {"id": "9", "channel_id": "c", "author": bot}
+    assert discord_post.delete_older(new, "🤖 Liga dos agentes") == 2
+    assert deleted == ["8", "4"]

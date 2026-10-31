@@ -1398,6 +1398,10 @@ def reply_target() -> dict:
     return {}
 
 
+LEAGUE_TITLE = "🤖 Liga dos agentes"
+MONTHLY_TITLE = "📆 Relatório mensal dos agentes"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("mode", choices=["daily", "config"])
@@ -1431,11 +1435,13 @@ def main() -> int:
             raise
         print(f"ERROR: {e!r}", file=sys.stderr)
         embeds, files = [embed("⚠️ Erro nos agentes", str(e)[:300], color=RED)], {}
+    replace = {}
     if a.mode == "daily" and not target:
         target = route("agentes") or {"thread_id": discord_bot.todays_thread()}
-    status = send(embeds, files, dry_run=a.dry_run, **target)
+        replace = {"replace": LEAGUE_TITLE}  # only the latest league chart stays in the channel
+    status = send(embeds, files, dry_run=a.dry_run, **target, **replace)
     if follow_up[0]:
-        status = status or send(*follow_up, dry_run=a.dry_run, **target)
+        status = status or send(*follow_up, dry_run=a.dry_run, **target, **({"replace": MONTHLY_TITLE} if replace else {}))
     return status
 
 

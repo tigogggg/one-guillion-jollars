@@ -133,6 +133,11 @@ decided on the latest close fill at the next session's open with 0.1% costs;
 US stocks are bought in EUR at that day's EUR/USD rate, fractional shares
 allowed. Stops and targets are checked against each session's low and high.
 
+Only the latest chart of each kind stays in `🤖-agentes`: after posting the
+daily league, the monthly report or the pre-training report, the bot deletes
+its own older posts with the same title in that channel (last 100 messages;
+pinned posts are kept). See `discord_post.send(replace=...)`.
+
 Points: +10 for each day in profit (equity above money given) and ±1 per 0.1%
 of the day's change (capped at ±10). Training: on the first run of each month,
 agents that lost money the previous month mutate their numeric parameters by
