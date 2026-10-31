@@ -271,9 +271,12 @@ def create_channels() -> int:
     except RuntimeError as e:  # e.g. the bot cannot see that channel; moving it by hand works too
         print(f"::warning title=Canais::Não consegui mover o canal de conversa ({e}); arrasta-o para a categoria à mão.")
 
+    # Keep extra channels (🧪-testes, 🔧-estado) of the same server; a new server starts without them.
+    saved = json.loads(CHANNELS_PATH.read_text()) if CHANNELS_PATH.exists() else {}
+    extra = saved.get("channels", {}) if saved.get("guild_id") == guild else {}
     CHANNELS_PATH.parent.mkdir(parents=True, exist_ok=True)
     CHANNELS_PATH.write_text(json.dumps({"guild_id": guild, "category_id": category["id"],
-                                         "channels": {**ids, "discussao": chat}}, indent=2) + "\n")
+                                         "channels": {**extra, **ids, "discussao": chat}}, indent=2) + "\n")
     failed = 0
     for key, name, topic in CHANNELS:
         try:
