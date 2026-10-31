@@ -52,15 +52,53 @@ export async function portfolioRoute(request, env, tok, rest) {
   if (rest === "" && request.method === "GET") return html(portfolioPage(data, tok));
   if (rest === "/data" && request.method === "GET") return json(await snapshot(env, data));
   if (rest === "/history" && request.method === "GET") return json(await history(data));
+  if (rest === "/manifest.webmanifest") return manifest(data, tok);
   if (rest === "/data" && request.method === "POST") {
     let body;
     try { body = await request.json(); } catch { return json({ error: "Pedido inválido." }, 400); }
+    if (body.action === "follow_add" || body.action === "follow_remove") {
+      const error = await follow(env, data, body);
+      if (error) return json({ error }, 400);
+      return json(await snapshot(env, data));
+    }
     const error = await change(data, body);
     if (error) return json({ error }, 400);
     await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
     return json(await snapshot(env, data));
   }
   return json({ error: "Não encontrado." }, 404);
+}
+
+const MAX_FOLLOWS = 20;
+const FOLLOW = /^[A-Z0-9][A-Z0-9.\-]{0,9}$/;
+
+// The member's /seguir list (the same KV key the Discord command and the DM alerts use).
+async function follow(env, data, body) {
+  if (!data.owner) return "Carteira sem dono no Discord.";
+  const key = `follows:${data.owner}`;
+  const list = (await env.CONFIG.get(key, "json")) || [];
+  const t = String(body.symbol || "").trim().toUpperCase();
+  if (!FOLLOW.test(t)) return "Ticker inválido (ex.: NVDA).";
+  if (body.action === "follow_add") {
+    if (list.includes(t)) return null;
+    if (list.length >= MAX_FOLLOWS) return `A lista tem no máximo ${MAX_FOLLOWS} ações.`;
+    if (!(await yahooQuote(t))) return `Não encontrei ${t} no Yahoo Finance.`;
+    list.push(t);
+  } else {
+    const i = list.indexOf(t);
+    if (i >= 0) list.splice(i, 1);
+  }
+  if (list.length) await env.CONFIG.put(key, JSON.stringify(list));
+  else await env.CONFIG.delete(key);
+  return null;
+}
+
+function manifest(data, tok) {
+  return new Response(JSON.stringify({
+    name: `Carteira de ${data.name || "membro"}`, short_name: "Carteira", start_url: `/c/${tok}`, scope: `/c/${tok}`,
+    display: "standalone", background_color: "#0b0820", theme_color: "#0b0820",
+    icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" }],
+  }), { headers: { "Content-Type": "application/manifest+json" } });
 }
 
 function json(value, status = 200) {
@@ -177,7 +215,13 @@ async function snapshot(env, data) {
     .concat((proposals?.buys || []).map((b) => b.plan.currency)))];
   const fx = Object.fromEntries(await Promise.all(currencies.map(async (c) => [c, await fxToEur(c)])));
   const verdicts = await judge(data, quotes, fx, proposals, news);
-  return { name: data.name, tx: data.tx, quotes, fx, verdicts, settings: data.settings || { capital: 10000, risk: 1 },
+  const followList = data.owner ? ((await env.CONFIG.get(`follows:${data.owner}`, "json")) || []) : [];
+  const follows = await Promise.all(followList.map(async (t) => {
+    const q = quotes[t] || (await yahooQuote(t));
+    return { symbol: t, name: q?.name || "", price: q?.price ?? null, currency: q?.currency || "", change: q?.prev ? q.price / q.prev - 1 : null,
+             news: news?.scores?.[t] ?? null, proposed: (proposals?.buys || []).some((b) => b.symbol === t) };
+  }));
+  return { name: data.name, tx: data.tx, quotes, fx, verdicts, follows, settings: data.settings || { capital: 10000, risk: 1 },
            proposals: proposals ? { as_of: proposals.as_of, zone: proposals.zone, buys: proposals.buys.slice(0, 12) } : null, at: Date.now() };
 }
 
@@ -280,6 +324,7 @@ function portfolioPage(data, tok) {
   <button class="tab" data-tab="operacoes">🧾 Operações</button>
   <button class="tab" data-tab="adicionar">➕ Adicionar</button>
   <button class="tab" data-tab="propostas">🧠 Propostas para ti</button>
+  <button class="tab" data-tab="seguir">👀 Seguir</button>
 </nav>
 <section data-tab="resumo">
   <div id="totals" class="grid"></div>
@@ -288,6 +333,12 @@ function portfolioPage(data, tok) {
   <p class="muted small" id="chart-note">Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.</p>
 </section>
 <section data-tab="posicoes" hidden><div id="positions"></div><div id="verdict-rules"></div><h2>✅ Posições fechadas</h2><div id="closed"></div></section>
+<section data-tab="seguir" hidden>
+  <h2>👀 Ações que segues</h2>
+  <p class="muted small">A mesma lista do <code>/seguir</code> no Discord: recebes uma mensagem privada quando uma destas ações rompe com volume ou mexe 5% ou mais no dia.</p>
+  <form id="follow-form" class="panel filters"><input name="symbol" placeholder="Ticker, ex.: NVDA" required autocapitalize="characters"><button class="btn" type="submit">SEGUIR</button><span id="follow-msg" class="small"></span></form>
+  <div id="follows"></div>
+</section>
 <section data-tab="propostas" hidden>
   <h2>🧠 Propostas dos agentes para o teu capital</h2>
   <form id="settings" class="panel form">
@@ -320,7 +371,8 @@ function portfolioPage(data, tok) {
 const TOKEN = ${safeJson(tok)};
 ${CLIENT}
 </script>`;
-  return page(`Carteira de ${data.name || "membro"}`, body, `<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  return page(`Carteira de ${data.name || "membro"}`, body, `<link rel="manifest" href="/c/${tok}/manifest.webmanifest"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 <style>.form { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; align-items:end; }
 .form label { display:grid; gap:4px; font-size:.85rem; color:var(--muted); }
@@ -351,6 +403,24 @@ function openTab(name) {
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
 
 let SNAP = null;
+try { localStorage.setItem("carteira", JSON.stringify(location.pathname.replace(/\/$/, ""))); } catch (e) {}  // the portal's "Hoje" shows it
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+function renderFollows() {
+  const f = SNAP.follows || [];
+  $("follows").innerHTML = f.length ? table(["Ação", "Preço", "Hoje", "Notícias (36 h)", "Proposta hoje", ""], f.map((x) => ['<b>' + esc(x.symbol) + '</b> <span class="muted">' + esc(x.name) + '</span>',
+    x.price != null ? nf(x.price) + " " + esc(x.currency) : "—", '<span class="' + cls(x.change) + '">' + pct(x.change) + '</span>',
+    x.news == null ? "—" : '<span class="' + cls(x.news) + '">' + (x.news > 0 ? "+" : "") + x.news + '</span>', x.proposed ? "🧠 sim" : "—",
+    '<button class="del" data-unfollow="' + esc(x.symbol) + '">deixar</button>']), [1, 2, 3]) : '<p class="muted">Ainda não segues nenhuma ação.</p>';
+}
+async function followAction(action, symbol) {
+  const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, symbol }) });
+  const out = await r.json();
+  if (!r.ok) { $("follow-msg").textContent = "⚠️ " + out.error; $("follow-msg").className = "small down"; return; }
+  $("follow-msg").textContent = ""; SNAP = out; render();
+}
+$("follow-form").addEventListener("submit", (e) => { e.preventDefault(); followAction("follow_add", e.target.symbol.value); e.target.reset(); });
+$("follows").addEventListener("click", (e) => { const b = e.target.closest("[data-unfollow]"); if (b) followAction("follow_remove", b.dataset.unfollow); });
 
 function verdictCell(v) {
   if (!v) return "—";
@@ -463,6 +533,7 @@ function render() {
   $("verdict-rules").innerHTML = s.verdicts?.rules ? '<details class="panel"><summary><b>Como se decide Manter, Reduzir ou Vender</b></summary><ul class="small">' +
     s.verdicts.rules.map((x) => '<li>' + esc(x) + '</li>').join("") + '</ul><p class="muted small">Sinais técnicos para te ajudar a pensar, não ordens: a decisão é tua.</p></details>' : "";
   renderMine();
+  renderFollows();
   $("closed").innerHTML = table(["Ativo", "Comprado", "Vendido", "Resultado", "Resultado %", "Comissões", "De", "Até"],
     closed.map((p) => ['<b>' + esc(p.symbol) + '</b>', nf(p.bought) + " " + esc(p.currency), nf(p.sold) + " " + esc(p.currency),
       '<span class="' + cls(p.realized) + '">' + nf(p.realized) + " " + esc(p.currency) + '</span>', '<span class="' + cls(p.realized) + '">' + pct(p.bought ? p.realized / p.bought : null) + '</span>',

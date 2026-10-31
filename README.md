@@ -187,6 +187,18 @@ OFL), where each summary arrives and when, and three buttons: open the portal
 link, only to them) and "Como funciona" (the help). Running it again replaces
 the message with a fresh one (new times, new link).
 
+**Portal usability.** The portal opens on "🏠 Hoje": the market zone and
+breadth gauge, the market context (VIX, policy uncertainty, credit spread,
+dollar, S&P 500 trend), the 3 best proposals, the viewer's own portfolio
+summary (the browser remembers the `/carteira` link once opened on that
+device), the important news, the league podium and the next runs. Terms
+underlined in dotted lines open a definition (also listed in "❓ Glossário").
+The agents tab can compare two agents side by side, with both curves. On
+phones the tabs move to a bottom bar. The portal and each portfolio can be
+installed as an app (manifest at `.../manifest.webmanifest`, `/sw.js`, icons
+in `discord-bot/icons.js` drawn from `discord/banner/app-icon.html`). The
+portfolio has a "👀 Seguir" tab that edits the member's `/seguir` list.
+
 **News analysis (`scripts/news_archive.py`, portal tab "📰 Notícias").** Each
 news run keeps every rated headline for 30 days (`state/news/archive.json`, in
 the news workflow's cache) and measures the price reaction 1 and 5 sessions

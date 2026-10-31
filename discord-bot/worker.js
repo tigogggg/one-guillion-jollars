@@ -17,6 +17,12 @@
 
 import { chartResponse, portalResponse } from "./chart_page.js";
 import { portfolioCommand, portfolioRoute } from "./portfolio.js";
+import { ICONS } from "./icons.js";
+
+// Installable as an app: a service worker that only passes requests through (the pages need live data).
+const SERVICE_WORKER = `self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener("fetch", () => {});`;
 
 const PING = 1;
 const APPLICATION_COMMAND = 2;
@@ -89,15 +95,22 @@ const HELP = [
 export default {
   async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname;
+    if (request.method === "GET" && ICONS[path.slice(1)]) {
+      const bytes = Uint8Array.from(atob(ICONS[path.slice(1)]), (c) => c.charCodeAt(0));
+      return new Response(bytes, { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=604800" } });
+    }
+    if (request.method === "GET" && path === "/sw.js") {
+      return new Response(SERVICE_WORKER, { headers: { "Content-Type": "text/javascript", "Cache-Control": "no-cache" } });
+    }
     const chart = request.method === "GET" && path.match(/^\/g\/([0-9a-f]{24})$/);
     if (chart && env.CONFIG) {
       return chartResponse(env, chart[1], await getSchedule(env));
     }
-    const portal = request.method === "GET" && path.match(/^\/p\/([0-9a-f]{24})$/);
+    const portal = request.method === "GET" && path.match(/^\/p\/([0-9a-f]{24})(\/manifest\.webmanifest)?$/);
     if (portal && env.CONFIG) {
-      return portalResponse(env, portal[1], await getSchedule(env));
+      return portalResponse(env, portal[1], await getSchedule(env), !!portal[2]);
     }
-    const wallet = path.match(/^\/c\/([0-9a-f]{24})(\/data|\/history)?$/);
+    const wallet = path.match(/^\/c\/([0-9a-f]{24})(\/data|\/history|\/manifest\.webmanifest)?$/);
     if (wallet && env.CONFIG) {
       return portfolioRoute(request, env, wallet[1], wallet[2] || "");
     }

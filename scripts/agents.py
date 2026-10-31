@@ -1870,7 +1870,8 @@ def main() -> int:
             for cfg in active_agents(config):
                 for sym in (state["agents"].get(cfg["id"]) or {}).get("positions", {}):
                     holders.setdefault(sym, []).append(f"{cfg['emoji']} {cfg['name']}")
-            interactive.publish_section("market", opportunities.build(mkt, holders, earnings.next_earnings_many))
+            interactive.publish_section("market", {**opportunities.build(mkt, holders, earnings.next_earnings_many),
+                                                   "context": {k: v for k, v in mkt.context.items()}})
             import proposals  # imports this module
 
             props = proposals.build(config, state, mkt)

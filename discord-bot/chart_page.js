@@ -32,15 +32,23 @@ export async function chartResponse(env, id, schedule) {
   return html(chartPage(data, upcoming, latest && latest !== id ? latest : null));
 }
 
-export async function portalResponse(env, token, schedule) {
+export async function portalResponse(env, token, schedule, wantManifest = false) {
   const saved = await env.CONFIG.get("portal:token", "json");
   if (!saved || saved !== token) return html(page("Link inválido", "<p class='muted'>Este link do portal não é válido. Pede o link atual com /portal no Discord.</p>"), 404);
+  if (wantManifest) {
+    return new Response(JSON.stringify({
+      name: "One Guillion Jollars", short_name: "OGJ", start_url: `/p/${token}`, scope: `/p/${token}`, display: "standalone",
+      background_color: "#0b0820", theme_color: "#0b0820",
+      icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" }],
+    }), { headers: { "Content-Type": "application/manifest+json" } });
+  }
   // the latest league page; until there is one, the latest pre-training race
   const latest = (await env.CONFIG.get("chart-latest:liga", "json")) || (await env.CONFIG.get("chart-latest:pretreino", "json"));
   const data = (latest && (await env.CONFIG.get(`chart:${latest}`, "json"))) ||
     { title: "Liga dos agentes", subtitle: "ainda sem dados", updated: new Date().toISOString(), series: [], agents: [] };
   const [news, market, proposals, calendar] = await Promise.all(["news", "market", "proposals", "calendar"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar }));
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar,
+                                                                       manifest: `/p/${token}/manifest.webmanifest` }));
 }
 
 // ---------------------------------------------------------------------------
@@ -129,10 +137,10 @@ export function chartPage(data, upcoming, newer, extras = {}) {
     ? `<a class="banner" href="/g/${esc(newer)}">🔄 Há uma versão mais recente deste gráfico · abrir</a>`
     : "";
   const portal = !!extras.portal;
-  const tabs = [["corrida", "🏁 Corrida"], ["agentes", "🧾 Agentes"]]
+  const tabs = (portal ? [["hoje", "🏠 Hoje"]] : []).concat([["corrida", "🏁 Corrida"], ["agentes", "🧾 Agentes"]])
     .concat(portal ? [["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
     .concat([["agenda", "⏱️ Agenda"]])
-    .concat(portal ? [["carteira", "💼 A tua carteira"]] : []);
+    .concat(portal ? [["carteira", "💼 Carteira"], ["ajuda", "❓ Glossário"]] : []);
   const body = `
 ${banner}
 <header>
@@ -141,7 +149,8 @@ ${banner}
   <p class="muted small">Dados da liga de <span id="updated"></span> (hora de Lisboa) · simulação com dinheiro fictício e preços reais · ferramenta educativa, não é recomendação de compra</p>
 </header>
 <nav class="tabs" id="tabs">${tabs.map(([k, label], i) => `<button class="tab${i ? "" : " on"}" data-tab="${k}">${label}</button>`).join("")}</nav>
-<section class="race" id="race" data-tab="corrida">
+${portal ? `<section data-tab="hoje"><div id="today"></div></section>` : ""}
+<section class="race" id="race" data-tab="corrida"${portal ? " hidden" : ""}>
   <div class="marquee"><span>🏁 Grande Prémio dos Agentes 🏁</span></div>
   <div class="hud">
     <div>Dia <b id="race-date">—</b></div>
@@ -160,6 +169,7 @@ ${banner}
 <section id="agents-section" data-tab="agentes" hidden>
   <h2>🧾 Todos os agentes</h2>
   <div id="overview"></div>
+  <details class="panel" id="compare-box"><summary><b>⚖️ Comparar dois agentes</b></summary><div class="filters"><select id="cmp-a"></select><select id="cmp-b"></select></div><div id="cmp"></div></details>
   <h2>🔎 Ficha do agente</h2>
   <div id="chips" class="chips"></div>
   <div id="detail"></div>
@@ -172,6 +182,7 @@ ${portal ? `<section data-tab="propostas" hidden><div id="props"></div></section
   <div id="countdowns" class="grid"></div>
   <p class="muted small">Horários de Lisboa, os mesmos do /horario no Discord. Cada tarefa demora alguns minutos a chegar.</p>
 </section>
+${portal ? `<section data-tab="ajuda" hidden><div id="glossary"></div></section>` : ""}
 ${portal ? `<section data-tab="carteira" hidden>
   <h2>💼 A tua carteira</h2>
   <div class="panel prose">
@@ -191,7 +202,8 @@ const PROPOSALS = ${safeJson(extras.proposals || null)};
 const CALENDAR = ${safeJson(extras.calendar || null)};
 ${CLIENT}
 </script>`;
-  return page(portal ? "One Guillion Jollars" : data.title, body, `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  return page(portal ? "One Guillion Jollars" : data.title, body, `${extras.manifest ? `<link rel="manifest" href="${esc(extras.manifest)}"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png">` : ""}
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script src="${PLOTLY}"></script>`);
 }
@@ -245,6 +257,13 @@ h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem
 .score.Alta { background:var(--up); } .score.Média { background:var(--gold); } .score.Baixa { background:#ff9f43; } .score.Muito { background:var(--down); }
 .bar { height:6px; background:#0b0820; border-radius:3px; overflow:hidden; } .bar i { display:block; height:100%; background:var(--neon); }
 details summary { cursor:pointer; color:var(--neon); margin-top:6px; }
+abbr.g { text-decoration:underline dotted; text-underline-offset:3px; cursor:help; }
+#gpop { position:fixed; left:12px; right:12px; bottom:84px; z-index:30; background:#0b0820; color:var(--fg); border:2px solid var(--neon); border-radius:8px; padding:10px 12px; box-shadow:0 0 14px rgba(0,229,255,.4); max-width:560px; margin:0 auto; }
+@media (max-width:640px) {
+  .tabs { position:fixed; top:auto; bottom:0; left:0; right:0; z-index:20; margin:0; padding:6px 8px calc(6px + env(safe-area-inset-bottom));
+          background:rgba(11,8,32,.96); border-top:2px solid var(--accent); }
+  main { padding-bottom:84px; }
+}
 .lot { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:6px 0; }
 .lot summary { color:var(--fg); } .lot .trade { border-left:3px solid var(--line); padding:4px 10px; margin:8px 0 0 4px; }
 .lot .trade.b { border-left-color:var(--up); } .lot .trade.s { border-left-color:var(--down); } .why { color:var(--muted); margin:.3rem 0; white-space:normal; }
@@ -278,6 +297,8 @@ code { background:#1e1f22; padding:1px 4px; border-radius:4px; }
 // Runs in the browser. DATA and UPCOMING are defined just before.
 const CLIENT = String.raw`
 const $ = (id) => document.getElementById(id);
+const store = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 // Discord-style markdown from the bot's texts: **bold**, *italic*, _italic_, \`code\`, new lines.
 const md = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\x60(.+?)\x60/g, "<code>$1</code>")
@@ -345,7 +366,36 @@ $("chips").innerHTML = agents.map((a, i) =>
 $("chips").addEventListener("click", (e) => { const b = e.target.closest(".chip"); if (b) show(+b.dataset.i, true); });
 if (window.Plotly) $("chart").on("plotly_click", (ev) => { const a = byName[ev.points[0].data.name]; if (a) show(agents.indexOf(a), true); });
 
-const tile = (k, v, s = "", c = "") => '<div class="tile"><div class="k">' + k + '</div><div class="v ' + c + '">' + v + '</div>' + (s ? '<div class="s">' + s + '</div>' : "") + '</div>';
+const GLOSS = {
+  "Stage 2": "Fase de tendência de alta: preço acima da média de 50 dias, esta acima da de 200, e a de 200 a subir.",
+  "VCP": "Contração de volatilidade (Minervini): a ação sobe, corrige cada vez menos e fica apertada perto de um máximo (o pivot).",
+  "Pivot": "O preço que, se for ultrapassado com volume, confirma o rompimento de um padrão.",
+  "Stop": "Preço de saída de proteção: se a ação lá chegar, vende-se para limitar a perda.",
+  "Alvo": "Preço de saída com lucro definido na compra.",
+  "R": "Uma unidade de risco: a distância entre a entrada e o stop. Ganhar 2R é ganhar o dobro do que se arriscou.",
+  "Risco/retorno": "Quanto se pode ganhar até ao alvo por cada euro arriscado até ao stop.",
+  "ATR": "Variação diária média do preço (Average True Range, 14 sessões): mede quanto a ação costuma mexer num dia.",
+  "Sharpe": "Retorno por unidade de risco (volatilidade), anualizado. Acima de 1 é bom; o S&P 500 anda perto de 0,6-0,8 a longo prazo.",
+  "Queda máxima": "A maior descida desde um máximo do património até ao fundo seguinte (drawdown).",
+  "Score de segurança": "0-100: tendência, volatilidade, distância ao máximo, liquidez, qualidade, resultados, notícias e mercado. Mede quão ordenada e suportada está a ação, não quanto vai subir.",
+  "Score técnico": "0-60: a parte técnica do score de segurança (tendência, volatilidade e distância ao máximo).",
+  "Score de tendência": "0-100: 70 pela estrutura da tendência e 30 pela força relativa face às outras ações.",
+  "Zona de mercado": "Leitura da breadth: Alta, Neutra, Cautelosa ou Queda, pela % de ações do S&P 500 em Stage 2.",
+  "Breadth": "Amplitude do mercado: quantas ações estão a subir. Um mercado que sobe só com poucas ações é frágil.",
+  "Monte Carlo": "Milhares de anos alternativos montados com blocos aleatórios dos retornos da própria estratégia, para ver o pior caso plausível.",
+  "Exame": "O último ano do pré-treino, que a estratégia não viu ao escolher os parâmetros: é o teste justo.",
+  "Fantasma": "Cópia em papel de um agente com parâmetros ligeiramente diferentes; se for claramente melhor durante 20+ sessões, passa a ser o agente.",
+  "Peso": "Quanto vale o voto de um agente nas propostas, pelo seu historial (exame, zona de mercado, resultados ao vivo, risco de falência).",
+  "Confiança": "A parte do peso de todos os agentes que está a propor esta compra.",
+  "VIX": "Índice do medo: a volatilidade que o mercado de opções espera para o S&P 500. Acima de 30 é stress.",
+  "Incerteza política": "Índice de incerteza da política económica dos EUA (EPU), baseado nas notícias, em percentil dos últimos 3 anos.",
+  "Spread de crédito": "Juro extra que as empresas de maior risco pagam: sobe em stress financeiro.",
+  "UCITS": "ETFs domiciliados na Europa, que um investidor em Portugal pode comprar.",
+  "Rompimento": "Quando o preço ultrapassa um máximo recente com volume forte.",
+  "Mais-valias": "Ganho realizado numa venda; em Portugal paga 28% de imposto.",
+  "Rentabilidade": "Ganho ou perda face ao dinheiro investido, em %.",
+};
+const tile = (k, v, s = "", c = "") => '<div class="tile"><div class="k">' + (GLOSS[k] ? '<abbr class="g" title="' + esc(GLOSS[k]) + '">' + k + '</abbr>' : k) + '</div><div class="v ' + c + '">' + v + '</div>' + (s ? '<div class="s">' + s + '</div>' : "") + '</div>';
 const table = (head, rows, numeric = []) => rows.length
   ? '<div class="scroll"><table><tr>' + head.map((h, i) => '<th class="' + (numeric.includes(i) ? "num" : "") + '">' + h + '</th>').join("") + '</tr>' +
     rows.map((r) => '<tr>' + r.map((c, i) => '<td class="' + (numeric.includes(i) ? "num" : "") + '">' + c + '</td>').join("") + '</tr>').join("") + '</table></div>'
@@ -452,7 +502,98 @@ function openTab(name) {
   try { history.replaceState(null, "", "#" + name); } catch (e) {}
 }
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
-if (location.hash && document.querySelector('#tabs .tab[data-tab="' + location.hash.slice(1) + '"]')) openTab(location.hash.slice(1));
+openTab(location.hash && document.querySelector('#tabs .tab[data-tab="' + location.hash.slice(1) + '"]') ? location.hash.slice(1)
+  : document.querySelector("#tabs .tab").dataset.tab);
+document.addEventListener("click", (e) => {  // glossary terms: tap to read (phones have no hover)
+  const g = e.target.closest("abbr.g"); if (!g) return;
+  const box = $("gpop") || document.body.appendChild(Object.assign(document.createElement("div"), { id: "gpop" }));
+  box.textContent = g.title; box.hidden = false; clearTimeout(box.t); box.t = setTimeout(() => { box.hidden = true; }, 6000);
+});
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+// ---- glossary ----
+(function glossary() {
+  if (!$("glossary")) return;
+  $("glossary").innerHTML = '<h2>❓ Glossário</h2><p class="muted small">Os termos que aparecem no portal. Nas caixas, os termos sublinhados abrem esta explicação ao tocar.</p>' +
+    '<div class="cards">' + Object.entries(GLOSS).map(([k, v]) => '<div class="opp"><b>' + esc(k) + '</b><p class="small">' + esc(v) + '</p></div>').join("") + '</div>';
+})();
+
+// ---- compare two agents ----
+(function compare() {
+  if (!$("cmp-a") || agents.length < 2) { if ($("compare-box")) $("compare-box").hidden = true; return; }
+  const opts = agents.map((a, i) => '<option value="' + i + '">' + esc(a.emoji + " " + a.name) + '</option>').join("");
+  $("cmp-a").innerHTML = opts; $("cmp-b").innerHTML = opts; $("cmp-b").value = 1;
+  const live = !agents[0].backtest;
+  const rows = live
+    ? [["Rentabilidade", (a) => fmtPct(a.return_pct), (a) => a.return_pct], ["Hoje", (a) => fmtPct(a.day_pct), (a) => a.day_pct], ["Pontos", (a) => fmtNum(a.points, 0), (a) => a.points],
+       ["Queda máxima", (a) => fmtPct(-a.max_dd_pct), (a) => -a.max_dd_pct], ["Sharpe", (a) => fmtNum(a.sharpe), (a) => a.sharpe], ["Posições", (a) => a.positions.length, null],
+       ["Investido", (a) => fmtNum(a.invested_pct, 0) + "%", null], ["Vendas com lucro", (a) => a.sells ? fmtNum(a.wins / a.sells * 100, 0) + "%" : "—", (a) => a.sells ? a.wins / a.sells : null],
+       ["Estratégia", (a) => esc(a.strategy.label), null]]
+    : [["Rentabilidade", (a) => fmtPct(a.backtest.return_pct, 0), (a) => a.backtest.return_pct], ["Queda máxima", (a) => fmtPct(-a.backtest.max_dd_pct, 0), (a) => -a.backtest.max_dd_pct],
+       ["Sharpe", (a) => fmtNum(a.backtest.sharpe), (a) => a.backtest.sharpe], ["Operações", (a) => a.backtest.trades ?? "—", null],
+       ["Pior 5% (Monte Carlo)", (a) => a.backtest.monte_carlo?.p5 != null ? fmtPct(a.backtest.monte_carlo.p5 * 100) : "—", (a) => a.backtest.monte_carlo?.p5], ["Estratégia", (a) => esc(a.strategy.label), null]];
+  function draw() {
+    const A = agents[+$("cmp-a").value], B = agents[+$("cmp-b").value];
+    $("cmp").innerHTML = table(["", esc(A.emoji + " " + A.name), esc(B.emoji + " " + B.name)], rows.map(([label, f, v]) => {
+      const va = v ? v(A) : null, vb = v ? v(B) : null;
+      const win = va != null && vb != null && va !== vb ? (va > vb ? 1 : 2) : 0;
+      return [label, (win === 1 ? "🏆 " : "") + f(A), (win === 2 ? "🏆 " : "") + f(B)];
+    })) + '<div id="cmp-chart" style="height:280px"></div>';
+    const sa = (DATA.series || []).find((x) => x.name === A.name), sb = (DATA.series || []).find((x) => x.name === B.name);
+    if (window.Plotly && sa && sb) Plotly.newPlot("cmp-chart", [sa, sb].map((x, i) => ({ x: x.x, y: x.y, name: x.name, type: "scatter", mode: "lines", line: { color: i ? "#ffe14d" : "#00e5ff", width: 2 } })),
+      { paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff" }, margin: { l: 50, r: 10, t: 10, b: 30 }, hovermode: "x unified",
+        yaxis: { ticksuffix: "%", gridcolor: "#2e2763" }, xaxis: { gridcolor: "#2e2763" }, legend: { orientation: "h", y: -0.2 } }, { responsive: true, displaylogo: false });
+  }
+  ["cmp-a", "cmp-b"].forEach((id) => $(id).addEventListener("input", draw));
+  $("compare-box").addEventListener("toggle", draw, { once: true });
+})();
+
+// ---- today ----
+(function today() {
+  if (!$("today")) return;
+  const M = MARKET || {}, P = PROPOSALS, c = M.context || {};
+  const zone = M.zone || P?.zone || "—", colour = { Alta: "var(--up)", Neutra: "var(--gold)", Cautelosa: "#ff9f43", Queda: "var(--down)" }[zone] || "var(--muted)";
+  const ctx = [c.vix != null ? ["VIX", fmtNum(c.vix, 0), c.vix > 30 ? "down" : c.vix < 18 ? "up" : ""] : null,
+    c.epu_pct != null ? ["Incerteza política", "percentil " + fmtNum(c.epu_pct * 100, 0), c.epu_pct > 0.8 ? "down" : ""] : null,
+    c.hy != null ? ["Spread de crédito", fmtNum(c.hy, 1) + "%", c.hy > 5 ? "down" : ""] : null,
+    c.usd_chg != null ? ["Dólar vs euro (3 meses)", fmtPct(-c.usd_chg * 100), c.usd_chg > 0.03 ? "down" : ""] : null,
+    c.spy_trend != null ? ["S&P 500 vs média 200d", fmtPct(c.spy_trend * 100), cls(c.spy_trend)] : null].filter(Boolean);
+  const leaders = agents.slice().sort((a, b) => headline(b) - headline(a)).slice(0, 3);
+  const news = ((NEWS || {}).items || []).filter((i) => (i.importancia || 0) >= 2).slice(0, 3);
+  $("today").innerHTML = '<h2>🏠 Hoje</h2>' +
+    '<div class="panel"><div class="top" style="display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center"><span class="pixel" style="color:' + colour + ';font-size:.8rem">MERCADO: ' + esc(zone.toUpperCase()) + '</span>' +
+    (M.stage2_pct != null ? '<span class="muted small">' + fmtNum(M.stage2_pct, 0) + '% das ações do S&P 500 em <abbr class="g" title="' + esc(GLOSS["Stage 2"]) + '">Stage 2</abbr></span>' : '') + '</div>' +
+    (M.stage2_pct != null ? '<div class="bar" style="margin:8px 0"><i style="width:' + M.stage2_pct + '%;background:' + colour + '"></i></div>' : '') +
+    (ctx.length ? '<div class="grid">' + ctx.map(([k, v, cl]) => tile(k, v, "", cl)).join("") + '</div>' : '') + '</div>' +
+    '<h2>🧠 Melhores propostas</h2>' + (P && P.buys.length ? '<div class="cards">' + P.buys.slice(0, 3).map((b) => '<div class="opp"><div class="top"><span class="sym">' + esc(b.symbol) +
+      '</span><span class="muted">' + esc(b.name || "") + '</span>' + (b.safety != null ? '<span class="score ' + esc((b.level || "").split(" ")[0]) + '">🛡️ ' + b.safety + '</span>' : '') + '</div><p class="small">Confiança ' +
+      fmtNum(b.confidence, 0) + '% · entrada até ' + fmtNum(b.plan.entry_max) + ' · stop ' + fmtNum(b.plan.stop) + ' · alvo ' + fmtNum(b.plan.target) + ' (' + fmtNum(b.plan.rr, 1) + 'R)</p></div>').join("") +
+      '</div><p><a href="#propostas" class="go" data-t="propostas">Ver todas as propostas →</a></p>' : '<p class="muted">Sem propostas hoje.</p>') +
+    '<h2>💼 A tua carteira</h2><div id="today-wallet"><p class="muted">Abre a tua carteira uma vez neste aparelho (botão "A minha carteira" no Discord ou <code>/carteira</code>) e o resumo aparece aqui.</p></div>' +
+    '<h2>📰 Notícias do dia</h2><div class="news">' + (news.map((i) => '<article class="' + (i.sentimento > 0 ? "pos" : i.sentimento < 0 ? "neg" : "") + '"><b>' + esc(i.symbol) + '</b> ' +
+      esc(i.resumo || i.title) + '</article>').join("") || '<p class="muted">Sem notícias importantes.</p>') + '</div><p><a href="#noticias" class="go" data-t="noticias">Ver as notícias →</a></p>' +
+    '<h2>🏁 Liga</h2><div class="grid">' + leaders.map((a, i) => tile(["🥇", "🥈", "🥉"][i] + " " + esc(a.emoji + " " + a.name), fmtPct(headline(a)), esc(a.strategy.label), cls(headline(a)))).join("") + '</div>' +
+    '<h2>⏱️ A seguir</h2><div class="grid">' + UPCOMING.slice(0, 3).map((j) => tile(esc(j.label), lisbon(j.at, { weekday: "short", hour: "2-digit", minute: "2-digit" }))).join("") + '</div>';
+  $("today").addEventListener("click", (e) => { const a = e.target.closest(".go"); if (a) { e.preventDefault(); openTab(a.dataset.t); window.scrollTo(0, 0); } });
+  const path = store.get("carteira", null);
+  if (path && /^\/c\/[0-9a-f]{24}$/.test(path)) fetch(path + "/data", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((w) => {
+    if (!w) return;
+    let value = 0, cost = 0, day = 0;
+    const pos = {};
+    for (const t of w.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq)) {
+      const p = pos[t.symbol] ||= { qty: 0, cost: 0, cur: t.currency };
+      if (t.side === "buy") { p.qty += t.qty; p.cost += t.qty * t.price + t.fee; } else { const avg = p.qty ? p.cost / p.qty : 0; p.cost -= avg * t.qty; p.qty -= t.qty; }
+    }
+    for (const [sym, p] of Object.entries(pos)) { const q = w.quotes[sym], fx = w.fx[p.cur]; if (!q || fx == null || p.qty <= 1e-9) continue;
+      value += p.qty * q.price * fx; cost += p.cost * fx; day += p.qty * (q.price - (q.prev ?? q.price)) * fx; }
+    const sells = Object.entries(w.verdicts || {}).filter(([k, v]) => k !== "rules" && v.verdict === "Vender").map(([k]) => k);
+    const follows = (w.follows || []).map((f) => esc(f.symbol) + (f.change != null ? ' <span class="' + cls(f.change) + '">' + fmtPct(f.change * 100) + '</span>' : '')).join(" · ");
+    $("today-wallet").innerHTML = '<div class="grid">' + tile("Valor", fmtEur(value)) + tile("Ganho", fmtEur(value - cost), fmtPct(cost ? (value / cost - 1) * 100 : null), cls(value - cost)) +
+      tile("Hoje", fmtEur(day), "", cls(day)) + tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up") + '</div>' +
+      (follows ? '<p class="small">👀 A seguir: ' + follows + '</p>' : '') + '<p><a href="' + esc(path) + '">Abrir a minha carteira →</a></p>';
+  }).catch(() => {});
+})();
+
 
 // ---- overview of all agents ----
 (function overview() {
@@ -572,8 +713,6 @@ if (location.hash && document.querySelector('#tabs .tab[data-tab="' + location.h
 })();
 
 // ---- proposals ----
-const store = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
-                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
 (function props() {
   if (!$("props")) return;
   const P = PROPOSALS;
