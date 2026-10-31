@@ -99,12 +99,14 @@ def post_message(
     thread_id: str | None = None,
     headers: dict | None = None,
     kind: str | None = None,
+    reply_to: str | None = None,
 ) -> dict | None:
     """Post (or, with method=PATCH and an interaction url, edit) one message.
 
     Defaults to the channel webhook; `thread_id` posts inside a thread of that
     channel, `url` + `headers` send elsewhere (e.g. a DM with the bot token).
-    `kind` (set by route()) also copies the post to the mirror server.
+    `kind` (set by route()) also copies the post to the mirror server, and
+    `reply_to` answers an earlier message (a plain post if it is not there).
     Returns Discord's message object ({} on a dry run), or None on failure.
     """
     files = files or {}
@@ -135,6 +137,8 @@ def post_message(
     payload = {"embeds": embeds[:10], "allowed_mentions": {"parse": []}}
     if content is not None:
         payload["content"] = content
+    if reply_to:
+        payload["message_reference"] = {"message_id": reply_to, "fail_if_not_exists": False}
     if files:
         payload["attachments"] = [{"id": i, "filename": name} for i, name in enumerate(files)]
         multipart = {f"files[{i}]": (name, data, "image/png") for i, (name, data) in enumerate(files.items())}
