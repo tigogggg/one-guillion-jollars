@@ -1,8 +1,8 @@
 name: Bot do Discord
 run-name: "/${{ inputs.command }} ${{ inputs.arg }}"
 
-# Started by the Cloudflare Worker (discord-bot/worker.js) for /acao, /etf and
-# /mercado; edits the bot's "a pensar…" reply with the answer.
+# Started by the Cloudflare Worker (discord-bot/worker.js) for /acao, /etf,
+# /mercado and /limites; edits the bot's "a pensar…" reply with the answer.
 on:
   workflow_dispatch:
     inputs:
@@ -21,6 +21,11 @@ on:
         required: true
         type: string
 
+permissions:
+  actions: read  # /limites: runs and minutes
+  checks: read  # /limites: what each run reported
+  contents: read
+
 jobs:
   answer:
     runs-on: ubuntu-latest
@@ -31,8 +36,14 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync
+      - name: Instalar o Claude Code (só /limites, para testar o Claude)
+        if: ${{ inputs.command == 'limites' }}
+        run: npm install -g @anthropic-ai/claude-code
       - name: Responder no Discord
         env:
+          GITHUB_TOKEN: ${{ inputs.command == 'limites' && github.token || '' }}
+          FMP_API_KEY: ${{ inputs.command == 'limites' && secrets.FMP_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.command == 'limites' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           COMMAND: ${{ inputs.command }}
           ARG: ${{ inputs.arg }}
           APPLICATION_ID: ${{ inputs.application_id }}

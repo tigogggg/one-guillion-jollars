@@ -1,6 +1,6 @@
 // Discord interactions endpoint for the CoutoTrading bot (Cloudflare Worker).
 //
-// /posicao and /ajuda are answered here, instantly. /acao, /etf and /mercado
+// /posicao and /ajuda are answered here, instantly. /acao, /etf, /mercado and /limites
 // need market data: the Worker replies "a analisar…" and starts the
 // discord-bot.yml GitHub Actions workflow, which edits that reply with the
 // result (1-2 minutes).
@@ -22,7 +22,7 @@ const CHANNEL_MESSAGE = 4;
 const DEFERRED_CHANNEL_MESSAGE = 5;
 const EPHEMERAL = 64;
 
-const WORKFLOW_COMMANDS = new Set(["acao", "etf", "mercado"]);
+const WORKFLOW_COMMANDS = new Set(["acao", "etf", "mercado", "limites"]);
 
 const TIMEZONE = "Europe/Lisbon";
 const DEFAULT_SCHEDULE = {
@@ -66,6 +66,7 @@ const HELP = [
   "• `/acao NVDA` · tendência, qualidade, pivot e stop de uma ação dos EUA",
   "• `/etf VWCE` · tendência de um ETF UCITS",
   "• `/mercado` · leitura do mercado agora",
+  "• `/limites` · estado da leitura de notícias e das fontes de dados, e limites gastos (Claude, FMP, GitHub)",
   "• `/posicao capital entrada stop` · quantas ações comprar (ex.: `/posicao 10000 35.84 34.14`)",
   "• `/agentes` · liga dos agentes simulados (ou `/agentes nome` para ver um agente)",
   "• `/estrategia nome` · como pensa um agente: regras, parâmetros, pré-treino e resultados",
@@ -74,7 +75,7 @@ const HELP = [
   "• `/horario` e `/agente` · horários e gestão dos agentes (só administradores)",
   "• `/ajuda` · esta mensagem",
   "",
-  "`/acao`, `/etf` e `/mercado` demoram 1-2 minutos: o bot mostra \"a pensar…\" e depois responde.",
+  "`/acao`, `/etf`, `/mercado` e `/limites` demoram 1-2 minutos: o bot mostra \"a pensar…\" e depois responde.",
   "",
   "_Ferramenta educativa. Nada aqui é recomendação de compra; as decisões são tuas._",
 ].join("\n");

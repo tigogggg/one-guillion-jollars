@@ -237,6 +237,9 @@ def main() -> int:
         print("[aviso] FMP_API_KEY não definido; secção VCP omitida.", file=sys.stderr)
 
     if vcp:
+        calls = vcp.get("metadata", {}).get("api_stats", {}).get("api_calls_made")
+        if calls is not None and os.environ.get("GITHUB_ACTIONS"):  # read back by /limites
+            print(f"::notice title=FMP::{calls} chamadas à API no ecrã VCP (limite do plano gratuito: 250/dia)")
         # The intraday alerts read today's VCP pivots from here.
         WATCHLIST_DIR.mkdir(parents=True, exist_ok=True)
         (WATCHLIST_DIR / "vcp-latest.json").write_text(json.dumps(vcp))

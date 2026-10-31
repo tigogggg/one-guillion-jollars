@@ -199,6 +199,10 @@ def main() -> int:
             embeds, files = etf_card(arg)
         elif command == "mercado":
             embeds, files = market_card()
+        elif command == "limites":
+            import limits  # GitHub API and live source tests; only for this command
+
+            embeds, files = [limits.build_card()], {}
         else:
             embeds, files = [embed("❓ Comando desconhecido", f"/{command}", color=RED)], {}
     except Exception as e:  # always answer, or the reply stays at "a analisar…"

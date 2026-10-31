@@ -69,13 +69,22 @@ Tests: `uv run python -m pytest tests`.
 
 ## Discord bot (slash commands)
 
-`/acao TICKER`, `/etf TICKER`, `/mercado`, `/posicao capital entrada stop
-[risco] [max_posicao]` and `/ajuda`. Discord calls a Cloudflare Worker
+`/acao TICKER`, `/etf TICKER`, `/mercado`, `/limites`, `/posicao capital
+entrada stop [risco] [max_posicao]` and `/ajuda`. Discord calls a Cloudflare Worker
 (`discord-bot/worker.js`), which answers `/posicao` and `/ajuda` itself and
 starts `.github/workflows/discord-bot.yml` for the others; that workflow runs
 `scripts/bot_command.py` and edits the reply with a card and chart (1-2 min).
 The interaction token passed to the workflow is visible in the Actions run and
 expires after 15 minutes.
+
+`/limites` (`scripts/limits.py`) shows how the news reading and the stock data
+are doing: from the GitHub API, the last 7 days of news runs (headlines per
+source, how many Claude read versus the FinBERT fallback, Claude failures, read
+back from each run's annotations), the FMP calls of the last tips run (free
+tier 250/day) and the Actions minutes this month (private repo, 2000 free);
+plus one live test each of Claude (a tiny request on the subscription), the
+headline search, FMP (one call), Yahoo Finance and the breadth CSVs. Claude Max
+does not expose its remaining quota, so the live request is the check.
 
 Setup, once:
 

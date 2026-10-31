@@ -66,6 +66,7 @@ COMMANDS = [
         "options": [{"type": STRING, "name": "ticker", "description": "Ex.: VWCE, SXR8, VVSM", "required": True}],
     },
     {"name": "mercado", "description": "Leitura do mercado agora: breadth, exposição sugerida e setores"},
+    {"name": "limites", "description": "Estado da leitura de notícias e das fontes de dados das ações, e limites gastos"},
     {
         "name": "posicao",
         "description": "Quantas ações comprar para o risco que escolheres",
@@ -428,11 +429,12 @@ def welcome_card() -> dict:
                 "`/acao NVDA` · tendência, qualidade, pivot, stop e gráfico de uma ação dos EUA\n"
                 "`/etf VWCE` · tendência e gráfico de um ETF UCITS\n"
                 "`/mercado` · leitura do mercado agora\n"
+                "`/limites` · estado das notícias (Claude) e das fontes de dados, e limites gastos\n"
                 "`/posicao capital entrada stop` · quantas ações comprar (ex.: 10000, 35.84, 34.14)\n"                "`/agentes` · liga dos agentes, ou `/agentes nome` para ver um agente\n"
                 "`/estrategia nome` · como pensa cada agente (regras, parâmetros, pré-treino)\n"
                 "`/seguir adicionar NVDA` · lista pessoal com avisos por mensagem privada\n"
                 "`/ajuda` · resumo destes comandos (só tu vês)\n"
-                "`/acao`, `/etf` e `/mercado` demoram 1-2 minutos: o bot mostra \"a pensar…\" e depois responde.",
+                "`/acao`, `/etf`, `/mercado` e `/limites` demoram 1-2 minutos: o bot mostra \"a pensar…\" e depois responde.",
             ),
             (
                 "📏 Como ler os números",
