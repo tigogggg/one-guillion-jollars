@@ -42,6 +42,7 @@ import discord_bot
 import earnings
 import strategy_docs
 from charts import lines_chart, returns_chart
+from references import reference_lines
 from discord_daily import WATCHLIST_DIR
 from discord_post import BLUE, GREEN, RED, embed, route, send
 from rankings import (
@@ -1128,7 +1129,7 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
         cfg["name"]: [(h["date"], (h["equity"] / h["deposits"] - 1) * 100) for h in port["history"]]
         for cfg, port, _ in rows
     }
-    files = {"agentes.png": lines_chart(series, "Rentabilidade desde o início")}
+    files = {"agentes.png": lines_chart(series, "Rentabilidade desde o início", reference_lines(series))}
     leader = rows[0][2] / rows[0][1]["deposits"] - 1 if rows else 0
     card = embed(
         title,

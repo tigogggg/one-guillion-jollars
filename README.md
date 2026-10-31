@@ -280,3 +280,13 @@ better Sharpe, 3) a live return no worse than the backtest's Monte Carlo
 worst-1-in-20 year (prorated), 4) 30 closed trades (not for low-turnover
 agents) and 5) a live max drawdown of 25% or less. Agents passing all checks
 are listed as ready for phase 2: small real-money ideas, human decisions.
+
+## Inflation and deposit lines on the return charts
+
+`scripts/references.py` adds two grey reference lines to the league and
+pre-training charts once they span 180 days or more: **Inflação** (euro area
+HICP from Eurostat's `prc_hicp_minr`, held flat until the next month is
+published) and **Depósito** (money at the ECB deposit facility rate, compounded
+daily and floored at 0%). An agent below Depósito did not earn its risk; one
+below Inflação lost purchasing power. The lines are not scored, and a chart
+is drawn without them when either source is unreachable.

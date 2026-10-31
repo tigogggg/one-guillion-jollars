@@ -121,8 +121,15 @@ def returns_chart(rows: list[tuple[str, float]], title: str) -> bytes:
     return _png(fig)
 
 
-def lines_chart(series: dict[str, list[tuple]], title: str) -> bytes:
-    """One line per name of (date, % value), with a zero line and end labels."""
+REFERENCE_STYLES = [("--", NEUTRAL), (":", "#b5bac1")]
+
+
+def lines_chart(series: dict[str, list[tuple]], title: str, references: dict[str, list[tuple]] | None = None) -> bytes:
+    """One line per name of (date, % value), with a zero line and end labels.
+
+    references (e.g. inflation, deposit) are drawn as thin grey dashed lines so
+    they read as yardsticks, not as competitors.
+    """
     palette = ["#4cc0a8", "#e2b84a", "#5865f2", "#ed4245", "#57f287", "#eb459e", "#f0b232", "#9b84ee", "#3ba5d8", "#dbdee1"]
     fig = _figure()
     ax = fig.add_subplot(1, 1, 1)
@@ -136,6 +143,14 @@ def lines_chart(series: dict[str, list[tuple]], title: str) -> bytes:
         values = [v for _, v in points]
         color = palette[i % len(palette)]
         ax.plot(dates, values, color=color, linewidth=1.4, marker="o" if len(points) < 3 else None, markersize=3)
+        ends.append([values[-1], values[-1], dates[-1], f"{name} {values[-1]:+.1f}%", color])
+    for i, (name, points) in enumerate((references or {}).items()):
+        if not points:
+            continue
+        dates = pd.to_datetime([d for d, _ in points])
+        values = [v for _, v in points]
+        style, color = REFERENCE_STYLES[i % len(REFERENCE_STYLES)]
+        ax.plot(dates, values, color=color, linewidth=1.0, linestyle=style)
         ends.append([values[-1], values[-1], dates[-1], f"{name} {values[-1]:+.1f}%", color])
     # End labels, nudged apart so lines that finish close together stay readable.
     low, high = ax.get_ylim()

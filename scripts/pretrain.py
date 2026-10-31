@@ -47,6 +47,7 @@ from agents import (
     zone_for,
 )
 from charts import lines_chart
+from references import reference_lines
 from discord_post import BLUE, embed, route, send
 from rankings import UCITS_ETFS, download_history, load_constituents
 
@@ -534,7 +535,8 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
     series = {by_strategy.get(s, {"name": s})["name"]: r["curve"] for s, r in results["strategies"].items() if "curve" in r}
     first = next(iter(series.values()), [])
     years = round((date.fromisoformat(first[-1][0]) - date.fromisoformat(first[0][0])).days / 365.25) if first else YEARS
-    files = {"pretreino.png": lines_chart(series, f"Pré-treino: rentabilidade em {years:g} anos (parâmetros escolhidos)")}
+    files = {"pretreino.png": lines_chart(series, f"Pré-treino: rentabilidade em {years:g} anos (parâmetros escolhidos)",
+                                          reference_lines(series))}
     card = embed(f"🧠 Pré-treino dos agentes: {years:g} anos, dia a dia", "\n".join(lines), color=BLUE,
                  fields=fields, image="pretreino.png",
                  footer="Backtest: resultados passados simulados, não garantem resultados futuros.")
