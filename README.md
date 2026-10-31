@@ -252,3 +252,22 @@ them). Without that file everything posts to the webhook channel as before.
   membership; delisted stocks only when Yahoo still has prices), uses the same
   `agents.decide()` as the live league, and accepts parameters only if they
   beat the originals in 3 of every 4 training years and then on the exam year.
+
+## Training v4: 20 years, crash tests, Monte Carlo, regime-aware Maestro
+
+- `pretrain.py` replays 20 years by default (`--anos`), with the last year as
+  the exam. UCITS ETFs that did not exist yet are extended backwards with US
+  proxies (SPY, QQQ, sector SPDRs, …) converted to EUR (`ETF_PROXIES`).
+- A candidate must beat the original parameters in 3 of every 4 training
+  years, must not go bankrupt or fall more than 5 points deeper than the
+  original in the 2008, 2011, 2020 and 2022 crises, must hold up on the exam,
+  and its Monte Carlo risk of ruin (1000 alternative years from one-month
+  blocks of its daily returns) must not be clearly higher.
+- `pretrain.yml` trains each strategy on its own runner in parallel
+  (`--saida`) and a final job merges, applies and reports (`--juntar`).
+- Results per market zone (`by_zone`) feed the Maestro, which now copies the
+  agents that best beat the S&P 500 in the current zone (live record once it
+  has 15 days there, pre-training until then).
+- The 2000 crash is not covered (it would need data from 1999 and more memory),
+  and most companies that failed in 2008 have no prices on Yahoo, so crisis
+  results remain somewhat optimistic; the report shows the coverage.

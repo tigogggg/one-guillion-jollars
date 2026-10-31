@@ -26,7 +26,7 @@ PARAMS = {
     "limiar": "força mínima das notícias (soma de sentimento × importância)",
     "min_votos": "número mínimo de agentes que têm de concordar",
     "lideres": "quantos agentes líderes copia",
-    "janela": "sessões usadas para escolher os líderes",
+    "janela": "sessões de resultados recentes, usadas se ainda não houver registo na zona",
     "ignora_resultados": "não evita resultados trimestrais próximos",
     "ignora_risco": "não aplica as regras de risco comuns",
     "ignora_noticias": "não evita ações com notícias negativas",
@@ -121,9 +121,9 @@ DOCS = {
         "1/{n} do património por posição.",
     ),
     "maestro": (
-        "Coordenador central: segue quem está a ganhar.",
-        "A cada {cada} sessões copia a carteira combinada dos {lideres} agentes com melhor resultado nas últimas {janela} sessões (só os que estão a ganhar).",
-        "Vende o que sai das carteiras dos líderes; fica em dinheiro se nenhum agente estiver a ganhar.",
+        "Coordenador central por regime: em cada tipo de mercado segue os agentes que melhor se portam nele.",
+        "A cada {cada} sessões copia a carteira combinada dos {lideres} agentes que mais batem o S&P 500 na zona atual do mercado (alta, neutra, cautelosa ou queda): pelo registo ao vivo nessa zona (15+ dias) ou, até lá, pelo pré-treino.",
+        "Vende o que sai das carteiras dos líderes; fica em dinheiro se nenhum agente bater o S&P 500 nesta zona.",
         "Os pesos das posições dos líderes, até {n} ações.",
     ),
     "kamikaze": (

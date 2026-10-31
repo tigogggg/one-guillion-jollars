@@ -1,8 +1,10 @@
 name: Pré-treino dos agentes
 
-# Walk-forward backtest of every strategy on the last 5 years (the last one is
-# the exam); with "aplicar", agents of strategies whose tuned parameters passed
-# the exam get them. Started by the Worker on the first weekday of each month.
+# Walk-forward backtest of every strategy on the last 20 years (the last one is
+# the exam), with crash tests and Monte Carlo. Each strategy trains on its own
+# machine in parallel; a final job merges the results, applies them (with
+# "aplicar") and posts the report. Started by the Worker on the first weekday
+# of each month, or by hand.
 on:
   workflow_dispatch:
     inputs:
@@ -17,7 +19,7 @@ on:
       anos:
         description: "Anos de histórico a reproduzir"
         required: false
-        default: "5"
+        default: "20"
 
 permissions:
   contents: write
@@ -27,25 +29,67 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  pretrain:
+  plan:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    outputs:
+      strategies: ${{ steps.list.outputs.strategies }}
+    steps:
+      - id: list
+        env:
+          ESTRATEGIAS: ${{ inputs.estrategias }}
+        run: |
+          all="indexador guardiao rotador foguetao cacador sniper campeao pescador deriva kamikaze"
+          chosen="${ESTRATEGIAS:-$all}"
+          json=$(echo "$chosen indexador" | tr ', ' '\n\n' | sed '/^$/d' | sort -u | jq -R . | jq -sc .)
+          echo "strategies=$json" >> "$GITHUB_OUTPUT"
+
+  train:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        strategy: ${{ fromJson(needs.plan.outputs.strategies) }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: uv sync
-      - name: Pré-treinar
+      - name: Treinar ${{ matrix.strategy }}
+        env:
+          STRATEGY: ${{ matrix.strategy }}
+          ANOS: ${{ inputs.anos || '20' }}
+        run: uv run python scripts/pretrain.py --estrategias "$STRATEGY" --anos "$ANOS" --saida "out/$STRATEGY.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pretrain-${{ matrix.strategy }}
+          path: out/
+          retention-days: 3
+
+  merge:
+    needs: train
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pretrain-*
+          path: out
+      - name: Juntar, aplicar e publicar
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           APPLY: ${{ inputs.aplicar && '--apply' || '' }}
-          ESTRATEGIAS: ${{ inputs.estrategias }}
-          ANOS: ${{ inputs.anos || '5' }}
-        run: uv run python scripts/pretrain.py $APPLY --estrategias "$ESTRATEGIAS" --anos "$ANOS"
+        run: uv run python scripts/pretrain.py --juntar out $APPLY
       - name: Guardar os resultados e os parâmetros
-        if: ${{ !cancelled() }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
