@@ -122,13 +122,16 @@ def returns_chart(rows: list[tuple[str, float]], title: str) -> bytes:
 
 
 REFERENCE_STYLES = [("--", NEUTRAL), (":", "#b5bac1")]
+FAINT = "#4e5058"  # the agents outside the highlight
 
 
-def lines_chart(series: dict[str, list[tuple]], title: str, references: dict[str, list[tuple]] | None = None) -> bytes:
+def lines_chart(series: dict[str, list[tuple]], title: str, references: dict[str, list[tuple]] | None = None,
+                highlight: set[str] | None = None) -> bytes:
     """One line per name of (date, % value), with a zero line and end labels.
 
     references (e.g. inflation, deposit) are drawn as thin grey dashed lines so
-    they read as yardsticks, not as competitors.
+    they read as yardsticks, not as competitors. With `highlight`, only those
+    names get a colour and an end label; the rest are faint grey lines behind.
     """
     palette = ["#4cc0a8", "#e2b84a", "#5865f2", "#ed4245", "#57f287", "#eb459e", "#f0b232", "#9b84ee", "#3ba5d8", "#dbdee1"]
     fig = _figure()
@@ -136,13 +139,18 @@ def lines_chart(series: dict[str, list[tuple]], title: str, references: dict[str
     _style(ax)
     ax.axhline(0, color=NEUTRAL, linewidth=0.8)
     ends = []
-    for i, (name, points) in enumerate(series.items()):
+    colored = 0
+    for name, points in series.items():
         if not points:
             continue
         dates = pd.to_datetime([d for d, _ in points])
         values = [v for _, v in points]
-        color = palette[i % len(palette)]
-        ax.plot(dates, values, color=color, linewidth=1.4, marker="o" if len(points) < 3 else None, markersize=3)
+        if highlight is not None and name not in highlight:
+            ax.plot(dates, values, color=FAINT, linewidth=0.8, zorder=1)
+            continue
+        color = palette[colored % len(palette)]
+        colored += 1
+        ax.plot(dates, values, color=color, linewidth=1.6, zorder=3, marker="o" if len(points) < 3 else None, markersize=3)
         ends.append([values[-1], values[-1], dates[-1], f"{name} {values[-1]:+.1f}%", color])
     for i, (name, points) in enumerate((references or {}).items()):
         if not points:

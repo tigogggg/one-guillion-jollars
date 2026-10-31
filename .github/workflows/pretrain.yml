@@ -58,6 +58,8 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_TESTES: ${{ inputs.testes && '1' || '' }}
           CANAL: ${{ inputs.canal || 'agentes' }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}  # interactive chart (Worker KV)
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: uv run python scripts/pretrain.py --republicar --canal "$CANAL"
 
   plan:
@@ -120,6 +122,8 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           APPLY: ${{ inputs.aplicar && '--apply' || '' }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}  # interactive chart (Worker KV)
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: uv run python scripts/pretrain.py --juntar out $APPLY
       - name: Guardar os resultados e os parâmetros
         run: |

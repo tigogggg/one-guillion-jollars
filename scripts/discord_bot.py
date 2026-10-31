@@ -121,21 +121,46 @@ def send_dm(user_id: str, embeds: list[dict], files: dict[str, bytes] | None = N
 # --------------------------------------------------------------------------
 
 
-def kv_get(key: str):
-    """One JSON value from the Worker's KV (e.g. "schedule"), or None without credentials or on error."""
+def _kv() -> tuple[str, dict] | None:
+    """(values URL of the Worker's KV namespace, auth headers), or None without Cloudflare credentials."""
     token, account = os.environ.get("CLOUDFLARE_API_TOKEN"), os.environ.get("CLOUDFLARE_ACCOUNT_ID")
     if not token or not account:
         return None
     base = f"https://api.cloudflare.com/client/v4/accounts/{account}/storage/kv/namespaces"
     headers = {"Authorization": f"Bearer {token}"}
+    spaces = requests.get(base, headers=headers, params={"per_page": 100}, timeout=30).json()["result"]
+    ns = next(s["id"] for s in spaces if s["title"] == KV_TITLE)
+    return f"{base}/{ns}/values", headers
+
+
+def kv_get(key: str):
+    """One JSON value from the Worker's KV (e.g. "schedule"), or None without credentials or on error."""
     try:
-        spaces = requests.get(base, headers=headers, params={"per_page": 100}, timeout=30).json()["result"]
-        ns = next(s["id"] for s in spaces if s["title"] == KV_TITLE)
-        value = requests.get(f"{base}/{ns}/values/{quote(key, safe='')}", headers=headers, timeout=30)
+        kv = _kv()
+        if kv is None:
+            return None
+        value = requests.get(f"{kv[0]}/{quote(key, safe='')}", headers=kv[1], timeout=30)
         return json.loads(value.text) if value.status_code == 200 else None
     except (requests.RequestException, KeyError, StopIteration, ValueError) as e:
         print(f"WARN: KV {key}: {e}", file=sys.stderr)
         return None
+
+
+def kv_put(key: str, value, ttl_days: int | None = None) -> bool:
+    """Store one JSON value in the Worker's KV (expiring after ttl_days); False without credentials or on error."""
+    try:
+        kv = _kv()
+        if kv is None:
+            return False
+        params = {"expiration_ttl": ttl_days * 86400} if ttl_days else {}
+        resp = requests.put(f"{kv[0]}/{quote(key, safe='')}", headers=kv[1], params=params,
+                            data=json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode(), timeout=60)
+        if resp.status_code >= 300:
+            print(f"WARN: KV {key}: {resp.status_code} {resp.text[:200]}", file=sys.stderr)
+        return resp.status_code < 300
+    except (requests.RequestException, KeyError, StopIteration, ValueError) as e:
+        print(f"WARN: KV {key}: {e}", file=sys.stderr)
+        return False
 
 
 def load_follows() -> dict[str, list[str]]:

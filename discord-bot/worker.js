@@ -15,6 +15,8 @@
 //   GITHUB_REPO         tigogggg/one-guillion-jollars
 // Bindings: KV namespace as CONFIG. Triggers: cron "*/5 * * * *".
 
+import { chartResponse } from "./chart_page.js";
+
 const PING = 1;
 const APPLICATION_COMMAND = 2;
 const PONG = 1;
@@ -82,6 +84,10 @@ const HELP = [
 
 export default {
   async fetch(request, env, ctx) {
+    const chart = request.method === "GET" && new URL(request.url).pathname.match(/^\/g\/([0-9a-f]{24})$/);
+    if (chart && env.CONFIG) {
+      return chartResponse(env, chart[1], await getSchedule(env));
+    }
     if (request.method !== "POST") {
       return new Response("CoutoTrading bot: endpoint de interações do Discord.", { status: 200 });
     }

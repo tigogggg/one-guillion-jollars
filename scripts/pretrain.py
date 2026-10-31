@@ -35,6 +35,7 @@ import pandas as pd
 import requests
 
 import agents
+import interactive
 from agents import (
     PARAM_BOUNDS,
     STRATEGIES,
@@ -535,15 +536,52 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
     series = {by_strategy.get(s, {"name": s})["name"]: r["curve"] for s, r in results["strategies"].items() if "curve" in r}
     first = next(iter(series.values()), [])
     years = round((date.fromisoformat(first[-1][0]) - date.fromisoformat(first[0][0])).days / 365.25) if first else YEARS
-    files = {"pretreino.png": lines_chart(series, f"Pré-treino: rentabilidade em {years:g} anos (parâmetros escolhidos)",
-                                          reference_lines(series))}
+    refs = reference_lines(series)
+    top = interactive.leaders(series)
+    files = {"pretreino.png": lines_chart(series, f"Pré-treino: {years:g} anos (a cores: os 5 melhores e o Indexador)",
+                                          refs, top)}
+    details = []
+    for strategy, r in results["strategies"].items():
+        if "year" not in r:
+            continue
+        cfg = by_strategy.get(strategy, {"id": strategy, "name": strategy, "emoji": "🤖", "strategy": strategy, "params": {}})
+        params = r.get("chosen") or cfg.get("params", {})
+        y, v = r["year"], r.get("valid", {})
+        details.append({
+            "id": cfg.get("id", strategy), "name": cfg["name"], "emoji": cfg["emoji"],
+            "strategy": agents.strategy_info({**cfg, "strategy": strategy}, params),
+            "backtest": {
+                "return_pct": round(y["return"] * 100, 1), "max_dd_pct": round(y["max_drawdown"] * 100, 1),
+                "sharpe": y.get("sharpe"), "trades": y.get("trades"), "bankrupt": y.get("bankrupt"),
+                "adopted": r.get("adopted"), "chosen": r.get("chosen") or {},
+                "exam": {k: {**x, "return_pct": round(x.get("return", 0) * 100, 1),
+                             "max_dd_pct": round(x.get("max_drawdown", 0) * 100, 1)} for k, x in v.items()},
+                "years": (r.get("train", {}).get("best") or {}).get("years", []),
+                "train_start": int(results["train"][0][:4]) if results.get("train") else None,
+                "crises": {k: {"return_pct": round(c["return"] * 100, 1), "max_dd_pct": round(c["max_drawdown"] * 100, 1),
+                               "bankrupt": c.get("bankrupt")} for k, c in (r.get("crises") or {}).items()},
+                "monte_carlo": r.get("monte_carlo") or {},
+            },
+        })
+    link = interactive.publish(f"🧠 Pré-treino dos agentes: {years:g} anos", series, refs, top, agents=details, kind="pretreino",
+                               subtitle=f"Treino {results['train'][0]} a {results['train'][1]} · exame {results['valid'][0]} "
+                                        f"a {results['valid'][1]} · parâmetros escolhidos, custos e impostos incluídos")
     card = embed(f"🧠 Pré-treino dos agentes: {years:g} anos, dia a dia", "\n".join(lines), color=BLUE,
                  fields=fields, image="pretreino.png",
                  footer="Backtest: resultados passados simulados, não garantem resultados futuros.")
+    if link:
+        card["url"] = link  # the title opens the interactive chart too
     return [card], files
 
 
 REPORT_TITLE = "🧠 Pré-treino dos agentes"  # only the latest report stays in the channel
+
+
+def post_report(results: dict, applied: list[str] | None, dry_run: bool, channel: str) -> int:
+    """The report, with a button to its interactive chart, replacing the previous report in that channel."""
+    embeds, files = report(results, applied)
+    buttons = [(interactive.BUTTON, embeds[0]["url"])] if embeds and embeds[0].get("url") else None
+    return send(embeds, files, dry_run=dry_run, **route(channel), replace=REPORT_TITLE, buttons=buttons)
 
 
 def finish(results: dict, today: date, apply_params: bool, dry_run: bool, partial: bool) -> int:
@@ -553,7 +591,7 @@ def finish(results: dict, today: date, apply_params: bool, dry_run: bool, partia
         results = {**results, "strategies": {**previous.get("strategies", {}), **results["strategies"]}}
     REPORT_PATH.write_text(json.dumps(results, indent=1, default=str) + "\n")
     applied = apply(results, today) if apply_params else None
-    return send(*report(results, applied), dry_run=dry_run, **route("agentes"), replace=REPORT_TITLE)
+    return post_report(results, applied, dry_run, "agentes")
 
 
 def main() -> int:
@@ -571,8 +609,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.republicar:
-        return send(*report(json.loads(REPORT_PATH.read_text()), None), dry_run=args.dry_run, **route(args.canal),
-                    replace=REPORT_TITLE)
+        return post_report(json.loads(REPORT_PATH.read_text()), None, args.dry_run, args.canal)
 
     if args.juntar:
         parts = [json.loads(f.read_text()) for f in sorted(Path(args.juntar).rglob("*.json"))]

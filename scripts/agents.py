@@ -40,6 +40,7 @@ import pandas as pd
 
 import discord_bot
 import earnings
+import interactive
 import strategy_docs
 from charts import lines_chart, returns_chart
 from references import reference_lines
@@ -1129,7 +1130,12 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
         cfg["name"]: [(h["date"], (h["equity"] / h["deposits"] - 1) * 100) for h in port["history"]]
         for cfg, port, _ in rows
     }
-    files = {"agentes.png": lines_chart(series, "Rentabilidade desde o início", reference_lines(series))}
+    refs = reference_lines(series)
+    top = interactive.leaders(series)
+    files = {"agentes.png": lines_chart(series, "Rentabilidade desde o início (a cores: os 5 melhores e o Indexador)",
+                                        refs, top)}
+    link = interactive.publish(title, series, refs, top, subtitle="Rentabilidade desde o início, sobre o dinheiro depositado",
+                               agents=agent_details(config, state, mkt), kind="liga")
     leader = rows[0][2] / rows[0][1]["deposits"] - 1 if rows else 0
     card = embed(
         title,
@@ -1142,6 +1148,8 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
         "S&P 500 no dia, +2 por dia em lucro, penalização acima de 10% de queda desde o máximo. Falência a -50%: o lugar "
         "passa para um filho do líder. Não é recomendação de compra.",
     )
+    if link:
+        card["url"] = link  # the title opens the interactive chart too
     return [card], files
 
 
@@ -1266,17 +1274,22 @@ def common_rules(params: dict, strategy: str) -> str:
 
 def pretrain_text(strategy: str) -> str:
     path = REPO_AGENTS / "pretrain.json"
-    r = json.loads(path.read_text())["strategies"].get(strategy) if path.exists() else None
+    saved = json.loads(path.read_text()) if path.exists() else {}
+    r = saved.get("strategies", {}).get(strategy)
     if not r:
         return "Ainda não pré-treinado."
     if "skipped" in r:
         return f"Não testável no passado: {r['skipped']}. Aprende ao vivo (ajusta parâmetros nos meses em que perde)."
     y, v = r["year"], r["valid"]
+    span = saved.get("train", [None])[0], saved.get("valid", [None, None])[1]
+    years = (round((date.fromisoformat(span[1]) - date.fromisoformat(span[0])).days / 365.25)
+             if span[0] and span[1] else None)
+    period = f"{years} anos" if years else "Período"
     verdict = "✅ adotou os parâmetros do treino" if r["adopted"] else "↩️ mantém os parâmetros originais"
-    return (f"5 anos: {pct(y['return'])} · queda máx. {pct(-y['max_drawdown'])} · Sharpe {y.get('sharpe', 0):.1f} · "
+    return (f"{period}: {pct(y['return'])} · queda máx. {pct(-y['max_drawdown'])} · Sharpe {y.get('sharpe', 0):.1f} · "
             f"{y['trades']} operações\nExame (último ano): {v['best']['points']} vs {v['default']['points']} pts "
             f"({pct(v['best']['return'])} vs {pct(v['default']['return'])}) · {verdict}\n"
-            "_Os 5 anos incluem os anos usados para escolher os parâmetros; o exame é o teste justo._")
+            f"_Os {period.lower()} incluem os anos usados para escolher os parâmetros; o exame é o teste justo._")
 
 
 def strategy_card(cfg: dict, port: dict | None) -> list[dict]:
@@ -1300,6 +1313,71 @@ def strategy_card(cfg: dict, port: dict | None) -> list[dict]:
     status = "" if cfg.get("active", True) else f" (💀 retirado {cfg.get('retired', '')})"
     return [embed(f"{cfg['emoji']} {cfg['name']}{status} · como pensa", f"💡 {idea}", color=BLUE, fields=fields,
                   footer="Simulação com dinheiro fictício e preços reais. Não é recomendação de compra.")]
+
+
+def strategy_info(cfg: dict, params: dict) -> dict:
+    """How an agent decides, as plain fields for the interactive page."""
+    idea, buys, sells, size = strategy_docs.describe(cfg["strategy"], params)
+    return {
+        "label": STRATEGIES[cfg["strategy"]][1], "description": cfg.get("description", ""),
+        "idea": idea, "buys": buys, "sells": sells, "size": size, "rules": common_rules(params, cfg["strategy"]),
+        "params": [{"key": k, "value": strategy_docs.fmt_param(k, v), "meaning": strategy_docs.PARAMS.get(k, "")}
+                   for k, v in params.items()],
+        "pretrain": pretrain_text(cfg["strategy"]),
+    }
+
+
+def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
+    """Everything about each active agent for the interactive page: holdings, orders, trades, stats, strategy."""
+    out = []
+    for cfg in active_agents(config):
+        port = state["agents"].get(cfg["id"])
+        if not port:
+            continue
+        params = port.get("params", cfg["params"])
+        eq = equity(port, mkt)
+        positions = []
+        for symbol, pos in sorted(port["positions"].items()):
+            price = last_close(mkt, symbol)
+            value = position_value(mkt, symbol, pos)
+            info = mkt.stocks.get(symbol) or mkt.etfs.get(symbol) or {}
+            positions.append({
+                "symbol": symbol, "name": info.get("name", ""), "sector": info.get("sector", ""),
+                "currency": "EUR" if is_eur(symbol) else "USD", "qty": round(pos["qty"], 6),
+                "entry": round(pos["entry"], 4), "entry_date": pos.get("entry_date"), "price": round(price, 4) if price else None,
+                "cost_eur": round(pos["cost_eur"], 2), "value_eur": round(value, 2),
+                "pnl_eur": round(value - pos["cost_eur"], 2),
+                "pnl_pct": round((value / pos["cost_eur"] - 1) * 100, 2) if pos["cost_eur"] else 0.0,
+                "weight": round(value / eq * 100, 2) if eq else 0.0,
+                "stop": pos.get("stop"), "tp": pos.get("tp"),
+                "earnings": (mkt.earnings.get(symbol).isoformat() if mkt.earnings.get(symbol) else None),
+            })
+        trades = port["trades"]
+        stats = live_stats(port)
+        hist = port["history"]
+        peak, max_dd = 0.0, 0.0
+        for h in hist:
+            ratio = h["equity"] / h["deposits"] if h["deposits"] else 1.0
+            peak = max(peak, ratio)
+            max_dd = max(max_dd, 1 - ratio / peak if peak else 0.0)
+        out.append({
+            "id": cfg["id"], "name": cfg["name"], "emoji": cfg["emoji"], "strategy": strategy_info(cfg, params),
+            "started": port.get("started"), "generation": port.get("generation", 1),
+            "lineage": cfg.get("lineage_name"), "points": port["points"],
+            "deposits": round(port["deposits"], 2), "cash": round(port["cash"], 2), "equity": round(eq, 2),
+            "return_pct": round((eq / port["deposits"] - 1) * 100, 2) if port["deposits"] else 0.0,
+            "day_pct": round(day_change(port) * 100, 2), "max_dd_pct": round(max_dd * 100, 2),
+            "sharpe": round(stats["sharpe"], 2), "sessions": stats["sessions"],
+            "invested_pct": round((eq - port["cash"]) / eq * 100, 2) if eq else 0.0,
+            "realized": port.get("realized", {}),
+            "taxes": round(sum(t["eur"] for t in trades if t["side"] == "imposto"), 2),
+            "fees_note": f"{FEE:.1%} por ordem, +{FX_FEE:.2%} de câmbio nas ações dos EUA",
+            "buys": sum(t["side"] == "compra" for t in trades), "sells": sum(t["side"] == "venda" for t in trades),
+            "wins": sum(t["side"] == "venda" and t["pnl_eur"] > 0 for t in trades),
+            "positions": positions, "pending": port["pending"], "trades": list(reversed(trades)),
+            "evolution": list(reversed(port.get("evolution", [])))[:20],
+        })
+    return out
 
 
 def strategies_index(config: dict) -> list[dict]:
@@ -1439,7 +1517,8 @@ def main() -> int:
     if a.mode == "daily" and not target:
         target = route("agentes") or {"thread_id": discord_bot.todays_thread()}
         replace = {"replace": LEAGUE_TITLE}  # only the latest league chart stays in the channel
-    status = send(embeds, files, dry_run=a.dry_run, **target, **replace)
+    buttons = [(interactive.BUTTON, embeds[0]["url"])] if embeds and embeds[0].get("url") else None
+    status = send(embeds, files, dry_run=a.dry_run, buttons=buttons, **target, **replace)
     if follow_up[0]:
         status = status or send(*follow_up, dry_run=a.dry_run, **target, **({"replace": MONTHLY_TITLE} if replace else {}))
     return status

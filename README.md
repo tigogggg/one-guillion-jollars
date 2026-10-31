@@ -137,6 +137,21 @@ decided on the latest close fill at the next session's open with 0.1% costs;
 US stocks are bought in EUR at that day's EUR/USD rate, fractional shares
 allowed. Stops and targets are checked against each session's low and high.
 
+**Interactive chart page.** The league and pre-training posts carry a
+"📈 Ver gráfico interativo" button (and a clickable title). `scripts/interactive.py`
+stores the chart's data in the Worker's KV under `chart:<random id>` for 120
+days, and `discord-bot/chart_page.js` serves it at
+`https://<worker>.workers.dev/g/<id>`: a Plotly chart (hover values, zoom,
+agents on and off in the legend), countdowns to every scheduled run (from the
+`/horario` schedule), and one card per agent. In the league page the card has
+the holdings (quantity, average cost with fees, current price, value, gain,
+weight, stop, target, earnings date), pending orders, every trade (price, value,
+result, reason), realised gains per year, taxes, stats and the full strategy
+description with its parameters; in the pre-training page, the backtest, exam,
+crises, Monte Carlo and points per year instead of holdings. The static image
+colours only the top 5 and the Indexador; the rest are faint grey. An older
+page links to the newest one of its kind (`chart-latest:<kind>`).
+
 Only the latest chart of each kind stays in `🤖-agentes`: after posting the
 daily league, the monthly report or the pre-training report, the bot deletes
 its own older posts with the same title in that channel (last 100 messages;

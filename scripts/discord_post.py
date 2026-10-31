@@ -101,6 +101,7 @@ def post_message(
     headers: dict | None = None,
     kind: str | None = None,
     reply_to: str | None = None,
+    buttons: list[tuple[str, str]] | None = None,
 ) -> dict | None:
     """Post (or, with method=PATCH and an interaction url, edit) one message.
 
@@ -108,7 +109,9 @@ def post_message(
     channel, `url` + `headers` send elsewhere (e.g. a DM with the bot token).
     `kind` (set by route()) also copies the post to the mirror server, and
     `reply_to` answers an earlier message (a plain post if it is not there).
-    Returns Discord's message object ({} on a dry run), or None on failure.
+    `buttons` are (label, url) link buttons, sent with the bot or an
+    interaction (a plain channel webhook cannot send them; give the embed a
+    clickable title too). Returns Discord's message object ({} on a dry run), or None on failure.
     """
     files = files or {}
     if dry_run:
@@ -117,6 +120,8 @@ def post_message(
             for f in e.get("fields", []):
                 print(f"**{f['name']}** {f['value']}")
             print(f"[{e.get('footer', {}).get('text', '')}]\n")
+        for label, link in buttons or []:
+            print(f"[{label}]({link})")
         if files:
             PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
             for name, data in files.items():
@@ -138,6 +143,9 @@ def post_message(
     payload = {"embeds": embeds[:10], "allowed_mentions": {"parse": []}}
     if content is not None:
         payload["content"] = content
+    if buttons and not webhook:
+        payload["components"] = [{"type": 1, "components": [
+            {"type": 2, "style": 5, "label": label[:80], "url": link} for label, link in buttons[:5]]}]
     if reply_to:
         payload["message_reference"] = {"message_id": reply_to, "fail_if_not_exists": False}
     if files:
