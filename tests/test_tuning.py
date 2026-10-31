@@ -34,7 +34,7 @@ def test_mutate_can_switch_shared_rules_on_and_stays_in_bounds():
 
 def mkt_one(price=110.0, sma50=100.0, atr=2.0):
     m = {"price": price, "sma50": sma50, "sma200": 90.0, "sma200_rising": True, "vol20": 0.012, "pct_from_high": 0.02, "atr14": atr}
-    return SimpleNamespace(stocks={"AAA": m}, etfs={}, closes={"AAA": price}, hist={}, sessions=[], as_of=None)
+    return SimpleNamespace(stocks={"AAA": m}, etfs={}, closes={"AAA": price}, hist={}, sessions=[], as_of=None, context={})
 
 
 def test_shared_rules_filter_entries_and_set_the_atr_stop():
@@ -81,7 +81,8 @@ def test_train_strategy_runs_end_to_end_on_synthetic_markets(monkeypatch):
     monkeypatch.setattr(pretrain, "_MARKETS", markets)
     strategy, r = pretrain.train_strategy("foguetao")
     assert strategy == "foguetao" and "chosen" in r and r["search"]["candidates"] >= 4
-    assert {"stop_atr", "trail_atr"} <= set(r["chosen"]) and "trade_stats" in r["year"]
+    assert {"stop_atr", "trail_atr", "vix_max"} <= set(r["chosen"]) and "trade_stats" in r["year"]
+    assert "dias_resultados" not in r["chosen"] and {"stop_atr", "filtro_spy"} <= set(r["importance"])
 
 
 def test_position_history_groups_trades_and_justifies_them():

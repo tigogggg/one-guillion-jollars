@@ -81,6 +81,7 @@ EXPOSURE = {"Alta": 1.0, "Neutra": 0.7, "Cautelosa": 0.4, "Queda": 0.1}
 ZONE_ICON = {"Alta": "🟢", "Neutra": "🟡", "Cautelosa": "🟠", "Queda": "🔴"}
 MUTATION = 0.2
 EARNINGS_AVOID_DAYS = 5
+EARNINGS_AVOID_DAYS_DEFAULT = EARNINGS_AVOID_DAYS
 NEWS_VETO = 3  # no agent buys a stock whose 36 h news score is at or below -NEWS_VETO (peso_noticias tunes it)
 NEWS_VETO_DEFAULT = NEWS_VETO
 # Strategies that cannot be replayed on past data (no history of fundamentals, news or other agents):
@@ -118,11 +119,27 @@ PARAM_BOUNDS = {
     "min_tecnico": (20.0, 55.0, float),
     "max_ext": (0.05, 0.35, float),
     "peso_noticias": (1, 6, int),
+    # market context (context.py), shared too; 0 = off
+    "vix_max": (18.0, 45.0, float),
+    "vix_meio": (15.0, 35.0, float),
+    "epu_max": (0.60, 0.98, float),
+    "credito_max": (3.0, 9.0, float),
+    "juros_max": (0.3, 1.5, float),
+    "usd_max": (0.02, 0.10, float),
+    "filtro_spy": (1, 1, int),
+    # calendar, live only (no free history to backtest them): tuned by the monthly mutation and the shadow copies
+    "dias_resultados": (0, 10, int),
+    "evita_macro": (1, 1, int),
 }
 # Variables every strategy (but the Indexador) has, on top of its own. The defaults keep the original
 # behaviour; the training (pre-training, monthly mutation and the shadow copies) switches them on and tunes them.
-COMMON = {"stop_atr": 0, "trail_atr": 0, "tempo_max": 0, "min_tecnico": 0, "max_ext": 0, "peso_noticias": NEWS_VETO_DEFAULT}
-OFFABLE = {"stop_atr", "trail_atr", "tempo_max", "min_tecnico", "max_ext"}
+COMMON = {"stop_atr": 0, "trail_atr": 0, "tempo_max": 0, "min_tecnico": 0, "max_ext": 0, "peso_noticias": NEWS_VETO_DEFAULT,
+          "vix_max": 0, "vix_meio": 0, "epu_max": 0, "credito_max": 0, "juros_max": 0, "usd_max": 0, "filtro_spy": 0,
+          "dias_resultados": EARNINGS_AVOID_DAYS_DEFAULT, "evita_macro": 0}
+OFFABLE = {"stop_atr", "trail_atr", "tempo_max", "min_tecnico", "max_ext", "vix_max", "vix_meio", "epu_max", "credito_max",
+           "juros_max", "usd_max", "filtro_spy", "evita_macro"}
+CONTEXT_RULES = {"vix_max", "vix_meio", "epu_max", "credito_max", "juros_max", "usd_max", "filtro_spy"}
+LIVE_TUNED = {"peso_noticias", "dias_resultados", "evita_macro"}  # no history: not in the backtest
 ZONES = ("Alta", "Neutra", "Cautelosa", "Queda")
 
 
@@ -143,6 +160,7 @@ class Market:
     news: dict[str, dict] = field(default_factory=dict)  # news.py signals: {symbol: {score, importance, items}}
     league: dict[str, tuple[dict, dict]] = field(default_factory=dict)  # {agent id: (cfg, portfolio)}, for meta-agents
     priors: dict[str, dict] = field(default_factory=dict)  # pre-training: {strategy: {zone: avg daily excess return}}
+    context: dict = field(default_factory=dict)  # context.py: vix, epu_pct, hy, rate_chg, usd_chg, spy_trend; live: macro
 
 
 # --------------------------------------------------------------------------
@@ -250,6 +268,18 @@ def load_market() -> Market:
     if pretrained.exists():
         market.priors = {s: r["by_zone"] for s, r in json.loads(pretrained.read_text())["strategies"].items()
                          if r.get("by_zone")}
+    try:  # market context (VIX, policy uncertainty, credit, rates, dollar, S&P 500 trend) and the macro calendar
+        import context
+        import macro
+
+        frame = context.download("2y", spy, fx_hist["EURUSD=X"]["Close"])
+        market.context = context.on(frame, market.as_of)
+        ahead = macro.events(market.as_of + timedelta(days=1), market.as_of + timedelta(days=3))[0]
+        nxt = min((d for d, _ in ahead), default=None)
+        if nxt:
+            market.context["macro"] = [name for d, name in ahead if d == nxt]
+    except Exception as e:  # the context only switches rules off when missing
+        print(f"WARN: contexto de mercado: {e!r}", file=sys.stderr)
     vcp = WATCHLIST_DIR / "vcp-latest.json"
     if vcp.exists():
         market.vcp = {
@@ -954,14 +984,14 @@ def active_agents(config: dict) -> list[dict]:
 # --------------------------------------------------------------------------
 
 
-def skip_earnings(orders: list[dict], mkt: Market) -> tuple[list[dict], list[str]]:
-    """Drop buys of stocks that report within EARNINGS_AVOID_DAYS; return (kept, skipped symbols)."""
+def skip_earnings(orders: list[dict], mkt: Market, days: int = EARNINGS_AVOID_DAYS) -> tuple[list[dict], list[str]]:
+    """Drop buys of stocks that report within `days` (EARNINGS_AVOID_DAYS by default); return (kept, skipped)."""
     kept, skipped = [], []
     for o in orders:
         if o["side"] == "buy" and not is_eur(o["symbol"]):
             if o["symbol"] not in mkt.earnings:
                 mkt.earnings[o["symbol"]] = earnings.next_earnings(o["symbol"], mkt.as_of)
-            if earnings.within(mkt.earnings[o["symbol"]], EARNINGS_AVOID_DAYS, mkt.as_of):
+            if days and earnings.within(mkt.earnings[o["symbol"]], days, mkt.as_of):
                 skipped.append(o["symbol"])
                 continue
         kept.append(o)
@@ -1042,13 +1072,41 @@ def tech_score(m: dict) -> float:
             + opportunities.lerp(m["pct_from_high"], 0.05, 0.30, 15))
 
 
+def context_gate(mkt: Market, p: dict) -> str | None:
+    """Why no new buys today, from the market context and the calendar, or None."""
+    c = mkt.context
+    if p.get("vix_max") and c.get("vix", 0) > p["vix_max"]:
+        return f"VIX {c['vix']:.0f} acima de {p['vix_max']:.0f}"
+    if p.get("epu_max") and c.get("epu_pct", 0) > p["epu_max"]:
+        return f"incerteza política no percentil {c['epu_pct']:.0%}"
+    if p.get("credito_max") and c.get("hy", 0) > p["credito_max"]:
+        return f"spread de crédito {c['hy']:.1f}% acima de {p['credito_max']:.1f}%"
+    if p.get("juros_max") and c.get("rate_chg", 0) > p["juros_max"]:
+        return f"juro a 10 anos subiu {c['rate_chg']:.2f} p.p. em 3 meses"
+    if p.get("filtro_spy") and c.get("spy_trend", 0) < 0:
+        return "S&P 500 abaixo da média de 200 dias"
+    if p.get("evita_macro") and c.get("macro"):
+        return "evento macro: " + ", ".join(c["macro"][:2])
+    return None
+
+
 def shared_rules(orders: list[dict], port: dict, mkt: Market, p: dict) -> tuple[list[dict], list[str]]:
     """The tunable rules every strategy shares: entry filters, ATR stop and the time stop."""
     kept, notes = [], []
+    gate = context_gate(mkt, p)
     for o in orders:
         if o["side"] != "buy":
             kept.append(o)
             continue
+        if gate:
+            notes.append(f"{o['symbol']} ({gate})")
+            continue
+        c = mkt.context
+        if p.get("usd_max") and not is_eur(o["symbol"]) and c.get("usd_chg", 0) > p["usd_max"]:
+            notes.append(f"{o['symbol']} (dólar caiu {c['usd_chg']:.1%} em 3 meses)")
+            continue
+        if p.get("vix_meio") and c.get("vix", 0) > p["vix_meio"]:
+            o = {**o, "eur": round(o["eur"] * 0.5, 2)}
         m = mkt.stocks.get(o["symbol"]) or mkt.etfs.get(o["symbol"])
         if m:
             if p.get("max_ext") and m["price"] > m["sma50"] * (1 + p["max_ext"]):
@@ -1095,7 +1153,7 @@ def decide(cfg: dict, port: dict, mkt: Market, params: dict, live: bool = True) 
         orders, skipped = shared_rules(orders, port, mkt, params)
         notes += skipped
     if live and not params.get("ignora_resultados"):
-        orders, skipped = skip_earnings(orders, mkt)
+        orders, skipped = skip_earnings(orders, mkt, int(params.get("dias_resultados", EARNINGS_AVOID_DAYS)))
         notes += [f"{s} (resultados {earnings.label(mkt.earnings[s])})" for s in skipped]
     if not params.get("ignora_noticias") and cfg["strategy"] != "cetico":
         orders, skipped = skip_bad_news(orders, mkt, int(params.get("peso_noticias") or NEWS_VETO))
@@ -1113,7 +1171,8 @@ def decision_context(order: dict, port: dict, mkt: Market) -> dict:
     """The numbers behind an order when it was decided, for the agent's position history."""
     s = order["symbol"]
     m = mkt.stocks.get(s) or mkt.etfs.get(s) or {}
-    ctx = {"zone": mkt.zone, "date": mkt.as_of.isoformat()}
+    ctx = {"zone": mkt.zone, "date": mkt.as_of.isoformat(),
+           **{k: v for k, v in mkt.context.items() if k in ("vix", "epu_pct", "hy", "usd_chg", "spy_trend")}}
     if m:
         ctx.update(trend=round(m.get("trend_score", 0)), ret_3m=round(m.get("ret_3m", 0) * 100, 1),
                    from_high=round(m.get("pct_from_high", 0) * 100, 1), vs_sma50=round((m["price"] / m["sma50"] - 1) * 100, 1),

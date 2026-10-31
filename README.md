@@ -361,6 +361,27 @@ them). Without that file everything posts to the webhook channel as before.
   "fantasma promovido"); a copy that does not within 60 sessions is replaced.
   The pre-training resets an agent's copies when it changes its parameters.
 
+## Market context and parameter importance (v5)
+
+`scripts/context.py` gives every day (live and over the 20-year backtest) the
+VIX, the US Economic Policy Uncertainty index as a 3-year percentile (FRED
+USEPUINDXD: the political-impact gauge), the high-yield credit spread (FRED
+BAMLH0A0HYM2), the 3-month change of the 10-year yield, the 3-month change of
+EUR/USD (the dollar seen from a euro investor) and the S&P 500 against its
+200-day average. New shared, tunable rules use it: `vix_max`, `vix_meio`
+(half size), `epu_max`, `credito_max`, `juros_max`, `usd_max` (US stocks
+only), `filtro_spy`. Calendar rules without free history are tuned live only
+(`LIVE_TUNED`: `dias_resultados`, the results-date window per agent;
+`evita_macro`, no buys before Fed, inflation or jobs data; `peso_noticias`).
+Live decisions record the context, so the justifications quote it.
+
+Every pre-training measures what each parameter is worth to each strategy
+(`parameter_importance`): a parameter in use is reset to its default, a shared
+rule that is off is switched on at mid-range, everything else equal, on the
+training years and the exam year. `importance_summary` adds it up across
+strategies for the report ("🔬 Que parâmetros contam") and the portal shows it
+per agent.
+
 ## Agent rules v3
 
 - Reward: each day ±1 point per 0.1% the agent beat (or trailed) the S&P 500

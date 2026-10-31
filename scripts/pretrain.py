@@ -232,6 +232,10 @@ def build_markets(years: int = YEARS) -> list[Market]:
         if spliced is not None:
             etf_hist[etf] = spliced
     spy = stock_hist.pop("SPY")
+    import context
+
+    ctx_frame = context.download(period, spy, fx)
+    print(f"::notice title=Contexto::dados desde {context.coverage(ctx_frame)}", flush=True)
     sessions = [d.date() for d in spy.index]
     days = sessions[WARMUP:][-years * SESSIONS_PER_YEAR:]
     names = dict(UCITS_ETFS)
@@ -257,6 +261,7 @@ def build_markets(years: int = YEARS) -> list[Market]:
             hist=hist, fx=fx, stocks=stocks[d], etfs=etfs[d], as_of=d,
             sessions=[x for x in sessions if x <= d], zone=zone_for(share), stage2_share=share,
             closes={s: float(v) for s, v in row.items() if pd.notna(v)},
+            context=context.on(ctx_frame, d),
         ))
     return markets
 
@@ -319,7 +324,7 @@ def trade_stats(sells: list[dict]) -> dict:
     }
 
 
-SHARED_IN_BACKTEST = [k for k in agents.COMMON if k != "peso_noticias"]  # no news in the past
+SHARED_IN_BACKTEST = [k for k in agents.COMMON if k not in agents.LIVE_TUNED]  # no news or calendar history
 OFF_SHARE = 0.4  # a variant leaves each shared rule off this often
 
 
@@ -469,8 +474,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
             for _ in range(GEN2_CHILDREN):
                 child = dict(pool[i])
                 agents.mutate(child, rng, strategy)
-                child = {k: v for k, v in child.items() if k in pool[0] or k in agents.COMMON}
-                child.pop("peso_noticias", None) if "peso_noticias" not in pool[0] else None
+                child = {k: v for k, v in child.items() if k in pool[0]}
                 pool.append(child)
                 scored.append(run_years(child))
     crashes = {0: crash_test(strategy, pool[0], windows)}
@@ -511,7 +515,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
             for _ in range(ZONE_TRIES):
                 alt = {k: v for k, v in chosen.items() if k != "por_zona"}
                 agents.mutate(alt, rng, strategy)
-                diff = {k: v for k, v in alt.items() if k in PARAM_BOUNDS and chosen.get(k) != v}
+                diff = {k: v for k, v in alt.items() if k in PARAM_BOUNDS and k not in agents.LIVE_TUNED and chosen.get(k) != v}
                 if not diff:
                     continue
                 cand = {**chosen, "por_zona": {**(chosen.get("por_zona") or {}), zone: diff}}
@@ -531,6 +535,8 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
             mc = monte_carlo(full["daily"])
             adopt = True
 
+    importance = parameter_importance(strategy, chosen, train_mk, valid, chosen_valid["points"])
+
     print(f"{strategy}: {len(pool)} candidatos; anos {scored[best_i][0]} vs {base}; vizinhos {plateau.get(best_i)}; "
           f"crises {crashes.get(best_i)}; exame {best_valid['points']} vs {default_valid['points']}; "
           f"zonas {[(z, v['kept']) for z, v in zones_tried.items()]} → {'adotado' if adopt else 'mantém'}",
@@ -541,11 +547,60 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
                   "best": {"points": sum(scored[best_i][0]), "years": scored[best_i][0]}},
         "valid": {"default": strip(default_valid), "best": strip(chosen_valid if adopt else best_valid)},
         "crises": crashes.get(best_i if adopt else 0, crashes[0]),
-        "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried,
+        "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried, "importance": importance,
         "search": {"candidates": len(pool), "generation2": len(pool) - len(scored[:1]) - (VARIANTS_LONG if len(blocks) > LONG_YEARS else VARIANTS),
                    "plateau": plateau.get(best_i), "recency": RECENCY, "min_trades": MIN_TRADES},
         "year": strip(full), "curve": full["curve"][::5],  # weekly points are enough for the chart
     }
+
+
+def parameter_importance(strategy: str, chosen: dict, train_mk: list[Market], valid: list[Market], exam: int) -> dict:
+    """What each parameter is worth to this strategy, everything else equal.
+
+    A parameter in use is reset to its default (its own strategy's, or off for a shared rule): the points lost
+    are what it adds. A shared rule that is off is switched on at the middle of its range: the points gained
+    are what it would add. Both on the training years and on the exam year.
+    """
+    if strategy == "indexador":
+        return {}
+    defaults = {**{k: agents.COMMON[k] for k in SHARED_IN_BACKTEST}, **STRATEGIES[strategy][2]}
+    base = simulate(strategy, chosen, train_mk)["points"]
+    out = {}
+    for k in sorted(k for k in set(chosen) | set(SHARED_IN_BACKTEST) if k in PARAM_BOUNDS and k not in agents.LIVE_TUNED):
+        value = chosen.get(k, 0)
+        if value and value != defaults.get(k):
+            alt, used = {**chosen, k: defaults.get(k, 0)}, True
+        elif not value and k in agents.OFFABLE:
+            lo, hi, kind = PARAM_BOUNDS[k]
+            mid = int(round((lo + hi) / 2)) if kind is int else round((lo + hi) / 2, 4)
+            alt, used = {**chosen, k: mid}, False
+        else:
+            continue
+        t = simulate(strategy, alt, train_mk)["points"]
+        e = simulate(strategy, alt, valid)["points"]
+        out[k] = {"used": used, "value": value if used else alt[k],
+                  "train": (base - t) if used else (t - base), "exam": (exam - e) if used else (e - exam)}
+    return out
+
+
+def importance_summary(results: dict) -> list[dict]:
+    """Across strategies: in how many each parameter helps (training and exam both up), and by how much."""
+    rows: dict[str, dict] = {}
+    for strategy, r in results.get("strategies", {}).items():
+        for k, v in (r.get("importance") or {}).items():
+            row = rows.setdefault(k, {"param": k, "tested": 0, "helps": 0, "hurts": 0, "train": 0.0, "exam": 0.0, "where": []})
+            row["tested"] += 1
+            row["train"] += v["train"]
+            row["exam"] += v["exam"]
+            if v["train"] > 0 and v["exam"] >= 0:
+                row["helps"] += 1
+                row["where"].append(strategy)
+            elif v["train"] < 0 and v["exam"] <= 0:
+                row["hurts"] += 1
+    for row in rows.values():
+        row["train"] = round(row["train"] / row["tested"])
+        row["exam"] = round(row["exam"] / row["tested"])
+    return sorted(rows.values(), key=lambda r: (r["helps"] - r["hurts"], r["train"]), reverse=True)
 
 
 def pretrain(markets: list[Market], only: set[str] | None = None, processes: int | None = None) -> dict:
@@ -656,6 +711,16 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
         fields.append(("💥 Teste de colisão: queda máxima em cada crise", ("\n".join(crash_lines) + note)[:1024]))
     if mc_lines:
         fields.append((f"🎲 Monte Carlo: {MC_PATHS} anos alternativos", "\n".join(mc_lines)[:1024]))
+    summary = importance_summary(results)
+    if summary:
+        import strategy_docs
+
+        top = [f"`{r['param']}` · ajuda em {r['helps']} de {r['tested']} ({', '.join(r['where'][:4])}) · "
+               f"treino {r['train']:+d} · exame {r['exam']:+d} pts" for r in summary if r["helps"]][:8]
+        flop = [f"`{r['param']}`" for r in summary if not r["helps"]]
+        fields.append(("🔬 Que parâmetros contam (cada um ligado/desligado, o resto igual)",
+                       ("\n".join(top) or "nenhum ajuda de forma consistente")
+                       + (f"\nSem efeito útil: {', '.join(flop[:10])}" if flop else ""))[:1024])
     if applied:
         fields.append(("⚙️ Parâmetros aplicados aos agentes", "\n".join(applied)[:1024]))
     fields.append(("⚠️ Limites",
@@ -691,6 +756,8 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
                 "crises": {k: {"return_pct": round(c["return"] * 100, 1), "max_dd_pct": round(c["max_drawdown"] * 100, 1),
                                "bankrupt": c.get("bankrupt")} for k, c in (r.get("crises") or {}).items()},
                 "monte_carlo": r.get("monte_carlo") or {},
+                "importance": r.get("importance") or {},
+                "zones": {z: {"kept": v["kept"], "diff": v["diff"]} for z, v in (r.get("zones") or {}).items()},
             },
         })
     link = interactive.publish(f"🧠 Pré-treino dos agentes: {years:g} anos", series, refs, top, agents=details, kind="pretreino",

@@ -36,9 +36,19 @@ PARAMS = {
     "min_tecnico": "score técnico mínimo para comprar: tendência, volatilidade e distância ao máximo, 0-60 (0 = desligado)",
     "max_ext": "não compra se o preço estiver mais do que isto acima da média de 50 dias (0 = desligado)",
     "peso_noticias": "não compra se o score das notícias estiver neste valor negativo ou pior",
+    "vix_max": "não compra quando o VIX (medo no mercado) está acima deste valor (0 = desligado)",
+    "vix_meio": "compra metade do tamanho quando o VIX está acima deste valor (0 = desligado)",
+    "epu_max": "não compra quando a incerteza política está acima deste percentil dos últimos 3 anos (0 = desligado)",
+    "credito_max": "não compra quando o spread do crédito de alto risco passa esta % (stress financeiro; 0 = desligado)",
+    "juros_max": "não compra quando o juro a 10 anos subiu mais do que isto (p.p.) em 3 meses (0 = desligado)",
+    "usd_max": "não compra ações dos EUA quando o dólar caiu mais do que isto face ao euro em 3 meses (0 = desligado)",
+    "filtro_spy": "não compra quando o S&P 500 está abaixo da média de 200 dias (1 = ligado)",
+    "dias_resultados": "não compra ações com resultados trimestrais nos próximos N dias",
+    "evita_macro": "não compra na véspera de eventos macro (Fed, inflação, emprego) (1 = ligado)",
 }
 
-PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext"}
+PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext",
+              "epu_max", "usd_max"}
 
 # strategy: (idea, buys when, sells when, position size)
 DOCS = {
@@ -214,6 +224,12 @@ def context_text(ctx: dict | None) -> str:
         bits.append(f"notícias {ctx['news']:+d}")
     if ctx.get("zone"):
         bits.append(f"mercado em zona {ctx['zone']}")
+    if ctx.get("vix"):
+        bits.append(f"VIX {ctx['vix']:.0f}")
+    if ctx.get("epu_pct") is not None and "epu_pct" in ctx:
+        bits.append(f"incerteza política no percentil {ctx['epu_pct'] * 100:.0f}")
+    if ctx.get("usd_chg") is not None and "usd_chg" in ctx:
+        bits.append(f"dólar {-ctx['usd_chg'] * 100:+.1f}% face ao euro em 3 meses")
     if ctx.get("stop") and "low" not in ctx:
         bits.append(f"stop em {ctx['stop']:.2f}")
     if "low" in ctx:
