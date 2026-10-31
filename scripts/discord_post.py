@@ -30,6 +30,7 @@ DISCLAIMER = "Ferramenta de análise educativa, não é recomendação de compra
 
 
 CHANNELS_PATH = REPO / "discord" / "channels.json"
+MIRROR_PATH = REPO / "discord" / "mirror.json"  # a second server that gets a copy of every post
 API = "https://discord.com/api/v10"
 
 
@@ -40,19 +41,33 @@ def route(kind: str) -> dict:
     (discord/channels.json); empty, i.e. the default webhook channel, until then.
     With DISCORD_TESTES set every kind goes to the 🧪-testes channel, and it is
     an error if that channel is missing rather than a post in the real one.
+    The returned `kind` makes post_message copy the post to discord/mirror.json.
     """
     token = os.environ.get("DISCORD_BOT_TOKEN")
     if os.environ.get("DISCORD_TESTES"):
         channel = json.loads(CHANNELS_PATH.read_text()).get("channels", {}).get("testes") if CHANNELS_PATH.exists() else None
         if not token or not channel:
             raise RuntimeError("DISCORD_TESTES definido mas sem canal 🧪-testes (discord_setup.py --canal-testes)")
-        return {"url": f"{API}/channels/{channel}/messages", "headers": {"Authorization": f"Bot {token}"}}
+        return {"url": f"{API}/channels/{channel}/messages", "headers": {"Authorization": f"Bot {token}"}, "kind": "testes"}
     if not token or not CHANNELS_PATH.exists():
         return {}
     channel = json.loads(CHANNELS_PATH.read_text()).get("channels", {}).get(kind)
     if not channel:
         return {}
-    return {"url": f"{API}/channels/{channel}/messages", "headers": {"Authorization": f"Bot {token}"}}
+    return {"url": f"{API}/channels/{channel}/messages", "headers": {"Authorization": f"Bot {token}"}, "kind": kind}
+
+
+def mirror(kind: str, embeds: list[dict], files: dict[str, bytes], content: str | None) -> None:
+    """Copy a post to the channel of the same kind in the mirror server; a failure there only warns."""
+    token = os.environ.get("DISCORD_BOT_TOKEN")
+    if not token or not MIRROR_PATH.exists():
+        return
+    channel = json.loads(MIRROR_PATH.read_text()).get("channels", {}).get(kind)
+    if not channel:
+        return
+    if post_message(embeds, files, url=f"{API}/channels/{channel}/messages", content=content,
+                    headers={"Authorization": f"Bot {token}"}) is None:
+        print(f"WARN: cópia para o servidor espelho (#{kind}) falhou", file=sys.stderr)
 
 
 def embed(
@@ -83,11 +98,13 @@ def post_message(
     content: str | None = None,
     thread_id: str | None = None,
     headers: dict | None = None,
+    kind: str | None = None,
 ) -> dict | None:
     """Post (or, with method=PATCH and an interaction url, edit) one message.
 
     Defaults to the channel webhook; `thread_id` posts inside a thread of that
     channel, `url` + `headers` send elsewhere (e.g. a DM with the bot token).
+    `kind` (set by route()) also copies the post to the mirror server.
     Returns Discord's message object ({} on a dry run), or None on failure.
     """
     files = files or {}
@@ -129,6 +146,8 @@ def post_message(
         print(f"Discord respondeu {resp.status_code}: {resp.text[:300]}", file=sys.stderr)
         return None
     print("Mensagem enviada para o Discord.")
+    if kind:
+        mirror(kind, embeds, files, content)
     try:
         return resp.json()
     except ValueError:

@@ -7,6 +7,9 @@
                 write their ids to discord/channels.json
     --canal-testes  create the read-only 🧪-testes channel in that category; posts
                 go there instead of their usual channel when DISCORD_TESTES is set
+    --espelho ID    create the same category and channels (plus #billions) in a
+                second server and write them to discord/mirror.json; every bot
+                post is then copied there
 
 Run from the "Configurar o bot do Discord" workflow. Keep the command list in
 step with discord-bot/worker.js.
@@ -21,7 +24,7 @@ import sys
 
 import requests
 
-from discord_post import BLUE, CHANNELS_PATH, embed, send
+from discord_post import BLUE, CHANNELS_PATH, MIRROR_PATH, embed, send
 
 SUB_COMMAND, STRING, NUMBER = 1, 3, 10
 MANAGE_SERVER = "32"  # permission bit: only server admins see /horario
@@ -308,6 +311,52 @@ def create_test_channel() -> int:
     return 0
 
 
+MIRROR_CHAT = ("discussao", "billions", "Conversa livre. As análises do bot aparecem nos canais ao lado.")
+
+
+def create_mirror_channels(guild: str) -> int:
+    """Create (or reuse) the same channels in a second server and write them to discord/mirror.json.
+
+    discord_post copies every bot post into the channel of the same kind there.
+    The bot must already be in that server (OAuth invite with Manage Channels and Manage Roles).
+    """
+    if not os.environ.get("DISCORD_BOT_TOKEN"):
+        print("Falta DISCORD_BOT_TOKEN.", file=sys.stderr)
+        return 1
+    bot = discord_api("GET", "/users/@me")["id"]
+    channels = discord_api("GET", f"/guilds/{guild}/channels")
+    category = next((c for c in channels if c["type"] == 4 and c["name"].lower() == CATEGORY.lower()), None) \
+        or discord_api("POST", f"/guilds/{guild}/channels", json={"name": CATEGORY, "type": 4})
+    read_only = [
+        {"id": guild, "type": 0, "deny": str(SEND), "allow": str(MEMBERS_ALLOW)},
+        {"id": bot, "type": 1, "allow": str(BOT_ALLOW | PIN), "deny": "0"},
+    ]
+    ids = {}
+    for key, name, topic in [MIRROR_CHAT, *CHANNELS, TEST_CHANNEL]:
+        channel = next((c for c in channels if c["type"] == 0 and c["name"] == name), None)
+        if channel is None:
+            body = {"name": name, "type": 0, "parent_id": category["id"], "topic": topic}
+            if key != MIRROR_CHAT[0]:
+                body["permission_overwrites"] = read_only
+            channel = discord_api("POST", f"/guilds/{guild}/channels", json=body)
+            print(f"::notice title=Espelho::Criado #{name}")
+        ids[key] = channel["id"]
+
+    failed = 0
+    for key, name, topic in [*CHANNELS, TEST_CHANNEL]:
+        try:  # the bot must be able to post in every copy, or that kind of post would only reach one server
+            discord_api("POST", f"/channels/{ids[key]}/messages",
+                        json={"embeds": [embed(f"Bem-vindo a #{name}", topic, color=BLUE, footer="")]})
+        except RuntimeError as e:
+            print(f"::error title=Espelho::O bot não consegue publicar em #{name}: {e}")
+            failed += 1
+    if failed:
+        return 1
+    MIRROR_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MIRROR_PATH.write_text(json.dumps({"guild_id": guild, "category_id": category["id"], "channels": ids}, indent=2) + "\n")
+    return 0
+
+
 def diagnose() -> int:
     """Annotate the bot's server-wide permissions, to explain Missing Access errors."""
     hook = requests.get(os.environ["DISCORD_WEBHOOK_URL"], timeout=30).json()
@@ -379,6 +428,7 @@ def main() -> int:
     parser.add_argument("--welcome", action="store_true", help="Post the welcome card")
     parser.add_argument("--canais", action="store_true", help="Create the 📈 FINANÇAS category and channels")
     parser.add_argument("--canal-testes", action="store_true", help="Create the 🧪-testes channel (for DISCORD_TESTES)")
+    parser.add_argument("--espelho", metavar="GUILD_ID", help="Create the channels in a second server and copy posts there")
     parser.add_argument("--diagnostico", action="store_true", help="Show the bot's server-wide permissions")
     parser.add_argument("--dry-run", action="store_true", help="Print the welcome card instead of posting it")
     args = parser.parse_args()
@@ -402,6 +452,12 @@ def main() -> int:
             status = status or create_test_channel()
         except (RuntimeError, KeyError, requests.RequestException) as e:
             print(f"::error title=Canal de testes::{e}")
+            status = 1
+    if args.espelho:
+        try:
+            status = status or create_mirror_channels(args.espelho)
+        except (RuntimeError, KeyError, requests.RequestException) as e:
+            print(f"::error title=Espelho::{e} (o bot já foi adicionado a esse servidor?)")
             status = 1
     if args.welcome:
         status = status or send([welcome_card()], dry_run=args.dry_run)
