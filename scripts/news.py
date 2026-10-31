@@ -41,7 +41,7 @@ import yfinance as yf
 
 import discord_bot
 from discord_post import BLUE, embed, route, send
-from rankings import download_history, load_constituents
+from rankings import SECTORS_PT, download_history, load_constituents
 
 REPO = Path(__file__).resolve().parents[1]
 NEWS_DIR = REPO / "state" / "news"
@@ -325,19 +325,22 @@ def digest(rated: list[dict], source: str, now: datetime, names: dict[str, str] 
     )]
 
 
-def publish_portal(signals: dict, names: dict[str, str], now: datetime) -> None:
-    """The portal's news tab: every rated headline of the last 36 h, most important first."""
-    items = [i for sig in signals.values() for i in sig.get("items", [])
-             if now - datetime.fromisoformat(i["published"]) <= MAX_AGE]
-    items.sort(key=lambda i: (i.get("importancia", 0), i.get("published", "")), reverse=True)
-    rows = [{k: i.get(k) for k in ("symbol", "title", "resumo", "publisher", "url", "published", "sentimento",
-                                    "importancia", "surpresa", "fonte")} | {"company": names.get(i["symbol"], "")}
-            for i in items[:150]]
-    scores = {s: sig["score"] for s, sig in signals.items() if sig.get("score")}
+def publish_portal(signals: dict, constituents: list[dict], now: datetime, rated: list[dict] = ()) -> None:
+    """The portal's news tab: the 30-day archive with price reactions, by sector, and what changed (news_archive)."""
     try:
         import interactive
+        import news_archive
 
-        interactive.publish_section("news", {"updated": now.isoformat(timespec="minutes"), "items": rows, "scores": scores})
+        archive = news_archive.add(news_archive.load(), list(rated), now)
+        hist = download_history(sorted({i["symbol"] for i in archive}) + ["SPY"], period="3mo")
+        news_archive.reactions(archive, hist)
+        news_archive.ARCHIVE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        news_archive.ARCHIVE_PATH.write_text(json.dumps(archive, ensure_ascii=False))
+        names = {c["symbol"]: c["name"] for c in constituents}
+        sectors = {c["symbol"]: SECTORS_PT.get(c["sector"], c["sector"]) for c in constituents}
+        scores = {sym: sig["score"] for sym, sig in signals.items() if sig.get("score")}
+        interactive.publish_section("news", news_archive.build(archive, names, sectors, scores, now))
+        log(f"Portal: {len(archive)} notícias em arquivo")
     except Exception as e:  # the Discord digest matters more
         print(f"WARN: portal (notícias): {e!r}", file=sys.stderr)
 
@@ -356,8 +359,9 @@ def main() -> int:
         signals = json.loads(SIGNALS_PATH.read_text()) if SIGNALS_PATH.exists() else {}
         recent = [i for sig in signals.values() for i in sig.get("items", [])
                   if now - datetime.fromisoformat(i["published"]) <= MAX_AGE]
-        names = {c["symbol"]: c["name"] for c in load_constituents()}
-        publish_portal(signals, names, now)
+        constituents = load_constituents()
+        names = {c["symbol"]: c["name"] for c in constituents}
+        publish_portal(signals, constituents, now)
         sources = sorted({i.get("fonte", "FinBERT") for i in recent}) or ["Claude"]
         cards = digest(recent, " e ".join(sources), now, names)
         log(f"Republicar: {len(recent)} títulos guardados, {'1 cartão' if cards else 'nada importante'}")
@@ -398,7 +402,7 @@ def main() -> int:
     NEWS_DIR.mkdir(parents=True, exist_ok=True)
     merged = merge_signals(previous, rated, now)
     SIGNALS_PATH.write_text(json.dumps(merged, indent=1, ensure_ascii=False))
-    publish_portal(merged, names, now)
+    publish_portal(merged, constituents, now, rated)
     SEEN_PATH.write_text(json.dumps((seen_list + [i for i in by_id if i not in seen])[-SEEN_KEPT:]))
 
     log(f"{len(rated)} títulos analisados ({source}), {sum(i['importancia'] >= 2 and i['sentimento'] != 0 for i in rated)} importantes")

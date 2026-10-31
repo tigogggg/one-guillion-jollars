@@ -1791,6 +1791,31 @@ def reply_target() -> dict:
     return {}
 
 
+def publish_calendar(config: dict, state: dict, mkt: Market, extra: set[str] = frozenset()) -> None:
+    """The portal's calendar: macro events for 14 days and results dates of the followed stocks for 21 days."""
+    import macro
+
+    holders: dict[str, list[str]] = {}
+    for cfg in active_agents(config):
+        for sym in (state["agents"].get(cfg["id"]) or {}).get("positions", {}):
+            holders.setdefault(sym, []).append(f"{cfg['emoji']} {cfg['name']}")
+    ranked = {r["symbol"] for r in mkt.rankings}
+    syms = [x for x in sorted(set(holders) | ranked | set(extra)) if x in mkt.stocks]
+    missing = [x for x in syms if x not in mkt.earnings]
+    if missing:
+        mkt.earnings.update(earnings.next_earnings_many(missing))
+    events, from_fmp = macro.events(mkt.as_of, mkt.as_of + timedelta(days=14))
+    rows = sorted(({"symbol": x, "name": mkt.stocks[x].get("name", ""), "date": mkt.earnings[x].isoformat(),
+                    "held_by": holders.get(x, []), "ranking": x in ranked}
+                   for x in syms if isinstance(mkt.earnings.get(x), date) and 0 <= (mkt.earnings[x] - mkt.as_of).days <= 21),
+                  key=lambda r: r["date"])
+    interactive.publish_section("calendar", {
+        "as_of": mkt.as_of.isoformat(), "source": "FMP" if from_fmp else "calendário de reserva (reuniões da Fed)",
+        "macro": [{"date": d.isoformat(), "name": n} for d, n in events], "earnings": rows,
+        "avoid_days": EARNINGS_AVOID_DAYS,
+    })
+
+
 LEAGUE_TITLE = "🤖 Liga dos agentes"
 MONTHLY_TITLE = "📆 Relatório mensal dos agentes"
 
@@ -1809,6 +1834,7 @@ def main() -> int:
         mkt = load_market()
         embeds, _ = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}")
         print(f"Portal atualizado: {embeds[0].get('url', 'sem credenciais da Cloudflare')}")
+        publish_calendar(config, state, mkt)
         return 0
     try:
         if a.mode == "daily":
@@ -1850,6 +1876,7 @@ def main() -> int:
             props = proposals.build(config, state, mkt)
             props["scoreboard"] = proposals.scoreboard(proposals.update_log(props, mkt))
             interactive.publish_section("proposals", props)
+            publish_calendar(config, state, mkt, {b["symbol"] for b in props["buys"]})
             portal = interactive.portal_url()
             if portal:
                 buttons.append(("🏟️ Abrir o portal", portal))

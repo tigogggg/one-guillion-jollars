@@ -39,8 +39,8 @@ export async function portalResponse(env, token, schedule) {
   const latest = (await env.CONFIG.get("chart-latest:liga", "json")) || (await env.CONFIG.get("chart-latest:pretreino", "json"));
   const data = (latest && (await env.CONFIG.get(`chart:${latest}`, "json"))) ||
     { title: "Liga dos agentes", subtitle: "ainda sem dados", updated: new Date().toISOString(), series: [], agents: [] };
-  const [news, market, proposals] = await Promise.all(["news", "market", "proposals"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals }));
+  const [news, market, proposals, calendar] = await Promise.all(["news", "market", "proposals", "calendar"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar }));
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +188,7 @@ const UPCOMING = ${safeJson(upcoming)};
 const NEWS = ${safeJson(extras.news || null)};
 const MARKET = ${safeJson(extras.market || null)};
 const PROPOSALS = ${safeJson(extras.proposals || null)};
+const CALENDAR = ${safeJson(extras.calendar || null)};
 ${CLIENT}
 </script>`;
   return page(portal ? "One Guillion Jollars" : data.title, body, `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -474,31 +475,100 @@ if (location.hash && document.querySelector('#tabs .tab[data-tab="' + location.h
 // ---- news ----
 (function news() {
   if (!$("news")) return;
-  if (!NEWS || !(NEWS.items || []).length) { $("news").innerHTML = '<p class="muted">Ainda não há notícias lidas. A leitura corre ' + esc((UPCOMING.find((j) => j.key === "noticias") || { times: [] }).times.join(" · ")) + ' nos dias úteis.</p>'; return; }
+  const N = NEWS || {};
   const sentiment = { 2: "🟢 muito positiva", 1: "🟢 positiva", 0: "⚪ neutra", "-1": "🔴 negativa", "-2": "🔴 muito negativa" };
-  const ago = (iso) => { const h = (Date.now() - Date.parse(iso)) / 3.6e6; return h < 1 ? Math.max(1, Math.round(h * 60)) + " min" : Math.round(h) + " h"; };
-  const scores = Object.entries(NEWS.scores || {}).sort((a, b) => b[1] - a[1]);
-  $("news").innerHTML = '<h2>📰 Principais notícias do mercado</h2><p class="muted small">Últimas 36 horas · lidas às ' +
-    lisbon(Date.parse(NEWS.updated), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) +
-    ' · ' + NEWS.items.length + ' títulos das ações do ranking, das carteiras dos agentes, do /seguir e das que mais mexeram</p>' +
-    (scores.length ? '<div class="grid">' + tile("Mais positivas", scores.slice(0, 3).map(([k, v]) => esc(k) + " " + (v > 0 ? "+" : "") + v).join(" · ") || "—", "score = sentimento × importância", "up") +
-      tile("Mais negativas", scores.slice(-3).reverse().filter(([, v]) => v < 0).map(([k, v]) => esc(k) + " " + v).join(" · ") || "—", "", "down") + '</div>' : "") +
-    '<div class="filters"><input id="nf-q" placeholder="Procurar ação ou palavra"><select id="nf-s"><option value="">Todos os sentimentos</option><option value="pos">Positivas</option><option value="neg">Negativas</option><option value="neu">Neutras</option></select>' +
-    '<select id="nf-i"><option value="0">Toda a importância</option><option value="2" selected>Importância 2+</option><option value="3">Só as materiais (3)</option></select></div><div id="news-list" class="news"></div>';
-  function draw() {
+  const ago = (iso) => { const h = (Date.now() - Date.parse(iso)) / 3.6e6; return h < 1 ? Math.max(1, Math.round(h * 60)) + " min" : h < 48 ? Math.round(h) + " h" : Math.round(h / 24) + " dias"; };
+  const stars = (n) => "★".repeat(n || 0) + "☆".repeat(3 - (n || 0));
+  const react = (i) => (i.r1 != null ? ' · reação: <span class="' + cls(i.r1) + '">' + fmtPct(i.r1) + '</span> no dia seguinte' + (i.r5 != null ? ', <span class="' + cls(i.r5) + '">' + fmtPct(i.r5) + '</span> em 5 sessões' : '') + ' (vs S&P 500)' : '');
+  const article = (i) => '<article class="' + (i.sentimento > 0 ? "pos" : i.sentimento < 0 ? "neg" : "") + '"><div><b>' + esc(i.symbol) + '</b>' +
+    (i.company ? ' <span class="muted">' + esc(i.company) + '</span>' : "") + (i.sector ? ' <span class="tag">' + esc(i.sector) + '</span>' : '') + ' · ' + (sentiment[i.sentimento] || "⚪") + ' · ' + stars(i.importancia) +
+    (i.surpresa ? ' · ⚡ surpresa' : "") + '</div><div>' + esc(i.resumo || i.title) + '</div><div class="meta">' +
+    (i.url ? '<a href="' + esc(i.url) + '" target="_blank" rel="noopener noreferrer">' + esc(i.title) + '</a>' : esc(i.title)) +
+    ' · ' + esc(i.publisher || "") + ' · há ' + ago(i.published) + ' · lida por ' + esc(i.fonte || "?") + react(i) + '</div></article>';
+  const subs = [["agora", "Agora"], ["setores", "Por setor"], ["mudancas", "O que mudou"], ["acao", "Por ação"], ["calendario", "Calendário"], ["precisao", "Precisão"]];
+  $("news").innerHTML = '<h2>📰 Notícias do mercado</h2><p class="muted small">' + (N.updated ? 'Lidas às ' + lisbon(Date.parse(N.updated), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) + ' · ' : '') +
+    'ações do ranking, das carteiras dos agentes, do /seguir e as que mais mexeram · arquivo de ' + (N.archive_days || 30) + ' dias</p>' +
+    '<div class="chips" id="nsub">' + subs.map(([k, l], i) => '<button class="chip' + (i ? '' : ' on') + '" data-k="' + k + '">' + l + '</button>').join("") + '</div><div id="nbody"></div>';
+  const views = {
+    agora() {
+      if (!(N.items || []).length) return '<p class="muted">Ainda não há notícias lidas.</p>';
+      const scores = Object.entries(N.scores || {}).sort((a, b) => b[1] - a[1]);
+      setTimeout(() => { ["nf-q", "nf-s", "nf-i"].forEach((id) => $(id).addEventListener("input", drawList)); drawList(); });
+      return (scores.length ? '<div class="grid">' + tile("Mais positivas", scores.slice(0, 3).map(([k, v]) => esc(k) + " +" + v).join(" · ") || "—", "score = sentimento × importância (36 h)", "up") +
+        tile("Mais negativas", scores.slice(-3).reverse().filter(([, v]) => v < 0).map(([k, v]) => esc(k) + " " + v).join(" · ") || "—", "", "down") + '</div>' : "") +
+        '<div class="filters"><input id="nf-q" placeholder="Procurar ação, empresa ou palavra"><select id="nf-s"><option value="">Todos os sentimentos</option><option value="pos">Positivas</option><option value="neg">Negativas</option><option value="neu">Neutras</option></select>' +
+        '<select id="nf-i"><option value="0">Toda a importância</option><option value="2" selected>Importância 2+</option><option value="3">Só as materiais (3)</option></select></div><div id="news-list" class="news"></div>';
+    },
+    setores() {
+      return table(["Setor", "Notícias", "Importantes", "Sentimento médio", "Ações"], (N.sectors || []).map((r) => [esc(r.sector), r.count, r.important,
+        '<span class="' + cls(r.sentiment) + '">' + (r.sentiment > 0 ? "+" : "") + fmtNum(r.sentiment, 2) + '</span>',
+        r.symbols.map((x) => '<a href="#" class="nsym" data-s="' + esc(x) + '">' + esc(x) + '</a>').join(" ")]), [1, 2, 3]) +
+        '<p class="muted small">Sentimento de -2 (muito negativo) a +2 (muito positivo), nas últimas 36 horas.</p>';
+    },
+    mudancas() {
+      const c = N.changes || {};
+      return '<h3>🔄 Score das notícias: últimas 24 h vs as 24 h anteriores</h3>' + table(["Ação", "Agora", "Antes", "Mudança"], (c.moves || []).map((m) =>
+        ['<a href="#" class="nsym" data-s="' + esc(m.symbol) + '">' + esc(m.symbol) + '</a> <span class="muted">' + esc(m.company) + '</span>', m.now, m.before,
+         '<span class="' + cls(m.delta) + '">' + (m.delta > 0 ? "+" : "") + m.delta + '</span>']), [1, 2, 3]) +
+        '<h3>🆕 Notícias importantes das últimas 24 h</h3><div class="news">' + ((c.new_important || []).map(article).join("") || '<p class="muted">Nenhuma.</p>') + '</div>';
+    },
+    acao() {
+      const syms = Object.keys(N.timeline || {});
+      setTimeout(() => { $("ns-sel").addEventListener("input", drawTimeline); drawTimeline(); });
+      return '<div class="filters"><select id="ns-sel">' + syms.map((x) => '<option value="' + esc(x) + '"' + (x === pickSym ? ' selected' : '') + '>' + esc(x) + ' (' + N.timeline[x].length + ')</option>').join("") +
+        '</select><span class="muted small">Notícias dos últimos 30 dias e como o preço reagiu (descontado o S&P 500).</span></div><div id="ns-stats"></div><div id="ns-chart" style="height:260px"></div><div id="ns-list" class="news"></div>' +
+        '<h3>📈 Que ações reagem às notícias</h3><p class="muted small">Só notícias importantes (2+). Movimento médio no dia seguinte e em 5 sessões, em valor absoluto, e quantas vezes foi na direção que o sentimento indicava.</p>' +
+        table(["Ação", "Notícias", "Move no dia seguinte", "Move em 5 sessões", "Direção certa (1 dia)", "Direção certa (5)"], (N.reaction || []).map((r) =>
+          ['<a href="#" class="nsym" data-s="' + esc(r.symbol) + '">' + esc(r.symbol) + '</a> <span class="muted">' + esc(r.company) + '</span>', r.news, fmtNum(r.avg_abs_r1, 1) + "%",
+           r.avg_abs_r5 == null ? "—" : fmtNum(r.avg_abs_r5, 1) + "%", r.hit_r1 == null ? "—" : fmtNum(r.hit_r1 * 100, 0) + "%", r.hit_r5 == null ? "—" : fmtNum(r.hit_r5 * 100, 0) + "%"]), [1, 2, 3, 4, 5]);
+    },
+    calendario() {
+      const C = CALENDAR;
+      if (!C) return '<p class="muted">O calendário aparece depois da próxima liga dos agentes.</p>';
+      const dayName = (d) => lisbon(Date.parse(d + "T12:00:00Z"), { weekday: "short", day: "2-digit", month: "2-digit" });
+      return '<h3>🏛️ Agenda macro (14 dias)</h3><p class="muted small">Fonte: ' + esc(C.source) + '. Os agentes com <code>evita_macro</code> ligado não compram na véspera.</p>' +
+        table(["Dia", "Evento"], C.macro.map((e) => [esc(dayName(e.date)), esc(e.name)])) +
+        '<h3>📅 Resultados trimestrais (21 dias)</h3><p class="muted small">Das ações do ranking, das carteiras dos agentes e das propostas. Por defeito os agentes não compram ' + C.avoid_days + ' dias antes.</p>' +
+        table(["Dia", "Ação", "Na carteira de", "No ranking"], C.earnings.map((e) => [esc(dayName(e.date)), '<b>' + esc(e.symbol) + '</b> <span class="muted">' + esc(e.name) + '</span>',
+          esc(e.held_by.join(", ") || "—"), e.ranking ? "🏆" : ""]));
+    },
+    precisao() {
+      const A = N.accuracy || {};
+      return '<div class="grid">' + tile("Notícias importantes avaliadas", A.news ?? 0, "nos últimos 30 dias") +
+        tile("Direção certa no dia seguinte", A.hit_r1 == null ? "—" : fmtNum(A.hit_r1 * 100, 0) + "%", "50% seria ao acaso", cls((A.hit_r1 || 0.5) - 0.5)) +
+        tile("Direção certa em 5 sessões", A.hit_r5 == null ? "—" : fmtNum(A.hit_r5 * 100, 0) + "%", "", cls((A.hit_r5 || 0.5) - 0.5)) +
+        tile("Claude vs FinBERT", (A.by_source?.Claude == null ? "—" : fmtNum(A.by_source.Claude * 100, 0) + "%") + " vs " + (A.by_source?.FinBERT == null ? "—" : fmtNum(A.by_source.FinBERT * 100, 0) + "%"), "direção certa no dia seguinte") + '</div>' +
+        '<p class="muted small">Uma notícia acerta quando o preço, descontado o S&P 500, se move no sentido do sentimento (positiva → sobe). Mede se vale a pena seguir a leitura das notícias.</p>';
+    },
+  };
+  let pickSym = Object.keys(N.timeline || {})[0];
+  function drawList() {
     const q = $("nf-q").value.trim().toLowerCase(), sv = $("nf-s").value, imin = +$("nf-i").value;
-    const list = NEWS.items.filter((i) => (i.importancia || 0) >= imin &&
-      (!sv || (sv === "pos" ? i.sentimento > 0 : sv === "neg" ? i.sentimento < 0 : !i.sentimento)) &&
-      (!q || [i.symbol, i.company, i.title, i.resumo].join(" ").toLowerCase().includes(q)));
-    $("news-list").innerHTML = list.length ? list.map((i) => '<article class="' + (i.sentimento > 0 ? "pos" : i.sentimento < 0 ? "neg" : "") + '"><div><b>' + esc(i.symbol) + '</b>' +
-      (i.company ? ' <span class="muted">' + esc(i.company) + '</span>' : "") + ' · ' + (sentiment[i.sentimento] || "⚪") + ' · ' + "★".repeat(i.importancia || 0) + "☆".repeat(3 - (i.importancia || 0)) +
-      (i.surpresa ? ' · ⚡ surpresa' : "") + '</div><div>' + esc(i.resumo || i.title) + '</div><div class="meta">' +
-      (i.url ? '<a href="' + esc(i.url) + '" target="_blank" rel="noopener noreferrer">' + esc(i.title) + '</a>' : esc(i.title)) +
-      ' · ' + esc(i.publisher || "") + ' · há ' + ago(i.published) + ' · lida por ' + esc(i.fonte || "?") + '</div></article>').join("")
-      : '<p class="muted">Nenhuma notícia com estes filtros.</p>';
+    const list = (N.items || []).filter((i) => (i.importancia || 0) >= imin && (!sv || (sv === "pos" ? i.sentimento > 0 : sv === "neg" ? i.sentimento < 0 : !i.sentimento)) &&
+      (!q || [i.symbol, i.company, i.title, i.resumo, i.sector].join(" ").toLowerCase().includes(q)));
+    $("news-list").innerHTML = list.map(article).join("") || '<p class="muted">Nenhuma notícia com estes filtros.</p>';
   }
-  ["nf-q", "nf-s", "nf-i"].forEach((id) => $(id).addEventListener("input", draw));
-  draw();
+  function drawTimeline() {
+    pickSym = $("ns-sel").value;
+    const xs = (N.timeline || {})[pickSym] || [];
+    const withR = xs.filter((i) => i.r1 != null);
+    $("ns-stats").innerHTML = '<div class="grid">' + tile("Notícias (30 dias)", xs.length, esc(xs[0]?.company || "")) +
+      tile("Sentimento médio", fmtNum(xs.reduce((a, i) => a + (i.sentimento || 0), 0) / Math.max(1, xs.length), 2), "", cls(xs.reduce((a, i) => a + (i.sentimento || 0), 0))) +
+      tile("Move médio no dia seguinte", withR.length ? fmtNum(withR.reduce((a, i) => a + Math.abs(i.r1), 0) / withR.length, 1) + "%" : "—", "valor absoluto, vs S&P 500") + '</div>';
+    $("ns-list").innerHTML = xs.map(article).join("");
+    if (window.Plotly && withR.length) Plotly.newPlot("ns-chart", [{ x: withR.map((i) => i.published.slice(0, 10)), y: withR.map((i) => i.r1), type: "bar",
+      marker: { color: withR.map((i) => i.sentimento > 0 ? "#39ff88" : i.sentimento < 0 ? "#ff4d6d" : "#9b96c9") }, text: withR.map((i) => i.resumo || i.title), textposition: "none",
+      hovertemplate: "%{text}<br>%{y:+.1f}% no dia seguinte<extra></extra>" }], { paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff" },
+      margin: { l: 44, r: 10, t: 10, b: 30 }, barmode: "group", yaxis: { ticksuffix: "%", gridcolor: "#2e2763" }, xaxis: { gridcolor: "#2e2763" } }, { responsive: true, displaylogo: false });
+    else $("ns-chart").innerHTML = '<p class="muted small" style="padding:8px">Ainda sem reações medidas (precisam de pelo menos uma sessão).</p>';
+  }
+  function show(k) {
+    document.querySelectorAll("#nsub .chip").forEach((b) => b.classList.toggle("on", b.dataset.k === k));
+    $("nbody").innerHTML = views[k]();
+  }
+  $("nsub").addEventListener("click", (e) => { const b = e.target.closest(".chip"); if (b) show(b.dataset.k); });
+  $("nbody").addEventListener("click", (e) => { const a = e.target.closest(".nsym"); if (a) { e.preventDefault(); pickSym = a.dataset.s; show("acao"); } });
+  show("agora");
 })();
 
 // ---- proposals ----

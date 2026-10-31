@@ -187,6 +187,16 @@ OFL), where each summary arrives and when, and three buttons: open the portal
 link, only to them) and "Como funciona" (the help). Running it again replaces
 the message with a fresh one (new times, new link).
 
+**News analysis (`scripts/news_archive.py`, portal tab "📰 Notícias").** Each
+news run keeps every rated headline for 30 days (`state/news/archive.json`, in
+the news workflow's cache) and measures the price reaction 1 and 5 sessions
+later, net of the S&P 500. The tab has: now (36 h, with filters), by sector,
+what changed in 24 h (new important news, biggest score moves), per stock (30
+days of headlines, a reaction chart, which stocks react to news), the calendar
+(`publish_calendar` in the agents' run: macro events for 14 days, results
+dates for 21 days of the ranked, held and proposed stocks) and accuracy (how
+often the price moved the way the sentiment said, Claude vs FinBERT).
+
 **Proposals (`scripts/proposals.py`, portal tab "🧠 Propostas").** After the
 daily league, the orders the agents placed for the next open become proposals.
 Each agent's vote is weighted by its record (`WEIGHT_RULES`: exam year of the
