@@ -264,9 +264,13 @@ def test_risk_filter_sizes_by_volatility_caps_sectors_and_brakes():
     kept, notes = agents.risk_filter(orders, port, mkt)
     assert [(o["symbol"], o["eur"]) for o in kept] == [("CALM", 200), ("WILD", 150)]  # half size for 4% daily vol
     assert "MORE" in notes[0] and "Energia" in notes[0]  # 200 + 150 + 100 > 40% of 1000 in one sector
-    port["peak"] = 1.5  # now 33% below its best level
+    port["brake_peak"] = 1.5  # now 33% below its last high: buys pause for two weeks
     kept, notes = agents.risk_filter(orders, port, mkt)
-    assert kept == [] and "travão" in notes[0]
+    assert kept == [] and "travão" in notes[0] and port["brake_until"] == "2026-11-11"
+    later = market({}, date(2026, 11, 12), stocks=mkt.stocks)
+    later.closes = mkt.closes
+    kept, _ = agents.risk_filter(orders, port, later)  # pause over: trades again, measured from today's level
+    assert kept and port["brake_until"] is None and port["brake_peak"] == pytest.approx(1.0)
 
 
 def test_bankrupt_agent_is_replaced_by_a_child_of_the_leader():

@@ -70,7 +70,8 @@ BANKRUPTCY = 0.5  # an agent that loses half of the money it was given is replac
 # Risk management for every agent without ignora_risco:
 TARGET_VOL = 0.02  # daily volatility a full-size position is meant for; more volatile stocks get smaller
 SECTOR_CAP = 0.40  # at most this share of equity in one sector
-DD_BRAKE = 0.20  # no new buys while the agent is this far below its best level
+DD_BRAKE = 0.20  # a fall this deep from the last high pauses new buys…
+BRAKE_DAYS = 14  # …for this many calendar days; the brake then re-arms from the current level
 EXPOSURE = {"Alta": 1.0, "Neutra": 0.7, "Cautelosa": 0.4, "Queda": 0.1}
 ZONE_ICON = {"Alta": "🟢", "Neutra": "🟡", "Cautelosa": "🟠", "Queda": "🔴"}
 MUTATION = 0.2
@@ -897,10 +898,28 @@ def skip_bad_news(orders: list[dict], mkt: Market) -> tuple[list[dict], list[str
     return kept, skipped
 
 
+def brake(port: dict, mkt: Market, eq: float) -> bool:
+    """Whether new buys are paused: a DD_BRAKE fall from the last high pauses them for BRAKE_DAYS.
+
+    The brake has its own high-water mark, reset when a pause ends, so an agent left in cash by its stops can
+    trade again instead of staying paused forever.
+    """
+    if port.get("brake_until") and mkt.as_of.isoformat() <= port["brake_until"]:
+        return True
+    ratio = eq / port["deposits"] if port["deposits"] else 1.0
+    if port.get("brake_until"):  # a pause just ended: measure falls from here
+        port["brake_until"], port["brake_peak"] = None, ratio
+    port["brake_peak"] = max(port.get("brake_peak", 1.0), ratio)
+    if 1 - ratio / port["brake_peak"] >= DD_BRAKE:
+        port["brake_until"] = (mkt.as_of + timedelta(days=BRAKE_DAYS)).isoformat()
+        return True
+    return False
+
+
 def risk_filter(orders: list[dict], port: dict, mkt: Market) -> tuple[list[dict], list[str]]:
     """Volatility sizing, sector cap and drawdown brake for buy orders; returns (orders, skipped notes)."""
     eq = equity(port, mkt)
-    dd = drawdown(port, eq)
+    braking = brake(port, mkt, eq)
     sector_value: dict[str, float] = {}
     for s, pos in port["positions"].items():
         m = mkt.stocks.get(s)
@@ -911,8 +930,8 @@ def risk_filter(orders: list[dict], port: dict, mkt: Market) -> tuple[list[dict]
         if o["side"] != "buy":
             kept.append(o)
             continue
-        if dd >= DD_BRAKE:
-            notes.append(f"{o['symbol']} (travão: carteira {-dd * 100:.0f}% abaixo do máximo)")
+        if braking:
+            notes.append(f"{o['symbol']} (travão de risco até {port['brake_until']})")
             continue
         m = mkt.stocks.get(o["symbol"])
         if m:
