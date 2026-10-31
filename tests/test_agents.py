@@ -294,3 +294,29 @@ def test_bankrupt_agent_is_replaced_by_a_child_of_the_leader():
     assert child["strategy"] == "foguetao" and child["name"] == "Vencedor II" and child["id"] == "winner-2"
     assert state["agents"]["winner-2"]["cash"] == 1000 and state["agents"]["winner-2"]["generation"] == 2
     assert "faliu" in events[0] and "Vencedor II" in events[0]
+
+
+def test_estrategia_card_explains_rules_params_and_results():
+    config = {"agents": [{"id": "f", "name": "Foguetão", "emoji": "🚀", "strategy": "foguetao", "capital": 1000,
+                          "params": {"n": 3, "stop_pct": 0.1713, "cada": 11}}]}
+    port = new_portfolio(1000, DATES[0].date())
+    port["params"] = {"n": 3, "stop_pct": 0.1713, "cada": 11}
+    port["history"] = [{"date": "2026-11-03", "equity": 1050, "deposits": 1000}]
+    state = {"agents": {"f": port}}
+    embeds, _, changed = configure({"acao": "estrategia", "nome": "foguetao"}, config, state, None)
+    card = embeds[0]
+    fields = {f["name"]: f["value"] for f in card["fields"]}
+    assert not changed and "Momentum" in card["description"]
+    assert "A cada 11 sessões compra as 3 ações" in fields["🟢 Quando compra"]
+    assert "stop de 17.1%" in fields["🔴 Quando vende"]
+    assert "`stop_pct` = **17.1%**" in fields["⚙️ Parâmetros atuais"]
+    assert "+5.0%" in fields["📊 Ao vivo"]
+    index, _, _ = configure({"acao": "estrategia"}, config, state, None)
+    assert "Foguetão" in index[0]["description"]
+
+
+def test_every_strategy_has_an_explanation():
+    import strategy_docs
+    assert set(strategy_docs.DOCS) == set(agents.STRATEGIES)
+    for key, (_, _, default) in agents.STRATEGIES.items():
+        assert "«" not in "".join(strategy_docs.describe(key, default)), key  # every placeholder is a real parameter

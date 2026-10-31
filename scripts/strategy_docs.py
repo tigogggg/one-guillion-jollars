@@ -1,0 +1,159 @@
+"""Plain-Portuguese explanations of each agent strategy and parameter, for /estrategia.
+
+Texts use {param} placeholders filled with the agent's current parameters, so the
+explanation always matches what the agent actually does.
+"""
+
+from __future__ import annotations
+
+PARAMS = {
+    "n": "número máximo de posições",
+    "cada": "de quantas em quantas sessões revê a carteira",
+    "stop_pct": "stop-loss: vende se cair esta % abaixo da entrada",
+    "risco_pct": "% do património que aceita perder por operação (até ao stop)",
+    "alvo_r": "alvo de lucro em múltiplos do risco (R)",
+    "max_pos": "peso máximo de uma posição no património",
+    "qualidade_min": "score de qualidade mínimo (0-100)",
+    "aperto_pct": "amplitude máxima dos últimos 10 dias (contração)",
+    "setores": "número de setores mais fortes que segue",
+    "por_setor": "ações escolhidas em cada setor",
+    "queda_pct": "queda semanal mínima para comprar",
+    "alvo_pct": "lucro com que vende",
+    "max_dias": "número máximo de sessões que mantém uma posição",
+    "max_exposicao": "exposição máxima ao ETF mundial",
+    "folga": "desvio de peso tolerado antes de reajustar",
+    "salto_pct": "salto mínimo na abertura (face ao fecho anterior)",
+    "limiar": "força mínima das notícias (soma de sentimento × importância)",
+    "min_votos": "número mínimo de agentes que têm de concordar",
+    "lideres": "quantos agentes líderes copia",
+    "janela": "sessões usadas para escolher os líderes",
+    "ignora_resultados": "não evita resultados trimestrais próximos",
+    "ignora_risco": "não aplica as regras de risco comuns",
+    "ignora_noticias": "não evita ações com notícias negativas",
+}
+
+PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct"}
+
+# strategy: (idea, buys when, sells when, position size)
+DOCS = {
+    "indexador": (
+        "A referência da liga: comprar o S&P 500 e não fazer mais nada. Quem não o bate, não acrescenta valor.",
+        "Investe todo o dinheiro disponível no ETF SXR8 (S&P 500 em euros).",
+        "Nunca vende, por isso nunca paga imposto sobre mais-valias.",
+        "Tudo num só ETF.",
+    ),
+    "guardiao": (
+        "Conservador: só o ETF mundial VWCE, com mais ou menos peso conforme o estado do mercado.",
+        "Sobe o peso do VWCE até {max_exposicao} do património × exposição da zona (100% em alta, 70% neutra, 40% cautelosa, 10% em queda), revisto semanalmente.",
+        "Reduz o peso quando a zona do mercado piora e o desvio passa de {folga}.",
+        "Um só ETF; o resto fica em dinheiro.",
+    ),
+    "rotador": (
+        "Moderado: roda entre os ETFs UCITS com melhor tendência.",
+        "A cada {cada} sessões compra os {n} ETFs com melhor score de tendência (acima da média de 200 dias).",
+        "Vende os que deixam de estar no topo (com uma posição de folga).",
+        "Partes iguais, ajustadas à zona do mercado.",
+    ),
+    "foguetao": (
+        "Momentum: as ações do S&P 500 com a tendência mais forte.",
+        "A cada {cada} sessões compra as {n} ações com maior score de tendência em Stage 2 (preço > MM50 > MM200, MM200 a subir).",
+        "Vende as que saem do top {n}×2, ou no stop de {stop_pct}.",
+        "Partes iguais, ajustadas à zona do mercado.",
+    ),
+    "joalheiro": (
+        "Qualidade: as melhores do ranking diário com lucros, margens e crescimento sólidos.",
+        "A cada {cada} sessões compra as {n} melhores do ranking com qualidade ≥ {qualidade_min}.",
+        "Vende as que saem da lista, ou no stop de {stop_pct}.",
+        "Partes iguais, ajustadas à zona do mercado.",
+    ),
+    "cacador": (
+        "Rompimentos: ações que passam o máximo das últimas 20 sessões com volume forte.",
+        "Compra quando o preço fecha até 3% acima do máximo de 20 sessões, com volume ≥ 1,5× a média, em Stage 2.",
+        "Stop no mínimo dos últimos 10 dias; alvo de lucro em {alvo_r}R.",
+        "Arrisca {risco_pct} do património até ao stop, no máximo {max_pos} por posição, até {n} posições.",
+    ),
+    "sniper": (
+        "Seletivo: padrões de contração de volatilidade (VCP) perto do ponto de compra.",
+        "Compra setups VCP prontos, ou ações em Stage 2 com amplitude de 10 dias ≤ {aperto_pct} junto ao máximo e score ≥ 80.",
+        "Stop no mínimo dos últimos 10 dias; vende se o preço perder a média de 50 dias.",
+        "Arrisca {risco_pct} do património até ao stop, no máximo {max_pos} por posição, até {n} posições.",
+    ),
+    "campeao": (
+        "Rotação setorial: as melhores ações dos setores mais fortes.",
+        "A cada {cada} sessões escolhe os {setores} setores com mais ações em tendência de alta e compra as {por_setor} melhores de cada.",
+        "Vende as que saem da seleção, ou no stop de {stop_pct}.",
+        "Partes iguais, ajustadas à zona do mercado.",
+    ),
+    "pescador": (
+        "Contrário: compra quedas fortes em ações que continuam em tendência de alta.",
+        "Compra ações acima da MM200 (e MM50 > MM200) que caíram ≥ {queda_pct} na semana.",
+        "Vende com {alvo_pct} de lucro, no stop de {stop_pct}, ou ao fim de {max_dias} sessões.",
+        "1/{n} do património por posição.",
+    ),
+    "deriva": (
+        "Momentum de eventos: depois de resultados ou notícias fortes, as ações tendem a continuar a subir durante semanas.",
+        "Compra ações que abriram ≥ {salto_pct} acima do fecho anterior com volume ≥ 2× a média nos últimos 4 dias, e que se mantêm acima do mínimo desse dia e da MM50.",
+        "Stop abaixo do mínimo do dia do salto; vende ao fim de {max_dias} sessões.",
+        "1/{n} do património por posição.",
+    ),
+    "jornalista": (
+        "Notícias puras: mede quanto valem as notícias sozinhas (lidas pelo Claude).",
+        "Compra ações com notícias importantes e positivas (força ≥ {limiar} nas últimas 36 h).",
+        "Vende com notícias negativas, no stop de {stop_pct}, ou ao fim de {max_dias} sessões.",
+        "1/{n} do património por posição.",
+    ),
+    "catalisador": (
+        "Notícias + execução: só acredita numa notícia boa se o mercado também acreditar.",
+        "Compra notícias positivas e importantes (força ≥ {limiar}) só quando o preço confirma: sobe no dia com volume ≥ 1,5× ou abre em salto, acima da MM50.",
+        "Vende com notícias negativas, no stop (mínimo de 10 dias ou {stop_pct}), ou ao fim de {max_dias} sessões.",
+        "1/{n} do património por posição.",
+    ),
+    "cetico": (
+        "Adversarial: quando sai uma má notícia e a ação não cai, o mercado já a ignorou.",
+        "Compra ações em Stage 2 com notícias negativas e importantes (força ≤ -{limiar}) que fecharam o dia sem cair.",
+        "Vende com {alvo_pct} de lucro, no stop de {stop_pct}, ou ao fim de {max_dias} sessões.",
+        "1/{n} do património por posição.",
+    ),
+    "conselho": (
+        "Inteligência coletiva: quando vários agentes independentes escolhem a mesma ação, o sinal é mais forte.",
+        "Compra ações que pelo menos {min_votos} agentes têm ou vão comprar, sem notícias negativas.",
+        "Vende quando nenhum agente a apoia, com notícias negativas, ou no stop de {stop_pct}.",
+        "1/{n} do património por posição.",
+    ),
+    "maestro": (
+        "Coordenador central: segue quem está a ganhar.",
+        "A cada {cada} sessões copia a carteira combinada dos {lideres} agentes com melhor resultado nas últimas {janela} sessões (só os que estão a ganhar).",
+        "Vende o que sai das carteiras dos líderes; fica em dinheiro se nenhum agente estiver a ganhar.",
+        "Os pesos das posições dos líderes, até {n} ações.",
+    ),
+    "kamikaze": (
+        "Muito agressivo: tudo nas maiores subidas recentes, sem travões.",
+        "A cada {cada} sessões compra as {n} ações com maior subida a 3 meses (acima da MM50).",
+        "Vende as que saem do top, ou no stop de {stop_pct}.",
+        "Partes iguais de todo o património, sem olhar à zona do mercado.",
+    ),
+}
+
+
+def fmt_param(key: str, value) -> str:
+    if isinstance(value, bool):
+        return "sim" if value else "não"
+    if key in PCT_PARAMS and isinstance(value, (int, float)):
+        return f"{value * 100:.1f}%".replace(".0%", "%")
+    return f"{value:g}" if isinstance(value, float) else str(value)
+
+
+def describe(strategy: str, params: dict) -> tuple[str, str, str, str]:
+    """(idea, buys, sells, size) with this agent's parameter values filled in."""
+    shown = {k: fmt_param(k, v) for k, v in params.items()}
+    idea, buys, sells, size = DOCS[strategy]
+    return tuple(text.format_map(_Missing(shown)) for text in (idea, buys, sells, size))
+
+
+class _Missing(dict):
+    def __missing__(self, key):  # a parameter the agent does not have: leave the placeholder readable
+        return f"«{key}»"
+
+
+def params_lines(params: dict) -> list[str]:
+    return [f"`{k}` = **{fmt_param(k, v)}** · {PARAMS.get(k, '')}" for k, v in params.items()]

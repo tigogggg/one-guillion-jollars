@@ -39,6 +39,7 @@ import pandas as pd
 
 import discord_bot
 import earnings
+import strategy_docs
 from charts import lines_chart, returns_chart
 from discord_daily import WATCHLIST_DIR
 from discord_post import BLUE, GREEN, RED, embed, route, send
@@ -1154,6 +1155,69 @@ def monthly_report(config: dict, state: dict, month: str) -> tuple[list[dict], d
     return [card], files
 
 
+def common_rules(params: dict, strategy: str) -> str:
+    rules = []
+    rules.append("❌ ignora resultados próximos" if params.get("ignora_resultados")
+                 else f"✅ não compra ações com resultados nos próximos {EARNINGS_AVOID_DAYS} dias")
+    if strategy == "cetico" or params.get("ignora_noticias"):
+        rules.append("❌ não evita notícias negativas (são o seu sinal)" if strategy == "cetico" else "❌ ignora notícias")
+    else:
+        rules.append("✅ não compra ações com notícias claramente negativas")
+    if params.get("ignora_risco"):
+        rules.append("❌ ignora as regras de risco (volatilidade, setor, travão)")
+    else:
+        rules.append(f"✅ posições menores em ações voláteis, máx. {SECTOR_CAP:.0%} num setor, pausa de {BRAKE_DAYS} dias "
+                     f"após cair {DD_BRAKE:.0%}")
+    rules.append(f"💶 custos {FEE:.1%} (+{FX_FEE:.2%} câmbio nos EUA), {TAX_RATE:.0%} de imposto sobre mais-valias anuais")
+    if strategy != "indexador":
+        rules.append(f"💀 falência se perder {BANKRUPTCY:.0%}: o lugar passa para um filho do líder")
+    return "\n".join(rules)
+
+
+def pretrain_text(strategy: str) -> str:
+    path = REPO_AGENTS / "pretrain.json"
+    r = json.loads(path.read_text())["strategies"].get(strategy) if path.exists() else None
+    if not r:
+        return "Ainda não pré-treinado."
+    if "skipped" in r:
+        return f"Não testável no passado: {r['skipped']}. Aprende ao vivo (ajusta parâmetros nos meses em que perde)."
+    y, v = r["year"], r["valid"]
+    verdict = "✅ adotou os parâmetros do treino" if r["adopted"] else "↩️ mantém os parâmetros originais"
+    return (f"5 anos: {pct(y['return'])} · queda máx. {pct(-y['max_drawdown'])} · Sharpe {y.get('sharpe', 0):.1f} · "
+            f"{y['trades']} operações\nExame (último ano): {v['best']['points']} vs {v['default']['points']} pts "
+            f"({pct(v['best']['return'])} vs {pct(v['default']['return'])}) · {verdict}\n"
+            "_Os 5 anos incluem os anos usados para escolher os parâmetros; o exame é o teste justo._")
+
+
+def strategy_card(cfg: dict, port: dict | None) -> list[dict]:
+    """Everything about how one agent decides, for /estrategia."""
+    params = (port or {}).get("params", cfg["params"])
+    idea, buys, sells, size = strategy_docs.describe(cfg["strategy"], params)
+    fields = [
+        ("🟢 Quando compra", buys), ("🔴 Quando vende", sells), ("⚖️ Tamanho das posições", size),
+        ("🛡️ Regras comuns", common_rules(params, cfg["strategy"])),
+        ("⚙️ Parâmetros atuais", "\n".join(strategy_docs.params_lines(params)) or "nenhum"),
+        ("🧠 Pré-treino", pretrain_text(cfg["strategy"])),
+    ]
+    if port and port["history"]:
+        last = port["history"][-1]
+        family = f" · filho de {cfg['lineage_name']}" if cfg.get("lineage") else ""
+        fields.append(("📊 Ao vivo", (
+            f"{eur(last['equity'])} ({pct(last['equity'] / last['deposits'] - 1)}) · ⭐ {port['points']} pontos · "
+            f"queda máx. {pct(-port.get('max_dd', 0.0))} · {len(port['positions'])} posições · "
+            f"geração {port['generation']}{family}"
+            + (f"\nÚltimo treino: {port['evolution'][-1]['note']}" if port["evolution"] else ""))))
+    status = "" if cfg.get("active", True) else f" (💀 retirado {cfg.get('retired', '')})"
+    return [embed(f"{cfg['emoji']} {cfg['name']}{status} · como pensa", f"💡 {idea}", color=BLUE, fields=fields,
+                  footer="Simulação com dinheiro fictício e preços reais. Não é recomendação de compra.")]
+
+
+def strategies_index(config: dict) -> list[dict]:
+    lines = [f"{c['emoji']} **{c['name']}** · {strategy_docs.DOCS[c['strategy']][0]}" for c in active_agents(config)]
+    return [embed("🧭 Estratégias dos agentes", "\n".join(lines)[:4096], color=BLUE,
+                  footer="Usa /estrategia nome para ver tudo sobre um agente: regras, parâmetros, pré-treino e resultados.")]
+
+
 def agent_card(cfg: dict, port: dict, mkt: Market) -> list[dict]:
     eq = equity(port, mkt)
     params = port.get("params", cfg["params"])
@@ -1203,6 +1267,12 @@ def configure(args: dict, config: dict, state: dict, mkt: Market | None) -> tupl
                       f"Estratégia **{strategy}** ({STRATEGIES[strategy][1]}) com {eur(capital)}. Começa a investir na próxima execução.",
                       color=GREEN)], {}, True
     cfg = find_agent(config, name) if name else None
+    if action == "estrategia":
+        if not name:
+            return strategies_index(config), {}, False
+        if not cfg:
+            return [embed("⚠️ Agente não encontrado", f"`{name}` · usa /estrategia sem nome para ver a lista", color=RED)], {}, False
+        return strategy_card(cfg, state["agents"].get(cfg["id"])), {}, False
     if action in ("depositar", "remover") and not cfg:
         return [embed("⚠️ Agente não encontrado", f"`{name}`", color=RED)], {}, False
     if action == "depositar":
