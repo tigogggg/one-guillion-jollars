@@ -81,7 +81,8 @@ EXPOSURE = {"Alta": 1.0, "Neutra": 0.7, "Cautelosa": 0.4, "Queda": 0.1}
 ZONE_ICON = {"Alta": "🟢", "Neutra": "🟡", "Cautelosa": "🟠", "Queda": "🔴"}
 MUTATION = 0.2
 EARNINGS_AVOID_DAYS = 5
-NEWS_VETO = 3  # no agent buys a stock whose 36 h news score is at or below -NEWS_VETO
+NEWS_VETO = 3  # no agent buys a stock whose 36 h news score is at or below -NEWS_VETO (peso_noticias tunes it)
+NEWS_VETO_DEFAULT = NEWS_VETO
 # Strategies that cannot be replayed on past data (no history of fundamentals, news or other agents):
 # they learn by monthly mutation; the rest are re-trained each month by pretrain.py.
 LIVE_ONLY = {"joalheiro", "jornalista", "catalisador", "cetico", "conselho", "maestro"}
@@ -110,7 +111,19 @@ PARAM_BOUNDS = {
     "min_votos": (2, 4, int),
     "lideres": (2, 5, int),
     "janela": (10, 40, int),
+    # shared by every strategy (COMMON); 0 switches a rule off
+    "stop_atr": (1.5, 5.0, float),
+    "trail_atr": (2.0, 8.0, float),
+    "tempo_max": (10, 60, int),
+    "min_tecnico": (20.0, 55.0, float),
+    "max_ext": (0.05, 0.35, float),
+    "peso_noticias": (1, 6, int),
 }
+# Variables every strategy (but the Indexador) has, on top of its own. The defaults keep the original
+# behaviour; the training (pre-training, monthly mutation and the shadow copies) switches them on and tunes them.
+COMMON = {"stop_atr": 0, "trail_atr": 0, "tempo_max": 0, "min_tecnico": 0, "max_ext": 0, "peso_noticias": NEWS_VETO_DEFAULT}
+OFFABLE = {"stop_atr", "trail_atr", "tempo_max", "min_tecnico", "max_ext"}
+ZONES = ("Alta", "Neutra", "Cautelosa", "Queda")
 
 
 @dataclass
@@ -157,6 +170,13 @@ def last_gap(df: pd.DataFrame) -> dict:
     return {"gap_size": 0.0, "gap_low": 0.0, "gap_age": -1}
 
 
+def atr14(df: pd.DataFrame) -> float:
+    """Average true range of the last 14 sessions (the same formula as pretrain.features)."""
+    high, low, close = df["High"], df["Low"], df["Close"]
+    tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+    return float(tr.iloc[-14:].mean())
+
+
 def extra_metrics(df: pd.DataFrame) -> dict:
     before = df.iloc[:-1]
     last = df.iloc[-1]
@@ -167,6 +187,7 @@ def extra_metrics(df: pd.DataFrame) -> dict:
         "vol_ratio": float(last["Volume"]) / max(float(before["Volume"].iloc[-50:].mean()), 1.0),
         "range10": (float(df["High"].iloc[-10:].max()) - float(df["Low"].iloc[-10:].min())) / close,
         "vol20": float(df["Close"].pct_change().iloc[-20:].std()),
+        "atr14": atr14(df),
         **last_gap(df),
     }
 
@@ -468,11 +489,29 @@ def month_return(port: dict, month: str) -> float | None:
     return (last["equity"] - first["equity"] - (last["deposits"] - first["deposits"])) / first["equity"]
 
 
-def mutate(params: dict, rng: random.Random) -> list[str]:
-    """Change each tunable parameter by up to +/-MUTATION within its bounds, in place; describe the changes."""
+def mutate(params: dict, rng: random.Random, strategy: str | None = None) -> list[str]:
+    """Change each tunable parameter by up to +/-MUTATION within its bounds, in place; describe the changes.
+
+    The shared rules (COMMON) are tuned too: one that is off switches on with a 25% chance (at a random value
+    within its bounds), one that is on switches off with a 10% chance.
+    """
     changes = []
+    if strategy and strategy != "indexador":
+        for k, v in COMMON.items():
+            params.setdefault(k, v)
     for k in [k for k in params if k in PARAM_BOUNDS]:
         lo, hi, kind = PARAM_BOUNDS[k]
+        if k in OFFABLE and not params[k]:
+            if rng.random() < 0.25:
+                new = rng.uniform(lo, hi)
+                new = int(round(new)) if kind is int else round(new, 4)
+                changes.append(f"{k} ligado: {new}")
+                params[k] = new
+            continue
+        if k in OFFABLE and rng.random() < 0.10:
+            changes.append(f"{k} desligado")
+            params[k] = 0
+            continue
         new = min(hi, max(lo, params[k] * rng.uniform(1 - MUTATION, 1 + MUTATION)))
         new = int(round(new)) if kind is int else round(new, 4)
         if new != params[k]:
@@ -495,7 +534,7 @@ def train(cfg: dict, port: dict, mkt: Market) -> str | None:
     tunable = [k for k in params if k in PARAM_BOUNDS]
     if ret is None or ret >= 0 or not tunable or cfg.get("strategy") not in LIVE_ONLY:
         return None
-    changes = mutate(params, random.Random(f"{cfg['id']}-{mkt.as_of}"))
+    changes = mutate(params, random.Random(f"{cfg['id']}-{mkt.as_of}"), cfg["strategy"])
     port["generation"] += 1
     note = f"{last_month}: {ret * 100:+.1f}% → geração {port['generation']}: " + (", ".join(changes) or "sem alterações")
     port["evolution"] = (port["evolution"] + [{"date": mkt.as_of.isoformat(), "note": note}])[-24:]
@@ -922,11 +961,11 @@ def skip_earnings(orders: list[dict], mkt: Market) -> tuple[list[dict], list[str
     return kept, skipped
 
 
-def skip_bad_news(orders: list[dict], mkt: Market) -> tuple[list[dict], list[str]]:
+def skip_bad_news(orders: list[dict], mkt: Market, veto: int = NEWS_VETO) -> tuple[list[dict], list[str]]:
     """Drop buys of stocks with clearly negative news in the last 36 h; return (kept, skipped symbols)."""
     kept, skipped = [], []
     for o in orders:
-        if o["side"] == "buy" and news_score(mkt, o["symbol"]) <= -NEWS_VETO:
+        if o["side"] == "buy" and news_score(mkt, o["symbol"]) <= -veto:
             skipped.append(o["symbol"])
         else:
             kept.append(o)
@@ -980,15 +1019,79 @@ def risk_filter(orders: list[dict], port: dict, mkt: Market) -> tuple[list[dict]
     return kept, notes
 
 
+def effective(params: dict, zone: str, strategy: str | None = None) -> dict:
+    """The parameters in force today: the shared defaults, the agent's own, then its overrides for this market zone."""
+    base = {} if strategy == "indexador" else dict(COMMON)
+    return {**base, **{k: v for k, v in params.items() if k != "por_zona"}, **(params.get("por_zona") or {}).get(zone, {})}
+
+
+def tech_score(m: dict) -> float:
+    """0-60: the technical half of the safety score (trend 25, volatility 20, distance to the high 15)."""
+    import opportunities
+
+    trend = (10 if m["price"] > m["sma50"] else 0) + (10 if m["sma50"] > m["sma200"] else 0) + (5 if m["sma200_rising"] else 0)
+    vol = m.get("vol20")
+    return (trend + (opportunities.lerp(vol, 0.015, 0.04, 20) if vol is not None else 10)
+            + opportunities.lerp(m["pct_from_high"], 0.05, 0.30, 15))
+
+
+def shared_rules(orders: list[dict], port: dict, mkt: Market, p: dict) -> tuple[list[dict], list[str]]:
+    """The tunable rules every strategy shares: entry filters, ATR stop and the time stop."""
+    kept, notes = [], []
+    for o in orders:
+        if o["side"] != "buy":
+            kept.append(o)
+            continue
+        m = mkt.stocks.get(o["symbol"]) or mkt.etfs.get(o["symbol"])
+        if m:
+            if p.get("max_ext") and m["price"] > m["sma50"] * (1 + p["max_ext"]):
+                notes.append(f"{o['symbol']} (esticada: {m['price'] / m['sma50'] - 1:.0%} acima da média de 50 dias)")
+                continue
+            if p.get("min_tecnico") and tech_score(m) < p["min_tecnico"]:
+                notes.append(f"{o['symbol']} (score técnico {tech_score(m):.0f} < {p['min_tecnico']:.0f})")
+                continue
+            if p.get("stop_atr") and m.get("atr14"):
+                atr_stop = round(m["price"] - p["stop_atr"] * m["atr14"], 4)
+                if atr_stop > 0 and (not o.get("stop") or atr_stop > o["stop"]):
+                    o = {**o, "stop": atr_stop}
+        kept.append(o)
+    if p.get("tempo_max"):
+        selling = {o["symbol"] for o in kept if o["side"] == "sell"}
+        for s, pos in port["positions"].items():
+            if s in selling or not pos.get("entry_date"):
+                continue
+            price = last_close(mkt, s)
+            if price and sessions_since(mkt, pos["entry_date"]) >= p["tempo_max"] and price < pos["entry"]:
+                kept.append(order_sell(s, f"não andou em {p['tempo_max']} sessões"))
+    return kept, notes
+
+
+def trail_stops(port: dict, mkt: Market, p: dict) -> None:
+    """Raise each position's stop to the close minus trail_atr x ATR (never lower it)."""
+    k = p.get("trail_atr")
+    if not k:
+        return
+    for s, pos in port["positions"].items():
+        m = mkt.stocks.get(s) or mkt.etfs.get(s)
+        if m and m.get("atr14"):
+            level = round(m["price"] - k * m["atr14"], 4)
+            if level > (pos.get("stop") or 0):
+                pos["stop"] = level
+
+
 def decide(cfg: dict, port: dict, mkt: Market, params: dict, live: bool = True) -> tuple[list[dict], list[str]]:
     """The strategy's orders after the shared rules: earnings (live only), bad news, risk. Same live and in backtests."""
+    params = effective(params, mkt.zone, cfg["strategy"])
     orders = STRATEGIES[cfg["strategy"]][0](cfg, port, mkt, params)
     notes = []
+    if cfg["strategy"] != "indexador":
+        orders, skipped = shared_rules(orders, port, mkt, params)
+        notes += skipped
     if live and not params.get("ignora_resultados"):
         orders, skipped = skip_earnings(orders, mkt)
         notes += [f"{s} (resultados {earnings.label(mkt.earnings[s])})" for s in skipped]
     if not params.get("ignora_noticias") and cfg["strategy"] != "cetico":
-        orders, skipped = skip_bad_news(orders, mkt)
+        orders, skipped = skip_bad_news(orders, mkt, int(params.get("peso_noticias") or NEWS_VETO))
         notes += [f"{s} (notícias negativas)" for s in skipped]
     if not params.get("ignora_risco"):
         orders, skipped = risk_filter(orders, port, mkt)
@@ -1019,7 +1122,7 @@ def spawn_child(config: dict, state: dict, leader: dict, replaced: dict, mkt: Ma
     base_id, base_name = leader.get("lineage", leader["id"]), leader.get("lineage_name", leader["name"])
     n = 1 + sum(1 for a in config["agents"] if a.get("lineage", a["id"]) == base_id)
     params = dict(state["agents"][leader["id"]].get("params", leader["params"]))
-    changes = mutate(params, random.Random(f"{base_id}-{n}-{mkt.as_of}"))
+    changes = mutate(params, random.Random(f"{base_id}-{n}-{mkt.as_of}"), leader["strategy"])
     child = {
         "id": f"{base_id}-{n}", "name": f"{base_name} {ROMAN[n] if n < len(ROMAN) else n}", "emoji": leader["emoji"],
         "strategy": leader["strategy"], "capital": 1000, "params": params, "lineage": base_id, "lineage_name": base_name,
@@ -1032,6 +1135,61 @@ def spawn_child(config: dict, state: dict, leader: dict, replaced: dict, mkt: Ma
     port["generation"] = state["agents"][leader["id"]]["generation"] + 1
     state["agents"][child["id"]] = port
     return child
+
+
+SHADOWS = 2  # paper copies of each agent with slightly different parameters
+SHADOW_MIN = 20  # sessions before a copy can replace its agent's parameters…
+SHADOW_MAX = 60  # …and after which a copy that never did is replaced by a fresh one
+PROMOTE_MARGIN = 0.02  # the copy must have made 2 percentage points more than its agent over the same sessions
+
+
+def shadow_day(cfg: dict, port: dict, state: dict, mkt: Market) -> str | None:
+    """Run the agent's shadow copies for one day; promote one that clearly beats it. Returns a training note."""
+    if cfg["strategy"] in META | {"indexador"}:
+        return None
+    shadows = state.setdefault("shadows", {}).setdefault(cfg["id"], [])
+    ratio = equity(port, mkt) / port["deposits"] if port["deposits"] else 1.0
+    while len(shadows) < SHADOWS:
+        params = {k: v for k, v in port.get("params", cfg["params"]).items()}
+        for k, v in COMMON.items():
+            params.setdefault(k, v)
+        changes = mutate(params, random.Random(f"shadow-{cfg['id']}-{mkt.as_of}-{len(shadows)}"), cfg["strategy"])
+        if not changes:
+            break
+        shadow = new_portfolio(1000, mkt.as_of)
+        shadow["params"] = params
+        shadows.append({"port": shadow, "born": mkt.as_of.isoformat(), "changes": changes,
+                        "parent_ratio": round(ratio, 6), "parent_points": port["points"]})
+    promoted = None
+    for sh in list(shadows):
+        sp = sh["port"]
+        fill_pending(sp, mkt)
+        check_exits(sp, mkt)
+        trail_stops(sp, mkt, effective(sp["params"], mkt.zone, cfg["strategy"]))
+        pay_taxes(sp, mkt)
+        score_day(sp, mkt)
+        if sp["last_decision"] != mkt.as_of.isoformat() and not sp["pending"]:
+            orders, _ = decide(cfg, sp, mkt, sp["params"])
+            sp["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders]
+            sp["last_decision"] = mkt.as_of.isoformat()
+        sessions = sessions_since(mkt, sh["born"])
+        mine = equity(sp, mkt) / sp["deposits"] - 1
+        theirs = ratio / sh["parent_ratio"] - 1 if sh["parent_ratio"] else 0.0
+        sh.update(sessions=sessions, ret=round(mine, 4), parent_ret=round(theirs, 4))
+        if (promoted is None and sessions >= SHADOW_MIN and mine - theirs >= PROMOTE_MARGIN
+                and sp["points"] > port["points"] - sh["parent_points"]):
+            promoted = sh
+        elif sessions >= SHADOW_MAX:
+            shadows.remove(sh)
+    if promoted is None:
+        return None
+    port["params"] = promoted["port"]["params"]
+    port["generation"] += 1
+    note = (f"fantasma promovido ({', '.join(promoted['changes'])}): {promoted['ret'] * 100:+.1f}% contra "
+            f"{promoted['parent_ret'] * 100:+.1f}% em {promoted['sessions']} sessões → geração {port['generation']}")
+    port["evolution"] = (port["evolution"] + [{"date": mkt.as_of.isoformat(), "note": note}])[-24:]
+    state["shadows"][cfg["id"]] = []  # new copies tomorrow, from the new parameters
+    return note
 
 
 def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, dict]], list[str], list[str], list[str]]:
@@ -1047,10 +1205,12 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
         params = port.setdefault("params", dict(cfg["params"]))
         for t in fill_pending(port, mkt) + check_exits(port, mkt) + [x for x in [pay_taxes(port, mkt)] if x]:
             moves.append((cfg, t))
+        trail_stops(port, mkt, effective(params, mkt.zone, cfg["strategy"]))
         score_day(port, mkt)
         if cfg["strategy"] != "indexador" and is_bankrupt(port, mkt):
             moves += [(cfg, t) for t in liquidate(port, mkt, "falência")]
             cfg["active"], cfg["retired"] = False, mkt.as_of.isoformat()
+            state.get("shadows", {}).pop(cfg["id"], None)
             mkt.league.pop(cfg["id"], None)
             bankrupt.append(cfg)
             continue
@@ -1063,6 +1223,9 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
                 avoided.append(f"{cfg['emoji']} {cfg['name']}: " + ", ".join(notes))
             port["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders]
             port["last_decision"] = mkt.as_of.isoformat()
+        note = shadow_day(cfg, port, state, mkt)
+        if note:
+            training.append(f"{cfg['emoji']} **{cfg['name']}** {note}")
     for dead in bankrupt:
         alive = [(c, state["agents"][c["id"]]) for c in active_agents(config) if c["strategy"] not in META | {"indexador"}]
         if not alive:
@@ -1271,6 +1434,19 @@ def common_rules(params: dict, strategy: str) -> str:
     else:
         rules.append(f"✅ posições menores em ações voláteis, máx. {SECTOR_CAP:.0%} num setor, pausa de {BRAKE_DAYS} dias "
                      f"após cair {DD_BRAKE:.0%}")
+    if strategy != "indexador":
+        p = effective(params, "", strategy)
+        on = [f"stop a {p['stop_atr']}× ATR" if p.get("stop_atr") else None,
+              f"stop que sobe a {p['trail_atr']}× ATR do fecho" if p.get("trail_atr") else None,
+              f"vende o que não andou em {p['tempo_max']} sessões" if p.get("tempo_max") else None,
+              f"só compra com score técnico ≥ {p['min_tecnico']:.0f}/60" if p.get("min_tecnico") else None,
+              f"não compra mais de {p['max_ext']:.0%} acima da média de 50 dias" if p.get("max_ext") else None]
+        on = [x for x in on if x]
+        rules.append("🎛️ regras afinadas pelo treino: " + ("; ".join(on) if on else "nenhuma ligada por agora")
+                     + f"; veto de notícias a -{p.get('peso_noticias', NEWS_VETO)}")
+        if params.get("por_zona"):
+            rules.append("🧭 parâmetros próprios por zona de mercado: " + "; ".join(
+                f"{z}: " + ", ".join(f"{k} {v}" for k, v in d.items()) for z, d in params["por_zona"].items()))
     rules.append(f"💶 custos {FEE:.1%} (+{FX_FEE:.2%} câmbio nos EUA), {TAX_RATE:.0%} de imposto sobre mais-valias anuais")
     if strategy != "indexador":
         rules.append(f"💀 falência se perder {BANKRUPTCY:.0%}: o lugar passa para um filho do líder")
@@ -1381,6 +1557,10 @@ def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
             "wins": sum(t["side"] == "venda" and t["pnl_eur"] > 0 for t in trades),
             "positions": positions, "pending": port["pending"], "trades": list(reversed(trades)),
             "evolution": list(reversed(port.get("evolution", [])))[:20],
+            "shadows": [{"changes": sh["changes"], "born": sh["born"], "sessions": sh.get("sessions", 0),
+                         "ret_pct": round(sh.get("ret", 0) * 100, 2), "parent_ret_pct": round(sh.get("parent_ret", 0) * 100, 2)}
+                        for sh in state.get("shadows", {}).get(cfg["id"], [])],
+            "por_zona": params.get("por_zona") or {},
         })
     return out
 

@@ -30,9 +30,15 @@ PARAMS = {
     "ignora_resultados": "não evita resultados trimestrais próximos",
     "ignora_risco": "não aplica as regras de risco comuns",
     "ignora_noticias": "não evita ações com notícias negativas",
+    "stop_atr": "stop inicial a este múltiplo da variação diária média (ATR) abaixo da compra (0 = desligado)",
+    "trail_atr": "stop que sobe com o preço: fecho menos este múltiplo do ATR (0 = desligado)",
+    "tempo_max": "vende posições a perder que não andaram ao fim destas sessões (0 = desligado)",
+    "min_tecnico": "score técnico mínimo para comprar: tendência, volatilidade e distância ao máximo, 0-60 (0 = desligado)",
+    "max_ext": "não compra se o preço estiver mais do que isto acima da média de 50 dias (0 = desligado)",
+    "peso_noticias": "não compra se o score das notícias estiver neste valor negativo ou pior",
 }
 
-PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct"}
+PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext"}
 
 # strategy: (idea, buys when, sells when, position size)
 DOCS = {

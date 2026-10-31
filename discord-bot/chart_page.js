@@ -385,7 +385,12 @@ function liveHtml(a) {
         t.qty ? fmtNum(t.qty, 4) : "—", t.price ? fmtNum(t.price) : "—", fmtEur(t.eur),
         t.side === "compra" ? "—" : '<span class="' + cls(t.pnl_eur) + '">' + fmtEur(t.pnl_eur) + '</span>', esc(t.reason || "")]), [3, 4, 5, 6]) +
     (realized.length ? '<h3>🧾 Mais-valias realizadas por ano</h3>' + table(["Ano", "Mais-valias"], realized.map(([y, v]) => [esc(y), '<span class="' + cls(v) + '">' + fmtEur(v) + '</span>']), [1]) : "") +
-    ((a.evolution || []).length ? '<h3>🧬 Treinos e mutações</h3>' + table(["Data", "O que mudou"], a.evolution.map((e) => [esc(e.date), esc(e.note)])) : "");
+    ((a.evolution || []).length ? '<h3>🧬 Treinos e mutações</h3>' + table(["Data", "O que mudou"], a.evolution.map((e) => [esc(e.date), esc(e.note)])) : "") +
+    ((a.shadows || []).length ? '<h3>👻 Cópias-fantasma a testar</h3><p class="muted small">Cópias em papel com parâmetros ligeiramente diferentes. Ao fim de 20 sessões, uma que faça 2 pontos percentuais mais do que o agente (e mais pontos) passa a ser o agente.</p>' +
+      table(["Alterações", "Desde", "Sessões", "Cópia", "Agente no mesmo período"], a.shadows.map((x) => [esc(x.changes.join(", ")), esc(x.born), x.sessions,
+        '<span class="' + cls(x.ret_pct) + '">' + fmtPct(x.ret_pct) + '</span>', '<span class="' + cls(x.parent_ret_pct) + '">' + fmtPct(x.parent_ret_pct) + '</span>']), [2, 3, 4]) : "") +
+    (Object.keys(a.por_zona || {}).length ? '<h3>🧭 Parâmetros por zona de mercado</h3>' + table(["Zona", "Muda"], Object.entries(a.por_zona).map(([z, d]) =>
+      [esc(z), esc(Object.entries(d).map(([k, v]) => k + " " + v).join(", "))])) : "");
 }
 
 function backtestHtml(a) {

@@ -30,7 +30,7 @@ def test_backtest_features_match_live_metrics_without_lookahead(k):
     bt = pretrain.features(df).iloc[k - 1]  # computed once over the whole history
     for key in ("price", "sma50", "sma200", "sma200_rising", "pct_from_high", "pct_above_low", "ret_1d", "ret_1w",
                 "ret_3m", "ret_6m", "high20_prev", "low10_prev", "vol_ratio", "range10",
-                "gap_size", "gap_low", "gap_age", "vol20"):
+                "gap_size", "gap_low", "gap_age", "vol20", "atr14"):
         assert bt[key] == pytest.approx(live[key], rel=1e-9), key
 
 

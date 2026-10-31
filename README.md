@@ -324,6 +324,31 @@ them). Without that file everything posts to the webhook channel as before.
   the best results over the last 20 sessions. Meta-agents decide after the
   others.
 
+## Agent tuning (v4)
+
+- **Shared tunable rules** (`agents.COMMON`, off by default, switched on and
+  tuned by the training): `stop_atr` (initial stop at k x ATR), `trail_atr`
+  (stop that rises to the close minus k x ATR), `tempo_max` (sell a losing
+  position that did not move in N sessions), `min_tecnico` (minimum technical
+  score 0-60: trend, volatility, distance to the high), `max_ext` (no buys
+  more than x% above the 50-day average) and `peso_noticias` (news veto
+  level). ATR is computed the same way live and in the backtest (parity test).
+- **Parameters per market zone**: `params["por_zona"][zone]` overrides; the
+  pre-training tries mutations for each zone with 10%+ of the training days and
+  keeps one only if it adds 2% to the training points and does not lose on the
+  exam.
+- **Smarter pre-training**: two generations (the best 4 of the random draws
+  get 2 mutations each), yearly points weighted for recency (0.85 per year
+  back), at least 20 trades (except low-turnover strategies), a plateau test
+  (nearby values must keep 70% of the score) before the crash test, exam and
+  Monte Carlo gates.
+- **Shadow copies**: every agent but the Indexador and the meta-agents runs 2
+  paper copies with mutated parameters (`state["shadows"]`). After 20+
+  sessions, a copy that made 2 percentage points more than its agent over the
+  same sessions, and more points, becomes the agent's parameters (logged as
+  "fantasma promovido"); a copy that does not within 60 sessions is replaced.
+  The pre-training resets an agent's copies when it changes its parameters.
+
 ## Agent rules v3
 
 - Reward: each day ±1 point per 0.1% the agent beat (or trailed) the S&P 500

@@ -113,6 +113,8 @@ def features(df: pd.DataFrame) -> pd.DataFrame:
     f["vol_ratio"] = vol / vol.shift(1).rolling(50).mean().clip(lower=1)
     f["range10"] = (high.rolling(10).max() - low.rolling(10).min()) / close
     f["vol20"] = close.pct_change().rolling(20).std()
+    tr = pd.concat([high - low, (high - close.shift()).abs(), (low - close.shift()).abs()], axis=1).max(axis=1)
+    f["atr14"] = tr.rolling(14).mean()
     gap = df["Open"] / close.shift(1) - 1
     event = (gap >= agents.GAP_MIN) & (vol / vol.shift(1).rolling(50).mean().clip(lower=1) >= agents.GAP_VOLUME)
     event &= pd.Series(range(len(df)), index=df.index) >= 51
@@ -272,6 +274,7 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
     trades, bankrupt_on, sells = 0, None, []
     for mkt in markets:
         done = fill_pending(port, mkt) + check_exits(port, mkt)
+        agents.trail_stops(port, mkt, agents.effective(port["params"], mkt.zone, strategy))
         trades += len(done)
         sells += [t for t in done if t["side"] == "venda"]
         agents.pay_taxes(port, mkt)
@@ -316,19 +319,53 @@ def trade_stats(sells: list[dict]) -> dict:
     }
 
 
+SHARED_IN_BACKTEST = [k for k in agents.COMMON if k != "peso_noticias"]  # no news in the past
+OFF_SHARE = 0.4  # a variant leaves each shared rule off this often
+
+
 def variants(strategy: str, n: int) -> list[dict]:
-    base = STRATEGIES[strategy][2]
+    """The original parameters, then n random draws within the bounds (shared rules included, often off)."""
+    base = dict(STRATEGIES[strategy][2])
+    if strategy != "indexador":
+        base.update({k: agents.COMMON[k] for k in SHARED_IN_BACKTEST})
     tunable = [k for k in base if k in PARAM_BOUNDS]
     rng = random.Random(f"pretrain-{strategy}")
     out = [dict(base)]
     for _ in range(n if tunable else 0):
         p = dict(base)
         for k in tunable:
+            if k in agents.OFFABLE and rng.random() < OFF_SHARE:
+                p[k] = 0
+                continue
             lo, hi, kind = PARAM_BOUNDS[k]
             v = rng.uniform(lo, hi)
             p[k] = int(round(v)) if kind is int else round(v, 4)
         out.append(p)
     return out
+
+
+def nudge(params: dict, rng: random.Random, size: float = 0.10) -> dict:
+    """A neighbour: every numeric parameter that is on moves by up to +/-size, within its bounds."""
+    p = dict(params)
+    for k, v in params.items():
+        if k in PARAM_BOUNDS and v:
+            lo, hi, kind = PARAM_BOUNDS[k]
+            new = min(hi, max(lo, v * rng.uniform(1 - size, 1 + size)))
+            p[k] = int(round(new)) if kind is int else round(new, 4)
+    return p
+
+
+RECENCY = 0.85  # each older training year counts 15% less
+GEN2_PARENTS, GEN2_CHILDREN = 4, 2
+NEIGHBOURS, PLATEAU = 3, 0.7
+MIN_TRADES = 20
+ZONE_TRIES, ZONE_MIN_SHARE = 3, 0.10
+
+
+def weighted(years: list[float]) -> float:
+    """Recency-weighted mean of the yearly points: the latest year weighs 1, the one before 0.85, ..."""
+    w = [RECENCY ** (len(years) - 1 - i) for i in range(len(years))]
+    return sum(a * b for a, b in zip(w, years)) / sum(w) if years else 0.0
 
 
 COVERAGE: dict[str, float] = {}  # share of the index with prices at the start of each crisis
@@ -390,52 +427,123 @@ def yearly_blocks(markets: list[Market]) -> list[list[Market]]:
 
 
 def train_strategy(strategy: str) -> tuple[str, dict]:
-    """Pick parameters that are consistently good, survive the crises and hold up on the exam year.
+    """Pick parameters that are consistently good, robust, survive the crises and hold up on the exam year.
 
-    1. Each candidate runs every training year separately (fresh 1000 EUR each) and must beat the original
-       parameters in at least 3 of every 4 years.
-    2. It must not go bankrupt, or fall more than CRASH_SLACK deeper than the original, in any crisis window.
-    3. Among those, the best median year wins; it is adopted only if it scores at least as well as the
-       original on the exam year and its Monte Carlo risk of ruin is not clearly higher.
+    1. Generation 1: the original and random variants (shared rules included). Each runs every training year
+       separately (fresh 1000 EUR each) and must beat the original in at least 3 of every 4 years, with at
+       least MIN_TRADES trades (not for low-turnover strategies). Ranked by recency-weighted points.
+    2. Generation 2: the best GEN2_PARENTS get GEN2_CHILDREN mutations each (agents.mutate), judged the same way.
+    3. The best candidate must be on a plateau (NEIGHBOURS nearby values keep PLATEAU of its score, so it is
+       not a lucky spike) and must not go bankrupt, or fall CRASH_SLACK deeper than the original, in a crisis.
+    4. It is adopted only if it scores at least as well as the original on the exam year and its Monte Carlo
+       risk of ruin is not clearly higher.
+    5. Market zones: for each zone with ZONE_MIN_SHARE of the training days, ZONE_TRIES mutations of the chosen
+       parameters are tried in that zone only; the best is kept if it adds 2% to the training points and does
+       not lose on the exam.
     """
     markets = _MARKETS
     split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
-    blocks, valid = yearly_blocks(markets[:split]), markets[split:]
-    windows = crisis_windows(markets[:split])
-    candidates = variants(strategy, VARIANTS_LONG if len(blocks) > LONG_YEARS else VARIANTS)
-    yearly = [[simulate(strategy, p, b)["points"] for b in blocks] for p in candidates]
-    base = yearly[0]
+    train_mk, blocks, valid = markets[:split], yearly_blocks(markets[:split]), markets[split:]
+    windows = crisis_windows(train_mk)
+    low_turnover = strategy in agents.LOW_TURNOVER
+    rng = random.Random(f"evolve-{strategy}")
+
+    def run_years(p: dict) -> tuple[list[int], int]:
+        runs = [simulate(strategy, p, b) for b in blocks]
+        return [r["points"] for r in runs], sum(r["trades"] for r in runs)
+
+    pool = variants(strategy, VARIANTS_LONG if len(blocks) > LONG_YEARS else VARIANTS)
+    scored = [run_years(p) for p in pool]
+    base = scored[0][0]
     need = -(-3 * len(blocks) // 4)  # ceil(0.75 x years)
-    consistent = [i for i in range(len(candidates)) if i == 0 or sum(a > b for a, b in zip(yearly[i], base)) >= need]
-    ranked = sorted(consistent, key=lambda i: statistics.median(yearly[i]), reverse=True)
-    crashes = {0: crash_test(strategy, candidates[0], windows)}
+
+    def ok(i: int) -> bool:
+        years, trades = scored[i]
+        return i == 0 or (sum(a > b for a, b in zip(years, base)) >= need and (low_turnover or trades >= MIN_TRADES))
+
+    def ranked() -> list[int]:
+        return sorted((i for i in range(len(pool)) if ok(i)), key=lambda i: weighted(scored[i][0]), reverse=True)
+
+    if len(pool) > 1:  # generation 2: mutations of the best
+        for i in [i for i in ranked() if i != 0][:GEN2_PARENTS]:
+            for _ in range(GEN2_CHILDREN):
+                child = dict(pool[i])
+                agents.mutate(child, rng, strategy)
+                child = {k: v for k, v in child.items() if k in pool[0] or k in agents.COMMON}
+                child.pop("peso_noticias", None) if "peso_noticias" not in pool[0] else None
+                pool.append(child)
+                scored.append(run_years(child))
+    crashes = {0: crash_test(strategy, pool[0], windows)}
+    plateau = {}
     best_i = 0
-    for i in ranked:  # the best consistent candidate that also survives the crises
+    for i in ranked():  # the best consistent candidate that is robust and survives the crises
         if i == 0:
             break
-        crashes[i] = crash_test(strategy, candidates[i], windows)
+        mine = weighted(scored[i][0])
+        near = [weighted(run_years(nudge(pool[i], rng))[0]) for _ in range(NEIGHBOURS)]
+        plateau[i] = near
+        if mine > 0 and sum(n >= PLATEAU * mine for n in near) < NEIGHBOURS - 1:
+            continue
+        crashes[i] = crash_test(strategy, pool[i], windows)
         if survives(crashes[i], crashes[0]):
             best_i = i
             break
-    best = candidates[best_i]
+    best = pool[best_i]
     best_valid = simulate(strategy, best, valid)
-    default_valid = best_valid if best_i == 0 else simulate(strategy, candidates[0], valid)
+    default_valid = best_valid if best_i == 0 else simulate(strategy, pool[0], valid)
     full_best = simulate(strategy, best, markets)
-    full_default = full_best if best_i == 0 else simulate(strategy, candidates[0], markets)
+    full_default = full_best if best_i == 0 else simulate(strategy, pool[0], markets)
     mc_best, mc_default = monte_carlo(full_best["daily"]), monte_carlo(full_default["daily"])
     riskier = mc_best.get("p_ruin", 0) > mc_default.get("p_ruin", 0) + MC_RUIN_SLACK
     adopt = best_i != 0 and best_valid["points"] >= default_valid["points"] and not riskier
-    chosen, full, mc = (best, full_best, mc_best) if adopt else (candidates[0], full_default, mc_default)
-    print(f"{strategy}: anos {yearly[best_i]} vs {base}; crises {crashes.get(best_i)}; exame {best_valid['points']} vs "
-          f"{default_valid['points']}; MC ruína {mc_best.get('p_ruin')} vs {mc_default.get('p_ruin')} → "
-          f"{'adotado' if adopt else 'mantém'}", file=sys.stderr, flush=True)
+    chosen, full, mc = (best, full_best, mc_best) if adopt else (pool[0], full_default, mc_default)
+    chosen_valid = best_valid if adopt else default_valid
+
+    # Market zones: parameters for one zone at a time, on top of the chosen ones.
+    zones_tried = {}
+    if strategy != "indexador" and any(k in PARAM_BOUNDS for k in chosen):
+        counts = {z: sum(m.zone == z for m in train_mk) for z in agents.ZONES}
+        train_points = simulate(strategy, chosen, train_mk)["points"]
+        for zone, n in counts.items():
+            if n < ZONE_MIN_SHARE * len(train_mk):
+                continue
+            tries = []
+            for _ in range(ZONE_TRIES):
+                alt = {k: v for k, v in chosen.items() if k != "por_zona"}
+                agents.mutate(alt, rng, strategy)
+                diff = {k: v for k, v in alt.items() if k in PARAM_BOUNDS and chosen.get(k) != v}
+                if not diff:
+                    continue
+                cand = {**chosen, "por_zona": {**(chosen.get("por_zona") or {}), zone: diff}}
+                tries.append((simulate(strategy, cand, train_mk)["points"], cand, diff))
+            if not tries:
+                continue
+            pts, cand, diff = max(tries, key=lambda t: t[0])
+            gain_needed = abs(train_points) * 0.02 if train_points else 20
+            exam = simulate(strategy, cand, valid) if pts >= train_points + gain_needed else None
+            kept = exam is not None and exam["points"] >= chosen_valid["points"]
+            zones_tried[zone] = {"train": pts, "base": train_points, "exam": exam["points"] if exam else None,
+                                 "exam_base": chosen_valid["points"], "kept": kept, "diff": diff}
+            if kept:
+                chosen, train_points, chosen_valid = cand, pts, exam
+        if any(z["kept"] for z in zones_tried.values()):
+            full = simulate(strategy, chosen, markets)
+            mc = monte_carlo(full["daily"])
+            adopt = True
+
+    print(f"{strategy}: {len(pool)} candidatos; anos {scored[best_i][0]} vs {base}; vizinhos {plateau.get(best_i)}; "
+          f"crises {crashes.get(best_i)}; exame {best_valid['points']} vs {default_valid['points']}; "
+          f"zonas {[(z, v['kept']) for z, v in zones_tried.items()]} → {'adotado' if adopt else 'mantém'}",
+          file=sys.stderr, flush=True)
     return strategy, {
-        "default": candidates[0], "best": best, "adopted": adopt, "chosen": chosen,
+        "default": pool[0], "best": best, "adopted": adopt, "chosen": chosen,
         "train": {"default": {"points": sum(base), "years": base},
-                  "best": {"points": sum(yearly[best_i]), "years": yearly[best_i]}},
-        "valid": {"default": strip(default_valid), "best": strip(best_valid)},
+                  "best": {"points": sum(scored[best_i][0]), "years": scored[best_i][0]}},
+        "valid": {"default": strip(default_valid), "best": strip(chosen_valid if adopt else best_valid)},
         "crises": crashes.get(best_i if adopt else 0, crashes[0]),
-        "monte_carlo": mc, "by_zone": full["by_zone"],
+        "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried,
+        "search": {"candidates": len(pool), "generation2": len(pool) - len(scored[:1]) - (VARIANTS_LONG if len(blocks) > LONG_YEARS else VARIANTS),
+                   "plateau": plateau.get(best_i), "recency": RECENCY, "min_trades": MIN_TRADES},
         "year": strip(full), "curve": full["curve"][::5],  # weekly points are enough for the chart
     }
 
@@ -489,6 +597,9 @@ def apply(results: dict, today: date) -> list[str]:
             continue
         # The exam's verdict, also when it is "back to the original parameters".
         params = {**old, **r["chosen"]}
+        if "por_zona" not in r["chosen"]:
+            params.pop("por_zona", None)
+        state.setdefault("shadows", {}).pop(cfg["id"], None)  # the shadow copies restart from the new parameters
         note = "pré-treino: " + ", ".join(f"{k} {old.get(k)}→{v}" for k, v in changes.items())
         port["params"] = params
         port["pending"], port["last_decision"], port["last_rebalance"] = [], None, None
