@@ -121,6 +121,7 @@ COMMANDS = [
         "description": "Como pensa cada agente: regras, parâmetros, pré-treino e resultados",
         "options": [{"type": STRING, "name": "nome", "description": "Nome do agente (vazio = lista de todos)"}],
     },
+    {"name": "prontidao", "description": "Que agentes já merecem confiança para ideias com dinheiro real (5 critérios)"},
     {
         "name": "agente",
         "description": "Gerir os agentes: criar, dar dinheiro, desativar",

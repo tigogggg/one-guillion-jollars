@@ -338,3 +338,23 @@ def test_maestro_follows_the_best_agents_in_the_current_zone():
     orders = agents.s_maestro({"id": "me"}, new_portfolio(1000, DATES[0].date()), mkt,
                               {"n": 8, "lideres": 2, "janela": 20, "cada": 5})
     assert {o["symbol"] for o in orders} == {"NVDA", "XLU"}
+
+
+def test_readiness_checks_and_card():
+    def port(curve, sells=0, max_dd=0.1):
+        p = new_portfolio(1000, DATES[0].date())
+        p["history"] = [{"date": f"d{i}", "equity": e, "deposits": 1000} for i, e in enumerate(curve)]
+        p["trades"] = [{"side": "venda"}] * sells
+        p["max_dd"] = max_dd
+        return p
+    steady = [1000 * (1.001 ** i) for i in range(200)]
+    index = [1000 * (1.0005 ** i) for i in range(200)]
+    good = port(steady, sells=40)
+    checks = agents.readiness({"strategy": "foguetao"}, good, agents.live_stats(port(index)), {"p5": -0.2})
+    assert [ok for _, ok in checks] == [True, True, True, True, True]
+    short = agents.readiness({"strategy": "rotador"}, port(steady[:50], max_dd=0.3), None, None)
+    assert [ok for _, ok in short] == [False, None, None, None, False]
+    config = {"agents": [{"id": "i", "name": "I", "emoji": "🐢", "strategy": "indexador"},
+                         {"id": "f", "name": "F", "emoji": "🚀", "strategy": "foguetao"}]}
+    card = agents.readiness_card(config, {"agents": {"i": port(index), "f": good}})[0]
+    assert "Prontos para a fase 2" in card["description"] and "F" in card["description"]

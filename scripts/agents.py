@@ -30,6 +30,7 @@ import json
 import os
 import random
 import re
+import statistics
 import sys
 import unicodedata
 from dataclasses import dataclass, field
@@ -1143,6 +1144,68 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
     return [card], files
 
 
+READY_SESSIONS = 126  # about 6 months live
+READY_TRADES = 30
+READY_MAX_DD = 0.25
+LOW_TURNOVER = {"indexador", "guardiao", "rotador"}  # few trades by design: the trade-count test does not apply
+
+
+def live_stats(port: dict) -> dict:
+    """Return, annualised Sharpe and session count from the live history (deposits excluded)."""
+    h = port["history"]
+    daily = [(b["equity"] - (b["deposits"] - a["deposits"])) / a["equity"] - 1 for a, b in zip(h, h[1:]) if a["equity"]]
+    total = 1.0
+    for r in daily:
+        total *= 1 + r
+    sd = statistics.pstdev(daily) if len(daily) > 1 else 0.0
+    sharpe = statistics.fmean(daily) / sd * 252 ** 0.5 if sd else 0.0
+    return {"sessions": len(daily), "return": total - 1, "sharpe": sharpe}
+
+
+def readiness(cfg: dict, port: dict, bench: dict | None, mc: dict | None) -> list[tuple[str, bool | None]]:
+    """The five checks before an agent's ideas are worth real (small) money; None = not applicable."""
+    st = live_stats(port)
+    sells = sum(1 for t in port["trades"] if t["side"] == "venda")
+    beats = None if bench is None else st["return"] > bench["return"] and st["sharpe"] >= bench["sharpe"]
+    in_range = None
+    if mc and mc.get("p5") is not None and st["sessions"]:
+        floor = mc["p5"] * min(1.0, st["sessions"] / 252)  # worst 1 in 20 years, prorated to the time live
+        in_range = st["return"] >= floor
+    return [
+        (f"{st['sessions']}/{READY_SESSIONS} sessões ao vivo", st["sessions"] >= READY_SESSIONS),
+        (f"vs S&P 500: {pct(st['return'])} (Sharpe {st['sharpe']:.1f})"
+         + (f" contra {pct(bench['return'])} (Sharpe {bench['sharpe']:.1f})" if bench else ""), beats),
+        ("dentro do Monte Carlo do backtest" if mc else "sem backtest (só se avalia ao vivo)", in_range),
+        (f"{sells}/{READY_TRADES} vendas fechadas", None if cfg["strategy"] in LOW_TURNOVER else sells >= READY_TRADES),
+        (f"queda máx. {pct(-port.get('max_dd', 0.0))} (limite {READY_MAX_DD:.0%})", port.get("max_dd", 0.0) <= READY_MAX_DD),
+    ]
+
+
+def readiness_card(config: dict, state: dict) -> list[dict]:
+    path = REPO_AGENTS / "pretrain.json"
+    pre = json.loads(path.read_text())["strategies"] if path.exists() else {}
+    bench_cfg = next((c for c in active_agents(config) if c["strategy"] == "indexador"), None)
+    bench = live_stats(state["agents"][bench_cfg["id"]]) if bench_cfg and bench_cfg["id"] in state["agents"] else None
+    icon = {True: "✅", False: "❌", None: "➖"}
+    lines, ready = [], []
+    for cfg in active_agents(config):
+        port = state["agents"].get(cfg["id"])
+        if not port or cfg["strategy"] == "indexador":
+            continue
+        checks = readiness(cfg, port, bench, pre.get(cfg["strategy"], {}).get("monte_carlo"))
+        passed = all(ok is not False for _, ok in checks) and any(ok for _, ok in checks)
+        if passed:
+            ready.append(cfg["name"])
+        lines.append(f"{'🟢' if passed else '⚪'} {cfg['emoji']} **{cfg['name']}** "
+                     + " ".join(icon[ok] for _, ok in checks) + f" · {checks[1][0].split(' contra')[0]}")
+    summary = (f"**Prontos para a fase 2** (ideias com pouco dinheiro, decisão humana): {', '.join(ready)}"
+               if ready else "**Nenhum agente pronto ainda.** A liga continua só com dinheiro fictício.")
+    legend = ("Critérios, por ordem: 1) 6 meses ao vivo · 2) bate o S&P 500 com Sharpe igual ou melhor · 3) dentro do "
+              "Monte Carlo do backtest · 4) 30 vendas (➖ não se aplica) · 5) queda máx. ≤ 25%")
+    return [embed("🚦 Prontidão dos agentes", summary + "\n\n" + "\n".join(lines)[:3500], color=BLUE,
+                  footer=legend + ". Mesmo prontos, nunca em piloto automático. Não é recomendação de compra.")]
+
+
 def month_changed(state: dict) -> str | None:
     """The month that just ended, if the latest run is the first of a new month."""
     for port in state["agents"].values():
@@ -1293,6 +1356,8 @@ def configure(args: dict, config: dict, state: dict, mkt: Market | None) -> tupl
                       f"Estratégia **{strategy}** ({STRATEGIES[strategy][1]}) com {eur(capital)}. Começa a investir na próxima execução.",
                       color=GREEN)], {}, True
     cfg = find_agent(config, name) if name else None
+    if action == "prontidao":
+        return readiness_card(config, state), {}, False
     if action == "estrategia":
         if not name:
             return strategies_index(config), {}, False
@@ -1351,7 +1416,8 @@ def main() -> int:
                                    moves, training, avoided, events)
             ended = month_changed(state)
             if ended:
-                follow_up = monthly_report(config, state, ended)
+                month_embeds, month_files = monthly_report(config, state, ended)
+                follow_up = (month_embeds + readiness_card(config, state), month_files)
         else:
             args = json.loads(a.args or "{}")
             needs_market = args.get("acao", "ver") in ("ver", "criar")
