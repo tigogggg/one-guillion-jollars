@@ -128,6 +128,7 @@ def lines_chart(series: dict[str, list[tuple]], title: str) -> bytes:
     ax = fig.add_subplot(1, 1, 1)
     _style(ax)
     ax.axhline(0, color=NEUTRAL, linewidth=0.8)
+    ends = []
     for i, (name, points) in enumerate(series.items()):
         if not points:
             continue
@@ -135,13 +136,32 @@ def lines_chart(series: dict[str, list[tuple]], title: str) -> bytes:
         values = [v for _, v in points]
         color = palette[i % len(palette)]
         ax.plot(dates, values, color=color, linewidth=1.4, marker="o" if len(points) < 3 else None, markersize=3)
-        ax.annotate(f"{name} {values[-1]:+.1f}%", (dates[-1], values[-1]), xytext=(4, 0), textcoords="offset points",
-                    color=color, fontsize=7, va="center")
+        ends.append([values[-1], values[-1], dates[-1], f"{name} {values[-1]:+.1f}%", color])
+    # End labels, nudged apart so lines that finish close together stay readable.
+    low, high = ax.get_ylim()
+    gap = (high - low) * 0.045
+    ends.sort(key=lambda e: e[0])
+    for prev, cur in zip(ends, ends[1:]):
+        cur[1] = max(cur[1], prev[1] + gap)
+    for _, y, x, label, color in ends:
+        ax.annotate(label, (x, y), xytext=(4, 0), textcoords="offset points", color=color, fontsize=7, va="center")
     ax.set_title(title, color=FG, fontsize=10, loc="left")
     ax.yaxis.set_major_formatter(matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:+.1f}%"))
-    ax.xaxis.set_major_locator(matplotlib.dates.AutoDateLocator(minticks=2, maxticks=8))
-    ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%d/%m"))
-    if len({d for pts in series.values() for d, _ in pts}) < 3:
-        ax.xaxis.set_major_locator(matplotlib.dates.DayLocator())
-    ax.margins(x=0.18)
+    dates_all = pd.to_datetime(sorted({d for pts in series.values() for d, _ in pts}))
+    span_days = (dates_all[-1] - dates_all[0]).days if len(dates_all) else 0
+    if span_days > 2 * 365:  # years: "2008", "2010", …
+        ax.xaxis.set_major_locator(matplotlib.dates.YearLocator(base=max(1, round(span_days / 365 / 10))))
+        ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%Y"))
+    elif span_days > 120:  # months: "nov 26"
+        ax.xaxis.set_major_locator(matplotlib.dates.MonthLocator(interval=max(1, round(span_days / 30 / 8))))
+        ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%m/%y"))
+    else:  # days: "02/11"
+        ax.xaxis.set_major_locator(matplotlib.dates.AutoDateLocator(minticks=2, maxticks=8))
+        ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%d/%m"))
+        if len(dates_all) < 3:
+            ax.xaxis.set_major_locator(matplotlib.dates.DayLocator())
+    if len(dates_all):  # room on the right for the end labels, none on the left, no ticks past the data
+        ax.set_xlim(dates_all[0], dates_all[-1] + pd.Timedelta(days=max(1, span_days) * 0.2))
+        last = matplotlib.dates.date2num(dates_all[-1])
+        ax.set_xticks([t for t in ax.get_xticks() if t <= last])
     return _png(fig)
