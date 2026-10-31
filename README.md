@@ -143,7 +143,9 @@ stores the chart's data in the Worker's KV under `chart:<random id>` for 120
 days, and `discord-bot/chart_page.js` serves it at
 `https://<worker>.workers.dev/g/<id>`: a Plotly chart (hover values, zoom,
 agents on and off in the legend), countdowns to every scheduled run (from the
-`/horario` schedule), and one card per agent. In the league page the card has
+`/horario` schedule), an arcade horse race (one lane and avatar per agent,
+advancing with its return; ▶ replays it day by day, with a live scoreboard),
+and one card per agent. In the league page the card has
 the holdings (quantity, average cost with fees, current price, value, gain,
 weight, stop, target, earnings date), pending orders, every trade (price, value,
 result, reason), realised gains per year, taxes, stats and the full strategy

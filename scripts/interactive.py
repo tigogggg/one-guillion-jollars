@@ -73,7 +73,10 @@ def publish(title: str, series: dict[str, list[tuple]], references: dict[str, li
         return None
     if kind:
         discord_bot.kv_put(f"chart-latest:{kind}", chart_id)
-    return f"{base}/g/{chart_id}"
+    url = f"{base}/g/{chart_id}"
+    if os.environ.get("GITHUB_ACTIONS"):  # visible on the run page (private repo)
+        print(f"::notice title=Gráfico interativo::{url}")
+    return url
 
 
 def leaders(series: dict[str, list[tuple]], n: int = 5, always: tuple[str, ...] = ("Indexador",)) -> set[str]:
