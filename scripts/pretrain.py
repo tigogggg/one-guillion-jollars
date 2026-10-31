@@ -269,9 +269,11 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
     cfg = {"id": "bt", "name": strategy, "strategy": strategy, "params": params}
     port = new_portfolio(capital, markets[0].as_of)
     port["params"] = dict(params)
-    trades, bankrupt_on = 0, None
+    trades, bankrupt_on, sells = 0, None, []
     for mkt in markets:
-        trades += len(fill_pending(port, mkt)) + len(check_exits(port, mkt))
+        done = fill_pending(port, mkt) + check_exits(port, mkt)
+        trades += len(done)
+        sells += [t for t in done if t["side"] == "venda"]
         agents.pay_taxes(port, mkt)
         score_day(port, mkt)
         if bankrupt_on is None and strategy != "indexador" and agents.is_bankrupt(port, mkt):
@@ -291,9 +293,26 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
         "sharpe": round(sharpe, 2),
         "trades": trades,
         "bankrupt": bankrupt_on,
+        "trade_stats": trade_stats(sells),
         "by_zone": {z: round(total / n, 6) for z, (total, n) in port.get("zone_stats", {}).items() if n >= 20},
         "daily": [round(x, 6) for x in daily.tolist()],
         "curve": [(h["date"], (h["equity"] / capital - 1) * 100) for h in port["history"]],
+    }
+
+
+def trade_stats(sells: list[dict]) -> dict:
+    """Win rate, average win and loss, and typical holding time of the closed trades (after costs)."""
+    rets = [t["ret"] for t in sells if t.get("ret") is not None]
+    if not rets:
+        return {}
+    wins, losses = [r for r in rets if r > 0], [r for r in rets if r <= 0]
+    held = sorted(t["held"] for t in sells if t.get("held") is not None)
+    return {
+        "trades": len(rets), "win_rate": round(len(wins) / len(rets), 3),
+        "avg_win": round(statistics.fmean(wins), 4) if wins else 0.0,
+        "avg_loss": round(statistics.fmean(losses), 4) if losses else 0.0,
+        "expectancy": round(statistics.fmean(rets), 4),
+        "median_days": held[len(held) // 2] if held else None,
     }
 
 

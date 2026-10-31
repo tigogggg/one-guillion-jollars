@@ -39,8 +39,8 @@ export async function portalResponse(env, token, schedule) {
   const latest = (await env.CONFIG.get("chart-latest:liga", "json")) || (await env.CONFIG.get("chart-latest:pretreino", "json"));
   const data = (latest && (await env.CONFIG.get(`chart:${latest}`, "json"))) ||
     { title: "Liga dos agentes", subtitle: "ainda sem dados", updated: new Date().toISOString(), series: [], agents: [] };
-  const [news, market] = await Promise.all([env.CONFIG.get("portal:news", "json"), env.CONFIG.get("portal:market", "json")]);
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market }));
+  const [news, market, proposals] = await Promise.all(["news", "market", "proposals"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals }));
 }
 
 // ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ export function chartPage(data, upcoming, newer, extras = {}) {
     : "";
   const portal = !!extras.portal;
   const tabs = [["corrida", "🏁 Corrida"], ["agentes", "🧾 Agentes"]]
-    .concat(portal ? [["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
+    .concat(portal ? [["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
     .concat([["agenda", "⏱️ Agenda"]])
     .concat(portal ? [["carteira", "💼 A tua carteira"]] : []);
   const body = `
@@ -164,7 +164,8 @@ ${banner}
   <div id="chips" class="chips"></div>
   <div id="detail"></div>
 </section>
-${portal ? `<section data-tab="noticias" hidden><div id="news"></div></section>
+${portal ? `<section data-tab="propostas" hidden><div id="props"></div></section>
+<section data-tab="noticias" hidden><div id="news"></div></section>
 <section data-tab="oportunidades" hidden><div id="opps"></div></section>` : ""}
 <section data-tab="agenda" hidden>
   <h2>⏱️ Próximas atualizações</h2>
@@ -186,6 +187,7 @@ const DATA = ${safeJson(data)};
 const UPCOMING = ${safeJson(upcoming)};
 const NEWS = ${safeJson(extras.news || null)};
 const MARKET = ${safeJson(extras.market || null)};
+const PROPOSALS = ${safeJson(extras.proposals || null)};
 ${CLIENT}
 </script>`;
   return page(portal ? "Portal CoutoTrading" : data.title, body, `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -473,6 +475,77 @@ if (location.hash && document.querySelector('#tabs .tab[data-tab="' + location.h
   }
   ["nf-q", "nf-s", "nf-i"].forEach((id) => $(id).addEventListener("input", draw));
   draw();
+})();
+
+// ---- proposals ----
+const store = { get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+(function props() {
+  if (!$("props")) return;
+  const P = PROPOSALS;
+  if (!P) { $("props").innerHTML = '<p class="muted">As propostas aparecem depois da próxima liga dos agentes (dias úteis às 12:15).</p>'; return; }
+  const sb = (P.scoreboard || {}).all || {};
+  const pctOrDash = (x) => x == null ? "—" : fmtNum(x * 100, 0) + "%";
+  const sizing = (b, capital, riskPct) => {
+    const pl = b.plan, perShare = (pl.entry_max - pl.stop) * pl.fx_eur;
+    if (!(perShare > 0) || !(capital > 0)) return null;
+    let qty = Math.floor(capital * riskPct / 100 / perShare * 1000) / 1000;
+    const cap = capital * 0.2 / (pl.entry_max * pl.fx_eur);
+    const capped = qty > cap; if (capped) qty = Math.floor(cap * 1000) / 1000;
+    return { qty, value: qty * pl.entry_max * pl.fx_eur, risk: qty * perShare, capped };
+  };
+  const card = (b) => {
+    const pl = b.plan, rec = b.record || {}, cur = pl.currency === "EUR" ? "€" : "$";
+    return '<div class="opp"><div class="top"><span class="sym">' + esc(b.symbol) + '</span><span class="muted">' + esc(b.name || "") + (b.sector ? " · " + esc(b.sector) : "") + '</span>' +
+      (b.safety != null ? '<span class="score ' + esc((b.level || "").split(" ")[0]) + '">🛡️ ' + b.safety + '/100 · ' + esc(b.level) + '</span>' : "") + '</div>' +
+      '<p class="small">Confiança dos agentes <b>' + fmtNum(b.confidence, 0) + '%</b> (peso ' + fmtNum(b.support, 1) + ' de ' + fmtNum(P.total_weight, 1) + ')</p><div class="bar"><i style="width:' + Math.min(100, b.confidence) + '%"></i></div>' +
+      '<p>' + b.agents.map((a) => '<span class="tag">' + esc(a.emoji + " " + a.name) + ' · peso ' + fmtNum(a.weight, 1) + (a.reason ? ' · ' + esc(a.reason) : '') + '</span>').join("") + '</p>' +
+      '<div class="grid">' + tile("Entrada até", fmtNum(pl.entry_max) + " " + cur, "fecho " + fmtNum(pl.price) + " " + cur) +
+      tile("Stop", fmtNum(pl.stop) + " " + cur, "-" + fmtNum(pl.risk_pct, 1) + "% · 2× a variação diária média", "down") +
+      tile("Alvo", fmtNum(pl.target) + " " + cur, "+" + fmtNum(pl.gross_pct, 1) + "% · risco/retorno " + fmtNum(pl.rr, 1), "up") +
+      tile("Líquido no alvo", fmtPct(pl.net_target_pct), "depois de custos e 28% de imposto", "up") +
+      tile("Líquido no stop", fmtPct(pl.net_stop_pct), "com custos", "down") +
+      tile("Historial dos agentes", rec.trades ? pctOrDash(rec.win_rate) + " de acerto" : "ainda sem vendas", rec.trades ? "ganho médio " + fmtPct(rec.avg_win * 100) + " · perda média " + fmtPct(rec.avg_loss * 100) + (rec.median_days ? " · ~" + rec.median_days + " dias" : "") : "") +
+      '</div><p class="small sizing" data-sym="' + esc(b.symbol) + '"></p>' +
+      (b.earnings ? '<p class="small">📅 Resultados a ' + esc(b.earnings) + '</p>' : '') + (b.news ? '<p class="small muted">📰 ' + esc(b.news) + '</p>' : '') +
+      ((b.parts || []).length ? '<details><summary>Score de segurança: como chegou a ' + b.safety + '</summary>' + table(["Critério", "Pontos", "Porquê"], b.parts.map((x) => [esc(x.label), fmtNum(x.points, 1) + " / " + x.max, esc(x.why)]), [1]) + '</details>' : '') + '</div>';
+  };
+  const byBucket = (P.scoreboard || {}).by_bucket || {};
+  $("props").innerHTML = '<h2>🧠 Propostas dos agentes para a abertura</h2><p class="muted small">Ordens que os agentes acabaram de decidir no fecho de ' + esc(P.as_of) +
+    ', juntas e pesadas pelo historial de cada um (zona de mercado: <b>' + esc(P.zone) + '</b>). Para estudar e decidir tu: não é recomendação.</p>' +
+    '<div class="panel filters"><label class="small">O teu capital (€) <input id="pp-cap" type="number" min="0" step="100"></label>' +
+    '<label class="small">Risco por operação (%) <input id="pp-risk" type="number" min="0.1" max="5" step="0.1"></label>' +
+    '<span class="muted small">Quantas ações: risco em euros ÷ (entrada − stop), no máximo 20% do capital numa posição. Fica guardado neste aparelho.</span></div>' +
+    '<h2>🟢 Comprar (' + P.buys.length + ')</h2><div class="cards">' + (P.buys.map(card).join("") || '<p class="muted">Hoje nenhum agente quer comprar.</p>') + '</div>' +
+    '<h2>🔴 Os agentes estão a vender (' + P.sells.length + ')</h2>' + table(["Ativo", "Quem vende", "Porquê", "Peso", "Score"], P.sells.map((x) =>
+      ['<b>' + esc(x.symbol) + '</b> <span class="muted">' + esc(x.name || "") + '</span>', x.agents.map((a) => esc(a.emoji + " " + a.name)).join(", "),
+       esc([...new Set(x.agents.map((a) => a.reason).filter(Boolean))].join(" · ")), fmtNum(x.support, 1), x.safety != null ? x.safety + "/100" : "—"]), [3]) +
+    '<h2>📊 Placar das propostas</h2><p class="muted small">Cada proposta de compra é seguida: conta se a ação abriu até ao preço de entrada nas ' + P.method.fill_window +
+    ' sessões seguintes, e depois se tocou primeiro no stop ou no alvo; ao fim de ' + P.method.horizon + ' sessões fecha ao preço do dia.</p>' +
+    '<div class="grid">' + tile("Propostas", sb.proposals ?? 0, (sb.executed ?? 0) + " executadas · " + (sb.open ?? 0) + " abertas") +
+    tile("Taxa de acerto", pctOrDash(sb.win_rate), (sb.targets ?? 0) + " alvos · " + (sb.stops ?? 0) + " stops", cls((sb.win_rate || 0) - 0.5)) +
+    tile("R médio", sb.avg_r == null ? "—" : fmtNum(sb.avg_r, 2) + " R", "ganho por unidade de risco", cls(sb.avg_r)) +
+    tile("Retorno médio", sb.avg_ret == null ? "—" : fmtPct(sb.avg_ret), "por proposta fechada", cls(sb.avg_ret)) + '</div>' +
+    table(["Confiança", "Propostas", "Fechadas", "Acerto", "R médio"], ["alta", "média", "baixa"].map((k) => { const x = byBucket[k] || {};
+      return [k + (k === "alta" ? " (≥40%)" : k === "média" ? " (20-40%)" : " (<20%)"), x.proposals ?? 0, x.closed ?? 0, pctOrDash(x.win_rate), x.avg_r == null ? "—" : fmtNum(x.avg_r, 2)]; }), [1, 2, 3, 4]) +
+    '<details><summary>Últimas propostas e o que lhes aconteceu</summary>' + table(["Data", "Ativo", "Confiança", "Estado", "Compra", "Saída", "Resultado"],
+      ((P.scoreboard || {}).recent || []).map((e) => [esc(e.date), '<b>' + esc(e.symbol) + '</b>', fmtNum(e.confidence, 0) + "%", esc(e.status),
+        e.fill != null ? fmtNum(e.fill) : "—", e.exit != null ? fmtNum(e.exit) : (e.last != null ? fmtNum(e.last) + " (aberta)" : "—"),
+        '<span class="' + cls(e.ret ?? e.ret_open) + '">' + (e.ret != null ? fmtPct(e.ret * 100) + (e.r != null ? " · " + fmtNum(e.r, 1) + " R" : "") : e.ret_open != null ? fmtPct(e.ret_open * 100) : "—") + '</span>']), [2, 4, 5, 6]) + '</details>' +
+    '<h2>⚖️ Peso de cada agente hoje</h2>' + table(["Agente", "Peso", "Porquê", "Historial"], P.weights.map((w) => [esc(w.emoji + " " + w.name), fmtNum(w.weight, 2),
+      esc(w.why.join(" · ") || "—"), w.stats && w.stats.trades ? pctOrDash(w.stats.win_rate) + " acerto em " + w.stats.trades + " vendas" : "—"]), [1]) +
+    '<details class="panel"><summary><b>Como se calcula o peso</b></summary><ul class="small">' + P.rules.map((r) => '<li>' + esc(r) + '</li>').join("") + '</ul></details>';
+  const cap = $("pp-cap"), risk = $("pp-risk");
+  cap.value = store.get("capital", 10000); risk.value = store.get("risk", 1);
+  const drawSizes = () => {
+    store.set("capital", +cap.value); store.set("risk", +risk.value);
+    document.querySelectorAll(".sizing").forEach((el) => {
+      const b = P.buys.find((x) => x.symbol === el.dataset.sym), z = sizing(b, +cap.value, +risk.value);
+      el.innerHTML = z ? '🧮 Para ti: <b>' + fmtNum(z.qty, 3) + ' ações</b> ≈ ' + fmtEur(z.value) + ', arriscando ' + fmtEur(z.risk) + (z.capped ? ' (limitado a 20% do capital)' : '') : "";
+    });
+  };
+  [cap, risk].forEach((el) => el.addEventListener("input", drawSizes));
+  drawSizes();
 })();
 
 // ---- opportunities ----

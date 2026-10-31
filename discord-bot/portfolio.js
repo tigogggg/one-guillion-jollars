@@ -50,7 +50,7 @@ export async function portfolioRoute(request, env, tok, rest) {
   const data = await env.CONFIG.get(`portfolio:${tok}`, "json");
   if (!data) return html(page("Carteira", "<p class='muted'>Link inválido ou substituído. Pede o teu link com /carteira no Discord.</p>"), 404);
   if (rest === "" && request.method === "GET") return html(portfolioPage(data, tok));
-  if (rest === "/data" && request.method === "GET") return json(await snapshot(data));
+  if (rest === "/data" && request.method === "GET") return json(await snapshot(env, data));
   if (rest === "/history" && request.method === "GET") return json(await history(data));
   if (rest === "/data" && request.method === "POST") {
     let body;
@@ -58,7 +58,7 @@ export async function portfolioRoute(request, env, tok, rest) {
     const error = await change(data, body);
     if (error) return json({ error }, 400);
     await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
-    return json(await snapshot(data));
+    return json(await snapshot(env, data));
   }
   return json({ error: "Não encontrado." }, 404);
 }
@@ -93,8 +93,16 @@ async function change(data, body) {
     data.tx = data.tx.filter((x) => x.id !== body.id);
     return null;
   }
-  if (body.action !== "add") return "Ação desconhecida.";
-  if (data.tx.length >= MAX_TX) return `Limite de ${MAX_TX} operações.`;
+  if (body.action === "settings") {
+    const capital = Number(body.capital), risk = Number(body.risk);
+    if (!(capital >= 0 && capital <= 1e9) || !(risk > 0 && risk <= 5)) return "Capital ou risco inválido (risco entre 0,1% e 5%).";
+    data.settings = { capital, risk };
+    return null;
+  }
+  if (body.action !== "add" && body.action !== "edit") return "Ação desconhecida.";
+  const editing = body.action === "edit" ? data.tx.find((x) => x.id === body.id) : null;
+  if (body.action === "edit" && !editing) return "Operação não encontrada.";
+  if (!editing && data.tx.length >= MAX_TX) return `Limite de ${MAX_TX} operações.`;
   const t = body.tx || {};
   const symbol = String(t.symbol || "").trim().toUpperCase();
   const side = t.side === "sell" ? "sell" : t.side === "buy" ? "buy" : null;
@@ -108,10 +116,19 @@ async function change(data, body) {
   if (!(fee >= 0) || fee > 1e7) return "Comissão inválida.";
   const quote = await yahooQuote(symbol);
   if (!quote) return `Não encontrei ${symbol} no Yahoo Finance. Nas bolsas europeias junta o sufixo (ex.: VWCE.DE, ASML.AS).`;
-  if (side === "sell" && heldOn(data.tx, symbol, date) < qty - 1e-9) return `Em ${date} não tinhas ${qty} ${symbol} para vender.`;
-  const seq = data.tx.reduce((m, x) => Math.max(m, x.seq || 0), 0) + 1;
-  data.tx.push({ id: token().slice(0, 12), seq, side, symbol, date, qty, price, fee, currency: quote.currency, name: quote.name,
-                 note: String(t.note || "").slice(0, 120) });
+  const others = editing ? data.tx.filter((x) => x.id !== editing.id) : data.tx;
+  if (side === "sell" && heldOn(others, symbol, date) < qty - 1e-9) return `Em ${date} não tinhas ${qty} ${symbol} para vender.`;
+  const seq = editing ? editing.seq : data.tx.reduce((m, x) => Math.max(m, x.seq || 0), 0) + 1;
+  const row = { id: editing ? editing.id : token().slice(0, 12), seq, side, symbol, date, qty, price, fee, currency: quote.currency,
+                name: quote.name, note: String(t.note || "").slice(0, 120) };
+  const next = others.concat([row]);
+  // every sale, of this symbol and of the one it replaced, must still have the shares on its date
+  for (const sym of new Set([symbol, editing?.symbol].filter(Boolean))) {
+    for (const x of next.filter((y) => y.symbol === sym && y.side === "sell")) {
+      if (heldOn(next, sym, x.date, x.id) < x.qty - 1e-9) return `Assim a venda de ${x.qty} ${sym} a ${x.date} ficaria sem ações.`;
+    }
+  }
+  data.tx = next;
   return null;
 }
 
@@ -149,12 +166,82 @@ async function fxToEur(currency) {
   return (currency === "GBp" || currency === "GBX" ? 0.01 : 1) / q.price;
 }
 
-async function snapshot(data) {
+async function snapshot(env, data) {
   const symbols = [...new Set(data.tx.map((t) => t.symbol))];
-  const quotes = Object.fromEntries(await Promise.all(symbols.map(async (s) => [s, await yahooQuote(s)])));
-  const currencies = [...new Set(data.tx.map((t) => t.currency).concat(Object.values(quotes).filter(Boolean).map((q) => q.currency)))];
+  const [quotes, proposals, news] = await Promise.all([
+    Promise.all(symbols.map(async (s) => [s, await yahooQuote(s)])).then(Object.fromEntries),
+    env.CONFIG.get("portal:proposals", "json"),
+    env.CONFIG.get("portal:news", "json"),
+  ]);
+  const currencies = [...new Set(data.tx.map((t) => t.currency).concat(Object.values(quotes).filter(Boolean).map((q) => q.currency))
+    .concat((proposals?.buys || []).map((b) => b.plan.currency)))];
   const fx = Object.fromEntries(await Promise.all(currencies.map(async (c) => [c, await fxToEur(c)])));
-  return { name: data.name, tx: data.tx, quotes, fx, at: Date.now() };
+  const verdicts = await judge(data, quotes, fx, proposals, news);
+  return { name: data.name, tx: data.tx, quotes, fx, verdicts, settings: data.settings || { capital: 10000, risk: 1 },
+           proposals: proposals ? { as_of: proposals.as_of, zone: proposals.zone, buys: proposals.buys.slice(0, 12) } : null, at: Date.now() };
+}
+
+// ---------------------------------------------------------------------------
+// Keep, reduce or sell: one verdict per open position, with its reasons
+// ---------------------------------------------------------------------------
+
+const VERDICT_RULES = [
+  "🔴 Vender: o preço está abaixo da média de 200 dias e a de 50 abaixo da de 200 (tendência de fundo perdida); ou perde 15% ou mais face ao custo médio; ou agentes que pesam 25% ou mais da liga estão a vender esta ação; ou notícias claramente negativas com o preço abaixo da média de 50 dias.",
+  "🟠 Reduzir: abaixo da média de 50 dias (mas acima da de 200); ou mais de 25% da carteira numa só posição; ou ganho de 30%+ com o preço 15%+ acima da média de 50 dias (esticada: realizar parte).",
+  "🟢 Manter: nenhum dos sinais acima.",
+  "Stop sugerido: o mais alto entre 2,5× a variação diária média abaixo do preço e a média de 200 dias.",
+];
+
+async function judge(data, quotes, fx, proposals, news) {
+  const pos = {};
+  for (const t of data.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq)) {
+    const p = pos[t.symbol] ||= { qty: 0, cost: 0, currency: t.currency };
+    if (t.side === "buy") { p.qty += t.qty; p.cost += t.qty * t.price + t.fee; }
+    else { const avg = p.qty ? p.cost / p.qty : 0; p.cost -= avg * t.qty; p.qty -= t.qty; }
+  }
+  const open = Object.entries(pos).filter(([, p]) => p.qty > 1e-9);
+  const total = open.reduce((sum, [s, p]) => sum + (quotes[s]?.price ?? 0) * p.qty * (fx[p.currency] ?? 0), 0);
+  const selling = Object.fromEntries((proposals?.sells || []).map((x) => [x.symbol, x]));
+  const scores = news?.scores || {};
+  const out = { rules: VERDICT_RULES };
+  await Promise.all(open.map(async ([sym, p]) => {
+    const q = quotes[sym];
+    const r = await yahoo(sym, "range=1y&interval=1d");
+    const c = (r?.indicators?.quote?.[0]?.close || []).filter((x) => x != null);
+    const hi = r?.indicators?.quote?.[0]?.high || [], lo = r?.indicators?.quote?.[0]?.low || [], cl = r?.indicators?.quote?.[0]?.close || [];
+    if (!q || c.length < 60) { out[sym] = { verdict: "?", reasons: ["sem histórico suficiente"] }; return; }
+    const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    const price = q.price, sma50 = mean(c.slice(-50)), sma200 = c.length >= 200 ? mean(c.slice(-200)) : null;
+    const trs = [];
+    for (let i = Math.max(1, cl.length - 14); i < cl.length; i++) {
+      if (hi[i] == null || lo[i] == null || cl[i - 1] == null) continue;
+      trs.push(Math.max(hi[i] - lo[i], Math.abs(hi[i] - cl[i - 1]), Math.abs(lo[i] - cl[i - 1])));
+    }
+    const atr = trs.length ? mean(trs) : null;
+    const avg = p.cost / p.qty, gain = price / avg - 1;
+    const weight = total ? price * p.qty * (fx[p.currency] ?? 0) / total : 0;
+    const sell = [], reduce = [], good = [];
+    if (sma200 && price < sma200 && sma50 < sma200) sell.push("abaixo da média de 200 dias, com a de 50 abaixo da de 200");
+    if (gain <= -0.15) sell.push(`perde ${(gain * 100).toFixed(1)}% face ao custo médio`);
+    const sellers = selling[sym] ? selling[sym].agents.map((a) => a.emoji + " " + a.name + (a.reason ? " (" + a.reason + ")" : "")).join(", ") : "";
+    const share = selling[sym] && proposals?.total_weight ? selling[sym].support / proposals.total_weight : 0;
+    if (share >= 0.25) sell.push(`agentes com ${(share * 100).toFixed(0)}% do peso da liga estão a vender: ${sellers}`);
+    if ((scores[sym] ?? 0) <= -3 && price < sma50) sell.push(`notícias negativas (score ${scores[sym]}) e preço abaixo da média de 50 dias`);
+    if (price < sma50 && !(sma200 && price < sma200)) reduce.push("abaixo da média de 50 dias");
+    if (weight > 0.25) reduce.push(`${(weight * 100).toFixed(0)}% da carteira numa só posição`);
+    if (gain >= 0.3 && price > sma50 * 1.15) reduce.push(`ganho de ${(gain * 100).toFixed(0)}% e ${((price / sma50 - 1) * 100).toFixed(0)}% acima da média de 50 dias`);
+    if (price > sma50) good.push("acima da média de 50 dias");
+    if (sma200 && price > sma200) good.push("acima da média de 200 dias");
+    if ((scores[sym] ?? 0) >= 3) good.push(`notícias positivas (score +${scores[sym]})`);
+    const stop = Math.max(atr ? price - 2.5 * atr : 0, sma200 || 0);
+    out[sym] = {
+      verdict: sell.length ? "Vender" : reduce.length ? "Reduzir" : "Manter",
+      reasons: (sell.length ? sell : reduce.length ? reduce : good.length ? good : ["sem sinais de alerta"])
+        .concat(sellers && share < 0.25 ? [`nota: ${sellers} vendeu (${(share * 100).toFixed(0)}% do peso, abaixo dos 25%)`] : []),
+      sma50, sma200, atr, stop: stop > 0 && stop < price ? stop : null, gain, weight,
+    };
+  }));
+  return out;
 }
 
 async function history(data) {
@@ -192,6 +279,7 @@ function portfolioPage(data, tok) {
   <button class="tab" data-tab="posicoes">💼 Posições</button>
   <button class="tab" data-tab="operacoes">🧾 Operações</button>
   <button class="tab" data-tab="adicionar">➕ Adicionar</button>
+  <button class="tab" data-tab="propostas">🧠 Propostas para ti</button>
 </nav>
 <section data-tab="resumo">
   <div id="totals" class="grid"></div>
@@ -199,11 +287,22 @@ function portfolioPage(data, tok) {
   <div id="chart" class="chart"></div>
   <p class="muted small" id="chart-note">Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.</p>
 </section>
-<section data-tab="posicoes" hidden><div id="positions"></div><h2>✅ Posições fechadas</h2><div id="closed"></div></section>
+<section data-tab="posicoes" hidden><div id="positions"></div><div id="verdict-rules"></div><h2>✅ Posições fechadas</h2><div id="closed"></div></section>
+<section data-tab="propostas" hidden>
+  <h2>🧠 Propostas dos agentes para o teu capital</h2>
+  <form id="settings" class="panel form">
+    <label>O teu capital (€) <input name="capital" type="number" min="0" step="100"></label>
+    <label>Risco por operação (%) <input name="risk" type="number" min="0.1" max="5" step="0.1"></label>
+    <button class="btn" type="submit">GUARDAR</button>
+    <p class="muted small">Quantas ações: risco em euros ÷ (entrada − stop), no máximo 20% do capital numa posição.</p>
+  </form>
+  <div id="mine"></div>
+</section>
 <section data-tab="operacoes" hidden><div id="txs"></div></section>
 <section data-tab="adicionar" hidden>
-  <h2>➕ Registar uma compra ou venda</h2>
+  <h2 id="form-title">➕ Registar uma compra ou venda</h2>
   <form id="form" class="panel form">
+    <input type="hidden" name="edit_id" value="">
     <label>Tipo <select name="side"><option value="buy">🟢 Compra</option><option value="sell">🔴 Venda</option></select></label>
     <label>Ticker <input name="symbol" placeholder="AAPL, NVDA, VWCE.DE" required autocapitalize="characters"></label>
     <label>Data <input name="date" type="date" required></label>
@@ -212,6 +311,7 @@ function portfolioPage(data, tok) {
     <label>Comissão <input name="fee" type="number" step="any" min="0" value="0"><span class="muted small">na mesma moeda</span></label>
     <label>Nota <input name="note" maxlength="120" placeholder="opcional"></label>
     <button class="btn" type="submit">GUARDAR</button>
+    <button class="btn alt" type="button" id="form-cancel" hidden>CANCELAR EDIÇÃO</button>
     <p id="form-msg" class="small"></p>
   </form>
   <p class="muted small">Ações europeias: junta o sufixo da bolsa do Yahoo Finance (.DE Xetra, .AS Amesterdão, .PA Paris, .MI Milão, .L Londres, .LS Lisboa).</p>
@@ -225,7 +325,8 @@ ${CLIENT}
 <style>.form { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; align-items:end; }
 .form label { display:grid; gap:4px; font-size:.85rem; color:var(--muted); }
 .form input, .form select { background:#0b0820; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px; font:inherit; }
-.del { background:none; border:1px solid var(--down); color:var(--down); border-radius:4px; cursor:pointer; padding:2px 6px; }</style>`);
+.del { background:none; border:1px solid var(--down); color:var(--down); border-radius:4px; cursor:pointer; padding:2px 6px; }
+.act { background:none; border:1px solid var(--neon); color:var(--neon); border-radius:4px; cursor:pointer; padding:2px 6px; }</style>`);
 }
 
 const CLIENT = String.raw`
@@ -250,6 +351,70 @@ function openTab(name) {
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
 
 let SNAP = null;
+
+function verdictCell(v) {
+  if (!v) return "—";
+  const icon = { Vender: "🔴", Reduzir: "🟠", Manter: "🟢" }[v.verdict] || "❔";
+  return '<span title="' + esc(v.reasons.join(" · ")) + '">' + icon + " <b>" + esc(v.verdict) + '</b></span><div class="muted small" style="white-space:normal;max-width:260px">' +
+    esc(v.reasons.join(" · ")) + '</div>';
+}
+
+function renderMine() {
+  const s = SNAP, P = s.proposals, st = s.settings || { capital: 10000, risk: 1 };
+  const f = $("settings");
+  if (document.activeElement?.form !== f) { f.capital.value = st.capital; f.risk.value = st.risk; }
+  if (!P || !P.buys.length) { $("mine").innerHTML = '<p class="muted">Hoje não há propostas de compra dos agentes. Aparecem depois da liga dos dias úteis (12:15).</p>'; return; }
+  $("mine").innerHTML = '<p class="muted small">Fecho de ' + esc(P.as_of) + ' · zona ' + esc(P.zone) + ' · para estudar e decidir tu, não é recomendação.</p><div class="cards">' + P.buys.map((b) => {
+    const pl = b.plan, fx = pl.fx_eur, per = (pl.entry_max - pl.stop) * fx;
+    let qty = per > 0 ? st.capital * st.risk / 100 / per : 0;
+    const capQty = st.capital * 0.2 / (pl.entry_max * fx), capped = qty > capQty;
+    qty = Math.floor(Math.min(qty, capQty) * 1000) / 1000;
+    const held = SNAP.tx.some((t) => t.symbol === b.symbol);
+    return '<div class="opp"><div class="top"><span class="sym">' + esc(b.symbol) + '</span><span class="muted">' + esc(b.name || "") + '</span>' +
+      (b.safety != null ? '<span class="score ' + esc((b.level || "").split(" ")[0]) + '">🛡️ ' + b.safety + '/100</span>' : "") + '</div>' +
+      '<p class="small">Confiança dos agentes ' + nf(b.confidence, 0) + '% · ' + b.agents.map((a) => esc(a.emoji + " " + a.name)).join(", ") + '</p>' +
+      '<p>🧮 <b>' + nf(qty, 3) + ' ações</b> ≈ ' + eur(qty * pl.entry_max * fx) + ' · arriscas ' + eur(qty * per) + (capped ? ' (limitado a 20% do capital)' : '') + '</p>' +
+      '<p class="small">Entrada até ' + nf(pl.entry_max) + ' · stop ' + nf(pl.stop) + ' (−' + nf(pl.risk_pct, 1) + '%) · alvo ' + nf(pl.target) + ' (+' + nf(pl.gross_pct, 1) + '%) · líquido no alvo ' +
+      (pl.net_target_pct > 0 ? "+" : "") + nf(pl.net_target_pct, 1) + '% · ' + esc(pl.currency) + '</p>' +
+      (held ? '<p class="small">💼 Já tens esta ação na carteira.</p>' : '') +
+      '<button class="btn alt use" data-sym="' + esc(b.symbol) + '" data-qty="' + qty + '" data-price="' + pl.entry_max + '">PREENCHER COMPRA</button></div>';
+  }).join("") + '</div>';
+}
+
+$("mine").addEventListener("click", (e) => {
+  const b = e.target.closest(".use"); if (!b) return;
+  const f = $("form"); resetForm();
+  f.side.value = "buy"; f.symbol.value = b.dataset.sym; f.qty.value = b.dataset.qty; f.price.value = b.dataset.price;
+  openTab("adicionar"); $("form-msg").textContent = "Confirma o preço a que compraste e a data, e guarda.";
+});
+
+$("settings").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "settings", capital: +f.capital.value, risk: +f.risk.value }) });
+  const out = await r.json();
+  if (!r.ok) return alert(out.error);
+  SNAP = out; render();
+});
+
+function resetForm() {
+  const f = $("form");
+  f.reset(); f.edit_id.value = ""; f.date.value = new Date().toISOString().slice(0, 10);
+  $("form-title").textContent = "➕ Registar uma compra ou venda"; $("form-cancel").hidden = true;
+}
+
+function fillForm(t, editing) {
+  const f = $("form");
+  resetForm();
+  f.side.value = t.side; f.symbol.value = t.symbol; f.qty.value = t.qty; f.price.value = t.price; f.fee.value = t.fee; f.note.value = t.note || "";
+  f.date.value = editing ? t.date : new Date().toISOString().slice(0, 10);
+  if (editing) { f.edit_id.value = t.id; $("form-title").textContent = "✏️ Editar operação de " + t.date; $("form-cancel").hidden = false; }
+  else $("form-title").textContent = "⧉ Duplicar: muda a data (e o que precisares) e guarda";
+  $("form-msg").textContent = ""; openTab("adicionar");
+  (editing ? f.qty : f.date).focus();
+}
+$("form-cancel").addEventListener("click", resetForm);
 
 // Average-cost bookkeeping per symbol, in the symbol's currency.
 function book(tx) {
@@ -286,13 +451,18 @@ function render() {
     tile("Atualizado", new Date(s.at).toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit", second: "2-digit" }), stale ? "⚠️ " + stale + " sem preço" : "próxima em 60 s");
   const weightOf = (r) => r.val != null && r.fx != null && value ? r.val * r.fx / value : null;
   $("positions").innerHTML = '<h2>💼 Posições abertas</h2>' + table(
-    ["Ativo", "Nome", "Qtd.", "Custo médio", "Preço", "Hoje", "Valor", "Ganho", "Ganho %", "Peso", "Valor €", "Desde"],
-    rows.sort((a, b) => (weightOf(b) || 0) - (weightOf(a) || 0)).map((r) => ['<b>' + esc(r.p.symbol) + '</b>', esc(r.q?.name || r.p.name || ""), nf(r.p.qty, 4),
+    ["Ativo", "Veredito", "Nome", "Qtd.", "Custo médio", "Preço", "Hoje", "Valor", "Ganho", "Ganho %", "Peso", "Valor €", "Stop sugerido", "Desde"],
+    rows.sort((a, b) => (weightOf(b) || 0) - (weightOf(a) || 0)).map((r) => ['<b>' + esc(r.p.symbol) + '</b>', verdictCell(s.verdicts?.[r.p.symbol]),
+      esc(r.q?.name || r.p.name || ""), nf(r.p.qty, 4),
       nf(r.p.cost / r.p.qty) + " " + esc(r.p.currency), r.price != null ? nf(r.price) + " " + esc(r.p.currency) : "—",
       '<span class="' + cls(r.dgain) + '">' + (r.q?.prev ? pct(r.price / r.q.prev - 1) : "—") + '</span>',
       r.val != null ? nf(r.val) + " " + esc(r.p.currency) : "—", '<span class="' + cls(r.gain) + '">' + nf(r.gain) + " " + esc(r.p.currency) + '</span>',
       '<span class="' + cls(r.gain) + '">' + pct(r.gain != null ? r.gain / r.p.cost : null) + '</span>', weightOf(r) != null ? nf(weightOf(r) * 100, 1) + "%" : "—",
-      r.val != null && r.fx != null ? eur(r.val * r.fx) : "—", esc(r.p.first)]), [2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      r.val != null && r.fx != null ? eur(r.val * r.fx) : "—", s.verdicts?.[r.p.symbol]?.stop ? nf(s.verdicts[r.p.symbol].stop) + " " + esc(r.p.currency) : "—",
+      esc(r.p.first)]), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  $("verdict-rules").innerHTML = s.verdicts?.rules ? '<details class="panel"><summary><b>Como se decide Manter, Reduzir ou Vender</b></summary><ul class="small">' +
+    s.verdicts.rules.map((x) => '<li>' + esc(x) + '</li>').join("") + '</ul><p class="muted small">Sinais técnicos para te ajudar a pensar, não ordens: a decisão é tua.</p></details>' : "";
+  renderMine();
   $("closed").innerHTML = table(["Ativo", "Comprado", "Vendido", "Resultado", "Resultado %", "Comissões", "De", "Até"],
     closed.map((p) => ['<b>' + esc(p.symbol) + '</b>', nf(p.bought) + " " + esc(p.currency), nf(p.sold) + " " + esc(p.currency),
       '<span class="' + cls(p.realized) + '">' + nf(p.realized) + " " + esc(p.currency) + '</span>', '<span class="' + cls(p.realized) + '">' + pct(p.bought ? p.realized / p.bought : null) + '</span>',
@@ -300,7 +470,8 @@ function render() {
   $("txs").innerHTML = '<h2>🧾 Todas as operações (' + s.tx.length + ')</h2>' + table(["Data", "Tipo", "Ativo", "Qtd.", "Preço", "Comissão", "Total", "Nota", ""],
     s.tx.slice().sort((a, b) => b.date.localeCompare(a.date) || b.seq - a.seq).map((t) => [esc(t.date), t.side === "buy" ? "🟢 compra" : "🔴 venda", '<b>' + esc(t.symbol) + '</b>',
       nf(t.qty, 4), nf(t.price) + " " + esc(t.currency), nf(t.fee), nf(t.qty * t.price + (t.side === "buy" ? t.fee : -t.fee)) + " " + esc(t.currency), esc(t.note || ""),
-      '<button class="del" data-id="' + esc(t.id) + '">apagar</button>']), [3, 4, 5, 6]);
+      '<button class="act" data-act="edit" data-id="' + esc(t.id) + '">✏️ editar</button> <button class="act" data-act="dup" data-id="' + esc(t.id) +
+      '">⧉ duplicar</button> <button class="del" data-id="' + esc(t.id) + '">apagar</button>']), [3, 4, 5, 6]);
 }
 
 async function load() {
@@ -340,15 +511,19 @@ $("form").addEventListener("submit", async (e) => {
   const f = new FormData(e.target), msg = $("form-msg");
   msg.textContent = "A guardar…"; msg.className = "small";
   const tx = Object.fromEntries(f.entries());
-  const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "add", tx }) });
+  const id = tx.edit_id; delete tx.edit_id;
+  const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(id ? { action: "edit", id, tx } : { action: "add", tx }) });
   const out = await r.json();
   if (!r.ok) { msg.textContent = "⚠️ " + out.error; msg.className = "small down"; return; }
   SNAP = out; render(); drawHistory();
-  msg.textContent = "✅ Guardado: " + (tx.side === "buy" ? "compra" : "venda") + " de " + tx.qty + " " + tx.symbol.toUpperCase(); msg.className = "small up";
-  e.target.reset(); document.querySelector('input[name=date]').value = new Date().toISOString().slice(0, 10);
+  msg.textContent = "✅ " + (id ? "Alterada" : "Guardada") + ": " + (tx.side === "buy" ? "compra" : "venda") + " de " + tx.qty + " " + tx.symbol.toUpperCase() + " a " + tx.date; msg.className = "small up";
+  resetForm();
 });
 
 $("txs").addEventListener("click", async (e) => {
+  const a = e.target.closest(".act");
+  if (a) { const t = SNAP.tx.find((x) => x.id === a.dataset.id); if (t) fillForm(t, a.dataset.act === "edit"); return; }
   const b = e.target.closest(".del"); if (!b || !confirm("Apagar esta operação?")) return;
   const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "delete", id: b.dataset.id }) });
   const out = await r.json();

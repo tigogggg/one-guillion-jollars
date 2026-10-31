@@ -175,6 +175,29 @@ OFL), where each summary arrives and when, and three buttons: open the portal
 link, only to them) and "Como funciona" (the help). Running it again replaces
 the message with a fresh one (new times, new link).
 
+**Proposals (`scripts/proposals.py`, portal tab "🧠 Propostas").** After the
+daily league, the orders the agents placed for the next open become proposals.
+Each agent's vote is weighted by its record (`WEIGHT_RULES`: exam year of the
+pre-training, its result in the current market zone, live excess return over
+the S&P 500, Monte Carlo risk of ruin; Indexador and meta-agents do not vote).
+Each buy gets a plan: maximum entry (close + 0.25 ATR), stop (2 ATR, at most
+10%, or the agents' own if tighter), target at 2.5R (or the agents' own), the
+net result at the target after costs and 28% tax, the supporting agents' trade
+record (win rate, average win and loss, typical holding time: `trade_stats`
+from the pre-training, or their live trades) and the safety score. The portal
+turns it into a number of shares for the viewer's capital and risk (stored in
+the browser). Every buy proposal is logged in `agents/proposals.json` and
+followed: executed if the price reaches the entry within 3 sessions, then
+stop, target or the close after 20 sessions; the scoreboard (hit rate, average
+R, by confidence) is on the portal.
+
+In `/carteira`, each open position gets a verdict (Manter / Reduzir / Vender,
+rules on the page: trend against the 50- and 200-day averages, a 15% loss,
+agents with 25%+ of the league's weight selling, bad news, concentration,
+overextension) and a suggested stop; the "Propostas para ti" tab sizes the day's
+proposals for the member's saved capital and risk and can fill the buy form.
+Operations can be edited or duplicated (same operation, another date).
+
 `/carteira` works only inside the server, so only its members get one: each
 member gets one private link (`/c/<token>`, KV `portfolio-user:<discord id>`
 and `portfolio:<token>`), `novo_link:True` replaces it.

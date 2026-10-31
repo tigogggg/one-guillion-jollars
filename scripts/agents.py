@@ -321,8 +321,10 @@ def sell(port: dict, mkt: Market, symbol: str, price: float, on: date, reason: s
     else:
         pos["qty"] -= qty
         pos["cost_eur"] -= cost
+    held = (on - date.fromisoformat(pos["entry_date"])).days if pos.get("entry_date") else None
     trade = {"date": on.isoformat(), "side": "venda", "symbol": symbol, "qty": round(qty, 6),
-             "price": round(fill, 4), "eur": round(proceeds, 2), "pnl_eur": round(proceeds - cost, 2), "reason": reason}
+             "price": round(fill, 4), "eur": round(proceeds, 2), "pnl_eur": round(proceeds - cost, 2), "reason": reason,
+             "ret": round(proceeds / cost - 1, 4) if cost else 0.0, "held": held}
     port["trades"] = (port["trades"] + [trade])[-TRADES_KEPT:]
     return trade
 
@@ -1528,6 +1530,11 @@ def main() -> int:
                 for sym in (state["agents"].get(cfg["id"]) or {}).get("positions", {}):
                     holders.setdefault(sym, []).append(f"{cfg['emoji']} {cfg['name']}")
             interactive.publish_section("market", opportunities.build(mkt, holders, earnings.next_earnings_many))
+            import proposals  # imports this module
+
+            props = proposals.build(config, state, mkt)
+            props["scoreboard"] = proposals.scoreboard(proposals.update_log(props, mkt))
+            interactive.publish_section("proposals", props)
             portal = interactive.portal_url()
             if portal:
                 buttons.append(("🏟️ Abrir o portal", portal))
