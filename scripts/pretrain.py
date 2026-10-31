@@ -820,7 +820,14 @@ def main() -> int:
     print(f"{len(markets)} dias de {markets[0].as_of} a {markets[-1].as_of}", file=sys.stderr)
     only = {s.strip() for s in args.estrategias.split(",") if s.strip()} or None
     if args.saida:
-        results = pretrain(markets, only)
+        try:
+            results = pretrain(markets, only)
+        except Exception as e:  # an annotation is readable on the run page even when the job log is not
+            import traceback
+
+            where = " ← ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(traceback.extract_tb(e.__traceback__)[-4:]))
+            print(f"::error title=Treino {args.estrategias}::{e!r} em {where}", flush=True)
+            raise
         Path(args.saida).parent.mkdir(parents=True, exist_ok=True)
         Path(args.saida).write_text(json.dumps(results, default=str))
         return 0

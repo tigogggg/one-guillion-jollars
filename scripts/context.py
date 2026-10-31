@@ -20,6 +20,7 @@ Any series that cannot be downloaded is simply missing, and the rules that need 
 from __future__ import annotations
 
 import io
+import os
 import sys
 
 import pandas as pd
@@ -27,6 +28,7 @@ import requests
 
 FRED = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 FRED_SERIES = {"epu": "USEPUINDXD", "hy": "BAMLH0A0HYM2"}
+EPU_DIRECT = "https://www.policyuncertainty.com/media/All_Daily_Policy_Data.csv"  # the index's own site, if FRED fails
 YAHOO_SERIES = {"vix": "^VIX", "tnx": "^TNX"}
 SESSIONS_3M = 63
 EPU_WINDOW = 3 * 252
@@ -41,7 +43,27 @@ def fred(series: str) -> pd.Series | None:
         out = pd.Series(pd.to_numeric(df[col], errors="coerce").to_numpy(), index=pd.to_datetime(df.iloc[:, 0]))
         return out.dropna()
     except (requests.RequestException, ValueError, IndexError, KeyError) as e:
-        print(f"WARN: FRED {series}: {e}", file=sys.stderr)
+        warn(f"FRED {series}: {e}")
+        return None
+
+
+def warn(message: str) -> None:
+    """stderr, and an annotation on the run page when in GitHub Actions (job logs are not always reachable)."""
+    print(f"WARN: {message}", file=sys.stderr)
+    if os.environ.get("GITHUB_ACTIONS"):
+        print(f"::warning title=Contexto::{message}", flush=True)
+
+
+def epu_direct() -> pd.Series | None:
+    """US daily policy uncertainty from policyuncertainty.com (columns day, month, year, daily_policy_index)."""
+    try:
+        resp = requests.get(EPU_DIRECT, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
+        idx = pd.to_datetime(dict(year=df["year"], month=df["month"], day=df["day"]), errors="coerce")
+        return pd.Series(pd.to_numeric(df["daily_policy_index"], errors="coerce").to_numpy(), index=idx).dropna()
+    except (requests.RequestException, ValueError, KeyError) as e:
+        warn(f"policyuncertainty.com: {e}")
         return None
 
 
@@ -58,6 +80,16 @@ def download(period: str, spy: pd.DataFrame | None, fx: pd.Series | None) -> pd.
         s = fred(series)
         if s is not None and len(s):
             raw[name] = s
+    if "epu" not in raw:
+        s = epu_direct()
+        if s is not None and len(s):
+            raw["epu"] = s
+    if "tnx" not in raw:
+        s = fred("DGS10")
+        if s is not None and len(s):
+            raw["tnx"] = s
+        else:
+            warn("juro a 10 anos indisponível (Yahoo ^TNX e FRED DGS10)")
     if spy is not None:
         raw["spy"] = spy["Close"]
     if fx is not None:
