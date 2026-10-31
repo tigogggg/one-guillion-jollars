@@ -41,8 +41,8 @@ def test_buy_fills_at_next_open_in_eur_with_fee():
     done = fill_pending(port, market(hist, DATES[2].date()))
     pos = port["positions"]["AAA"]
     assert done[0]["date"] == "2026-10-27"  # Tuesday's open, not Monday's close
-    assert pos["entry"] == pytest.approx(11 * 1.001)
-    assert pos["qty"] == pytest.approx(500 / (11 * 1.001 / 1.25))  # USD stock bought in EUR
+    assert pos["entry"] == pytest.approx(11 * 1.0025)  # 0.1% costs + 0.15% currency conversion
+    assert pos["qty"] == pytest.approx(500 / (11 * 1.0025 / 1.25))  # USD stock bought in EUR
     assert port["cash"] == 500
 
 
@@ -73,9 +73,9 @@ def test_points_for_profit_and_daily_change():
     port["positions"]["AAA.DE"] = {"qty": 10, "entry": 100, "entry_date": "2026-10-26", "cost_eur": 1000,
                                    "stop": None, "tp": None, "checked": "2026-10-26"}
     assert score_day(port, market(hist, DATES[0].date())) == 0  # first day: baseline only
-    assert score_day(port, market(hist, DATES[1].date())) == 10 + 10  # in profit, +1% capped at +10
+    assert score_day(port, market(hist, DATES[1].date())) == 10 + 2  # +1% vs a flat index (capped at 10) + profit bonus
     assert score_day(port, market(hist, DATES[1].date())) is None  # same day twice: no double points
-    assert port["points"] == 20
+    assert port["points"] == 12
 
 
 def test_training_mutates_losers_only():
@@ -172,7 +172,7 @@ def test_news_veto_blocks_buys_for_every_agent_but_cetico():
     state = {"agents": {}}
     mkt = market(hist, DATES[0].date())
     mkt.news = {"SXR8.DE": {"score": -6, "importance": 3, "items": []}}
-    _, _, avoided = run_day(config, state, mkt)
+    _, _, avoided, _ = run_day(config, state, mkt)
     assert not state["agents"]["i"]["pending"] and "notícias negativas" in avoided[0]
 
 
@@ -229,3 +229,64 @@ def test_maestro_copies_the_recent_winners():
     port = new_portfolio(1000, DATES[0].date())
     orders = agents.s_maestro({"id": "me"}, port, mkt, {"n": 8, "lideres": 3, "janela": 20, "cada": 5})
     assert [o["symbol"] for o in orders] == ["NVDA"] and "WIN" in orders[0]["reason"]
+
+
+def test_points_are_relative_to_the_sp500_and_penalise_drawdown():
+    hist = {"AAA.DE": frame([100] * 3, [100] * 3, [100] * 3, [100, 101, 80]),
+            "SXR8.DE": frame([100] * 3, [100] * 3, [100] * 3, [100, 103, 103])}
+    port = new_portfolio(1000, DATES[0].date())
+    port["cash"] = 0
+    port["positions"]["AAA.DE"] = {"qty": 10, "entry": 100, "entry_date": "2026-10-26", "cost_eur": 1000,
+                                   "stop": None, "tp": None, "checked": "2026-10-26"}
+    score_day(port, market(hist, DATES[0].date()))
+    assert score_day(port, market(hist, DATES[1].date())) == -10 + 2  # +1% while the index made +3% (-20, capped), in profit
+    # -20.8% in a day: excess capped at -10, no bonus, drawdown 20.8% -> penalty round(10.8% x 50) = 5
+    assert score_day(port, market(hist, DATES[2].date())) == -10 - 5
+
+
+def test_taxes_on_last_years_gains_only():
+    port = new_portfolio(1000, DATES[0].date())
+    port["realized"] = {"2025": 400.0}
+    port["history"] = [{"date": "2025-12-31", "equity": 1400, "deposits": 1000}]
+    port["cash"] = 1400
+    t = agents.pay_taxes(port, market({}, date(2026, 1, 2)))
+    assert t["eur"] == 112 and port["cash"] == 1288
+    port["history"].append({"date": "2026-01-02", "equity": 1288, "deposits": 1000})
+    assert agents.pay_taxes(port, market({}, date(2026, 1, 5))) is None  # paid once
+
+
+def test_risk_filter_sizes_by_volatility_caps_sectors_and_brakes():
+    mkt = market({}, DATES[2].date(), stocks={"CALM": stock(vol20=0.01), "WILD": stock(vol20=0.04),
+                                              "MORE": stock(vol20=0.01)})
+    mkt.closes = {"CALM": 100.0, "WILD": 100.0, "MORE": 100.0}
+    port = new_portfolio(1000, DATES[0].date())
+    orders = [agents.order_buy("CALM", 200, "x"), agents.order_buy("WILD", 300, "x"), agents.order_buy("MORE", 100, "x")]
+    kept, notes = agents.risk_filter(orders, port, mkt)
+    assert [(o["symbol"], o["eur"]) for o in kept] == [("CALM", 200), ("WILD", 150)]  # half size for 4% daily vol
+    assert "MORE" in notes[0] and "Energia" in notes[0]  # 200 + 150 + 100 > 40% of 1000 in one sector
+    port["peak"] = 1.5  # now 33% below its best level
+    kept, notes = agents.risk_filter(orders, port, mkt)
+    assert kept == [] and "travão" in notes[0]
+
+
+def test_bankrupt_agent_is_replaced_by_a_child_of_the_leader():
+    closes = [100, 40, 40, 40, 40]
+    hist = {"BUST.DE": frame(closes, closes, closes, closes), "SXR8.DE": frame([100] * 5, [100] * 5, [100] * 5, [100] * 5)}
+    config = {"agents": [
+        {"id": "loser", "name": "Perdedor", "emoji": "🎲", "strategy": "kamikaze", "capital": 1000, "params": {}},
+        {"id": "winner", "name": "Vencedor", "emoji": "🚀", "strategy": "foguetao", "capital": 1000,
+         "params": {"n": 5, "stop_pct": 0.1, "cada": 5}},
+    ]}
+    loser, winner = new_portfolio(1000, DATES[0].date()), new_portfolio(1000, DATES[0].date())
+    loser["cash"] = 0
+    loser["positions"]["BUST.DE"] = {"qty": 10, "entry": 100, "entry_date": "2026-10-26", "cost_eur": 1000,
+                                     "stop": None, "tp": None, "checked": "2026-10-27"}
+    loser["history"] = winner["history"] = [{"date": "2026-10-26", "equity": 1000, "deposits": 1000}]
+    winner["points"], winner["params"] = 50, {"n": 5, "stop_pct": 0.1, "cada": 5}
+    state = {"agents": {"loser": loser, "winner": winner}}
+    _, _, _, events = run_day(config, state, market(hist, DATES[1].date()))
+    assert not config["agents"][0]["active"] and loser["positions"] == {}
+    child = config["agents"][2]
+    assert child["strategy"] == "foguetao" and child["name"] == "Vencedor II" and child["id"] == "winner-2"
+    assert state["agents"]["winner-2"]["cash"] == 1000 and state["agents"]["winner-2"]["generation"] == 2
+    assert "faliu" in events[0] and "Vencedor II" in events[0]

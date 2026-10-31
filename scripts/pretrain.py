@@ -19,14 +19,18 @@ because past earnings dates are not available.
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import multiprocessing
 import os
 import random
+import statistics
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
+import requests
 
 import agents
 from agents import (
@@ -83,6 +87,7 @@ def features(df: pd.DataFrame) -> pd.DataFrame:
     f["low10_prev"] = low.shift(1).rolling(10).min()
     f["vol_ratio"] = vol / vol.shift(1).rolling(50).mean().clip(lower=1)
     f["range10"] = (high.rolling(10).max() - low.rolling(10).min()) / close
+    f["vol20"] = close.pct_change().rolling(20).std()
     gap = df["Open"] / close.shift(1) - 1
     event = (gap >= agents.GAP_MIN) & (vol / vol.shift(1).rolling(50).mean().clip(lower=1) >= agents.GAP_VOLUME)
     event &= pd.Series(range(len(df)), index=df.index) >= 51
@@ -95,8 +100,12 @@ def features(df: pd.DataFrame) -> pd.DataFrame:
     return f
 
 
-def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, dict] | None = None) -> dict[date, dict]:
-    """{day: {symbol: metrics}} with trend_score ranked within the group that day."""
+def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, dict] | None = None,
+              member=None) -> dict[date, dict]:
+    """{day: {symbol: metrics}} with trend_score ranked within the group that day.
+
+    `member(symbol, day)`, when given, keeps only the symbols in the index on that day.
+    """
     # Plain numpy rows per symbol: pandas row lookups are too slow for years x hundreds of symbols.
     tables = {}
     for s, df in hist.items():
@@ -110,7 +119,7 @@ def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, 
         today = {}
         for s, (rows, values, cols, valid) in tables.items():
             i = rows.get(d)
-            if i is None or not valid[i]:
+            if i is None or not valid[i] or (member and not member(s, d)):
                 continue
             m = dict(zip(cols, values[i].tolist()))
             m["sma200_rising"] = bool(m["sma200_rising"])
@@ -124,9 +133,43 @@ def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, 
     return out
 
 
+MEMBERSHIP_URL = "https://raw.githubusercontent.com/fja05680/sp500/master/sp500_ticker_start_end.csv"
+
+
+def load_membership() -> dict[str, list[tuple[date, date | None]]]:
+    """{ticker: [(start, end or None)]}: when each ticker was in the S&P 500 (public dataset by fja05680)."""
+    resp = requests.get(MEMBERSHIP_URL, timeout=60)
+    resp.raise_for_status()
+    out: dict[str, list[tuple[date, date | None]]] = {}
+    for row in csv.DictReader(io.StringIO(resp.text)):
+        ticker = row["ticker"].strip().replace(".", "-")
+        start = date.fromisoformat(row["start_date"])
+        end = date.fromisoformat(row["end_date"]) if row.get("end_date") else None
+        out.setdefault(ticker, []).append((start, end))
+    return out
+
+
 def build_markets(years: int = YEARS) -> list[Market]:
+    """Daily markets for the backtest, with the S&P 500 as it was on each day (survivorship bias reduced).
+
+    Companies that left the index are included while they were members, when Yahoo still has their prices
+    (it often has none for acquired or bankrupt ones, so some bias remains).
+    """
     constituents = load_constituents()
     sector_of = {c["symbol"]: c["sector"] for c in constituents}
+    try:
+        membership = load_membership()
+    except requests.RequestException as e:
+        print(f"WARN: sem composição histórica ({e}); uso a lista atual", file=sys.stderr)
+        membership = {}
+    since = date.today() - timedelta(days=int((years + 1) * 365.25))
+    for ticker, spans in membership.items():
+        if any(end is None or end >= since for _, end in spans):
+            sector_of.setdefault(ticker, "Unknown")
+
+    def member(symbol: str, day: date) -> bool:
+        spans = membership.get(symbol)
+        return True if not spans else any(start <= day and (end is None or day <= end) for start, end in spans)
     period = "2y" if years <= 1 else "10y"  # Yahoo periods: enough for the backtest plus the 200-day warm-up
     stock_hist = download_history(list(sector_of) + ["SPY"], period=period)
     etf_hist = download_history([t for t, _ in UCITS_ETFS], period=period)
@@ -135,7 +178,10 @@ def build_markets(years: int = YEARS) -> list[Market]:
     sessions = [d.date() for d in spy.index]
     days = sessions[WARMUP:][-years * SESSIONS_PER_YEAR:]
     names = dict(UCITS_ETFS)
-    stocks = snapshots(stock_hist, days, {s: {"sector": sector_of[s]} for s in stock_hist})
+    stocks = snapshots(stock_hist, days, {s: {"sector": sector_of[s]} for s in stock_hist},
+                       member if membership else None)
+    left = [s for s in stock_hist if s not in {c["symbol"] for c in constituents}]
+    print(f"{len(stock_hist)} ações com preços, {len(left)} já saíram do índice", file=sys.stderr)
     etfs = snapshots(etf_hist, days, {s: {"name": names.get(s, s)} for s in etf_hist})
     hist = {**stock_hist, **etf_hist}
     closes = pd.DataFrame({s: df["Close"] for s, df in hist.items()}).sort_index().ffill()
@@ -157,26 +203,32 @@ def build_markets(years: int = YEARS) -> list[Market]:
 
 
 def simulate(strategy: str, params: dict, markets: list[Market], capital: float = 1000.0) -> dict:
+    """Replay one strategy with the live rules (agents.decide), taxes and bankruptcy, from `capital` euros."""
     cfg = {"id": "bt", "name": strategy, "strategy": strategy, "params": params}
     port = new_portfolio(capital, markets[0].as_of)
     port["params"] = dict(params)
-    peak, max_dd, trades = capital, 0.0, 0
+    trades, bankrupt_on = 0, None
     for mkt in markets:
         trades += len(fill_pending(port, mkt)) + len(check_exits(port, mkt))
+        agents.pay_taxes(port, mkt)
         score_day(port, mkt)
-        eq = equity(port, mkt)
-        peak = max(peak, eq)
-        max_dd = max(max_dd, 1 - eq / peak)
-        if not port["pending"]:
-            orders = STRATEGIES[strategy][0](cfg, port, mkt, port["params"])
-            port["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders
-                               if o["side"] == "sell" or o["eur"] >= agents.MIN_ORDER_EUR]
+        if bankrupt_on is None and strategy != "indexador" and agents.is_bankrupt(port, mkt):
+            trades += len(agents.liquidate(port, mkt, "falência"))
+            bankrupt_on = mkt.as_of.isoformat()
+        if bankrupt_on is None and not port["pending"]:
+            orders, _ = agents.decide(cfg, port, mkt, port["params"], live=False)
+            port["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders]
     final = equity(port, markets[-1])
+    equities = pd.Series([h["equity"] for h in port["history"]], dtype=float)
+    daily = equities.pct_change().dropna()
+    sharpe = float(daily.mean() / daily.std() * SESSIONS_PER_YEAR ** 0.5) if len(daily) > 20 and daily.std() > 0 else 0.0
     return {
         "points": port["points"],
         "return": final / capital - 1,
-        "max_drawdown": max_dd,
+        "max_drawdown": port.get("max_dd", 0.0),
+        "sharpe": round(sharpe, 2),
         "trades": trades,
+        "bankrupt": bankrupt_on,
         "curve": [(h["date"], (h["equity"] / capital - 1) * 100) for h in port["history"]],
     }
 
@@ -199,26 +251,46 @@ def variants(strategy: str, n: int) -> list[dict]:
 _MARKETS: list[Market] = []  # shared with the worker processes (fork), not pickled
 
 
+def yearly_blocks(markets: list[Market]) -> list[list[Market]]:
+    """The training period cut into years; a short remainder joins the last year."""
+    blocks = [markets[i:i + SESSIONS_PER_YEAR] for i in range(0, len(markets), SESSIONS_PER_YEAR)]
+    if len(blocks) > 1 and len(blocks[-1]) < SESSIONS_PER_YEAR // 2:
+        tail = blocks.pop()
+        blocks[-1] = blocks[-1] + tail
+    return blocks
+
+
 def train_strategy(strategy: str) -> tuple[str, dict]:
-    """Search parameters on the training years, then check the best set on the exam year."""
+    """Pick parameters that are consistently good year by year in training, then check them on the exam year.
+
+    Each candidate runs every training year separately (fresh 1000 EUR each). It is eligible only if it beats the
+    original parameters in at least 3 of every 4 years; among the eligible, the best median year wins. It is
+    adopted only if it also scores at least as well as the original parameters on the exam year.
+    """
     markets = _MARKETS
     split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
-    train, valid = markets[:split], markets[split:]
+    blocks, valid = yearly_blocks(markets[:split]), markets[split:]
     candidates = variants(strategy, VARIANTS)
-    scored = [(simulate(strategy, p, train), p) for p in candidates]
-    best_train, best = max(scored, key=lambda x: x[0]["points"])
-    default_train = scored[0][0]
+    yearly = [[simulate(strategy, p, b)["points"] for b in blocks] for p in candidates]
+    base = yearly[0]
+    need = -(-3 * len(blocks) // 4)  # ceil(0.75 x years)
+
+    def eligible(i: int) -> bool:
+        return i == 0 or sum(a > b for a, b in zip(yearly[i], base)) >= need
+
+    best_i = max((i for i in range(len(candidates)) if eligible(i)), key=lambda i: statistics.median(yearly[i]))
+    best = candidates[best_i]
     best_valid = simulate(strategy, best, valid)
-    default_valid = best_valid if best == candidates[0] else simulate(strategy, candidates[0], valid)
-    adopt = best != candidates[0] and best_valid["points"] >= default_valid["points"]
+    default_valid = best_valid if best_i == 0 else simulate(strategy, candidates[0], valid)
+    adopt = best_i != 0 and best_valid["points"] >= default_valid["points"]
     chosen = best if adopt else candidates[0]
     full = simulate(strategy, chosen, markets)
-    print(f"{strategy}: treino {best_train['points']} vs {default_train['points']} pts; "
-          f"validação {best_valid['points']} vs {default_valid['points']} → {'adotado' if adopt else 'mantém'}",
-          file=sys.stderr, flush=True)
+    print(f"{strategy}: anos de treino {yearly[best_i]} vs {base}; exame {best_valid['points']} vs "
+          f"{default_valid['points']} → {'adotado' if adopt else 'mantém'}", file=sys.stderr, flush=True)
     return strategy, {
         "default": candidates[0], "best": best, "adopted": adopt, "chosen": chosen,
-        "train": {"default": strip(default_train), "best": strip(best_train)},
+        "train": {"default": {"points": sum(base), "years": base},
+                  "best": {"points": sum(yearly[best_i]), "years": yearly[best_i]}},
         "valid": {"default": strip(default_valid), "best": strip(best_valid)},
         "year": strip(full), "curve": full["curve"],
     }
@@ -299,19 +371,21 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
         verdict = "✅ parâmetros novos" if r["adopted"] else "↩️ mantém os originais"
         lines.append(
             f"{cfg['emoji']} **{cfg['name']}** · período* {pct(y['return'])} · queda máx. {pct(-y['max_drawdown'])}"
+            f" · Sharpe {y.get('sharpe', 0):.1f}" + (f" · 💀 faliu {y['bankrupt']}" if y.get("bankrupt") else "") +
             f" · exame: {v['best']['points']} vs {v['default']['points']} pts · {verdict}"
         )
     fields = [("🧪 Como foi feito",
                f"Treino {results['train'][0]} a {results['train'][1]} · exame {results['valid'][0]} a {results['valid'][1]}.\n"
-               f"~{VARIANTS} variações por estratégia, avaliadas pelos pontos da liga. Ordens à abertura do dia seguinte, "
-               "0,1% de custos, sem ver o futuro.\n"
+               f"~{VARIANTS} variações por estratégia; só passam as que batem os parâmetros originais em 3 de cada 4 anos "
+               "de treino, e depois no exame. Pontos da liga (face ao S&P 500, com penalização das quedas). Composição "
+               "histórica do S&P 500, ordens à abertura seguinte, custos, câmbio e 28% de imposto, sem ver o futuro.\n"
                "*O período inclui os anos em que os parâmetros foram escolhidos, por isso é otimista; "
                "o que conta é o exame (pontos com os parâmetros escolhidos vs os originais).")]
     if applied:
         fields.append(("⚙️ Parâmetros aplicados aos agentes", "\n".join(applied)[:1024]))
     fields.append(("⚠️ Limites",
-                   "Lista atual do S&P 500 (empresas que saíram do índice não entram: resultados otimistas). "
-                   "Sem regra de resultados no passado. Um ano é um só tipo de mercado."))
+                   "Empresas que saíram do índice só entram quando o Yahoo ainda tem os preços (muitas falidas ou "
+                   "compradas não têm), por isso ainda há algum otimismo. Sem regra de resultados nem notícias no passado."))
     if bench:
         fields.append(("🐢 Referência", f"S&P 500 (Indexador) no período: {pct(bench['return'])}, queda máx. {pct(-bench['max_drawdown'])}"))
     series = {by_strategy.get(s, {"name": s})["name"]: r["curve"] for s, r in results["strategies"].items() if "curve" in r}

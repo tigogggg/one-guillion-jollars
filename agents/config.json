@@ -154,9 +154,10 @@
         "n": 2,
         "stop_pct": 0.2,
         "cada": 5,
-        "ignora_resultados": true
+        "ignora_resultados": true,
+        "ignora_risco": true
       },
-      "description": "Muito agressivo: tudo nas 2 ações com maior subida a 3 meses, ignora o estado do mercado e os resultados, stop de 20%."
+      "description": "Muito agressivo: tudo nas 2 ações com maior subida a 3 meses, ignora o estado do mercado, os resultados e as regras de risco, stop de 20%."
     },
     {
       "id": "catalisador",

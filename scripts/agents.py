@@ -56,8 +56,21 @@ REPO_AGENTS = WATCHLIST_DIR.parents[1] / "agents"
 CONFIG_PATH = REPO_AGENTS / "config.json"
 STATE_PATH = REPO_AGENTS / "state.json"
 
-FEE = 0.001
+FEE = 0.001  # commission and slippage, per side
+FX_FEE = 0.0015  # EUR/USD conversion at a typical EU broker, per side, for US stocks
+TAX_RATE = 0.28  # Portuguese tax on a year's net realised gains, paid on the first run of the next year
 MIN_ORDER_EUR = 20.0
+# Reward: 1 point per 0.1% beaten (or lost) against the S&P 500 that day, a small bonus for being in profit,
+# and a daily penalty while the agent is more than DD_FREE below its best level.
+BENCHMARK = "SXR8.DE"
+PROFIT_BONUS = 2
+DD_FREE = 0.10
+DD_PENALTY = 50  # points per 100% of drawdown beyond DD_FREE
+BANKRUPTCY = 0.5  # an agent that loses half of the money it was given is replaced by a child of the leader
+# Risk management for every agent without ignora_risco:
+TARGET_VOL = 0.02  # daily volatility a full-size position is meant for; more volatile stocks get smaller
+SECTOR_CAP = 0.40  # at most this share of equity in one sector
+DD_BRAKE = 0.20  # no new buys while the agent is this far below its best level
 EXPOSURE = {"Alta": 1.0, "Neutra": 0.7, "Cautelosa": 0.4, "Queda": 0.1}
 ZONE_ICON = {"Alta": "🟢", "Neutra": "🟡", "Cautelosa": "🟠", "Queda": "🔴"}
 MUTATION = 0.2
@@ -146,6 +159,7 @@ def extra_metrics(df: pd.DataFrame) -> dict:
         "low10_prev": float(before["Low"].iloc[-10:].min()),
         "vol_ratio": float(last["Volume"]) / max(float(before["Volume"].iloc[-50:].mean()), 1.0),
         "range10": (float(df["High"].iloc[-10:].max()) - float(df["Low"].iloc[-10:].min())) / close,
+        "vol20": float(df["Close"].pct_change().iloc[-20:].std()),
         **last_gap(df),
     }
 
@@ -276,13 +290,19 @@ def equity(port: dict, mkt: Market) -> float:
     return port["cash"] + sum(position_value(mkt, s, p) for s, p in port["positions"].items())
 
 
+def fees(symbol: str) -> float:
+    return FEE + (0.0 if is_eur(symbol) else FX_FEE)
+
+
 def sell(port: dict, mkt: Market, symbol: str, price: float, on: date, reason: str, fraction: float = 1.0) -> dict:
     pos = port["positions"][symbol]
     qty = pos["qty"] * fraction
-    fill = price * (1 - FEE)
+    fill = price * (1 - fees(symbol))
     proceeds = qty * to_eur(mkt, symbol, fill, on)
     cost = pos["cost_eur"] * fraction
     port["cash"] += proceeds
+    realized = port.setdefault("realized", {})
+    realized[str(on.year)] = round(realized.get(str(on.year), 0.0) + proceeds - cost, 2)
     if fraction >= 0.999:
         del port["positions"][symbol]
     else:
@@ -299,7 +319,7 @@ def buy(port: dict, mkt: Market, order: dict, price: float, on: date) -> dict | 
     if eur < MIN_ORDER_EUR:
         return None
     symbol = order["symbol"]
-    fill = price * (1 + FEE)
+    fill = price * (1 + fees(symbol))
     qty = eur / to_eur(mkt, symbol, fill, on)
     port["cash"] -= eur
     pos = port["positions"].get(symbol)
@@ -364,6 +384,40 @@ def check_exits(port: dict, mkt: Market) -> list[dict]:
     return done
 
 
+def pay_taxes(port: dict, mkt: Market) -> dict | None:
+    """On the first run of a year, pay TAX_RATE on last year's net realised gains (losses pay nothing)."""
+    hist = port["history"]
+    if not hist or int(hist[-1]["date"][:4]) >= mkt.as_of.year:
+        return None
+    year = hist[-1]["date"][:4]
+    gain = port.get("realized", {}).get(year, 0.0)
+    if gain <= 0 or year in port.setdefault("taxed", []):
+        return None
+    tax = round(gain * TAX_RATE, 2)
+    port["cash"] -= tax
+    port["taxed"].append(year)
+    trade = {"date": mkt.as_of.isoformat(), "side": "imposto", "symbol": "-", "qty": 0, "price": 0,
+             "eur": tax, "pnl_eur": -tax, "reason": f"{TAX_RATE:.0%} sobre {gain:.0f} € de mais-valias de {year}"}
+    port["trades"] = (port["trades"] + [trade])[-TRADES_KEPT:]
+    return trade
+
+
+def benchmark_return(mkt: Market, since: date, until: date) -> float:
+    df = mkt.hist.get(BENCHMARK)
+    if df is None:
+        return 0.0
+    close = df["Close"]
+    a = close.asof(pd.Timestamp(since) + pd.Timedelta(hours=23))
+    b = close.asof(pd.Timestamp(until) + pd.Timedelta(hours=23))
+    return 0.0 if pd.isna(a) or pd.isna(b) or not a else float(b / a - 1)
+
+
+def drawdown(port: dict, eq: float) -> float:
+    """How far the agent is below its best level (equity per euro given)."""
+    ratio = eq / port["deposits"] if port["deposits"] else 1.0
+    return max(0.0, 1 - ratio / port.get("peak", 1.0))
+
+
 def score_day(port: dict, mkt: Market) -> int | None:
     """Append today's equity and award points; None if already done for this date."""
     eq = equity(port, mkt)
@@ -371,11 +425,18 @@ def score_day(port: dict, mkt: Market) -> int | None:
     if hist and hist[-1]["date"] >= mkt.as_of.isoformat():
         hist[-1].update(equity=round(eq, 2), deposits=port["deposits"])
         return None
+    ratio = eq / port["deposits"] if port["deposits"] else 1.0
+    port["peak"] = max(port.get("peak", 1.0), ratio)
+    dd = drawdown(port, eq)
+    port["max_dd"] = round(max(port.get("max_dd", 0.0), dd), 4)
     pts = 0
     if hist:
         prev = hist[-1]
         day = (eq - (port["deposits"] - prev["deposits"])) / prev["equity"] - 1 if prev["equity"] else 0.0
-        pts = (10 if eq > port["deposits"] else 0) + max(-10, min(10, round(day * 1000)))
+        excess = day - benchmark_return(mkt, date.fromisoformat(prev["date"]), mkt.as_of)
+        pts = (max(-10, min(10, round(excess * 1000)))
+               + (PROFIT_BONUS if eq > port["deposits"] else 0)
+               - round(max(0.0, dd - DD_FREE) * DD_PENALTY))
         port["points"] += pts
         port["points_log"] = (port["points_log"] + [{"date": mkt.as_of.isoformat(), "pts": pts}])[-POINTS_LOG_KEPT:]
     hist.append({"date": mkt.as_of.isoformat(), "equity": round(eq, 2), "deposits": port["deposits"]})
@@ -388,6 +449,19 @@ def month_return(port: dict, month: str) -> float | None:
         return None
     first, last = rows[0], rows[-1]
     return (last["equity"] - first["equity"] - (last["deposits"] - first["deposits"])) / first["equity"]
+
+
+def mutate(params: dict, rng: random.Random) -> list[str]:
+    """Change each tunable parameter by up to +/-MUTATION within its bounds, in place; describe the changes."""
+    changes = []
+    for k in [k for k in params if k in PARAM_BOUNDS]:
+        lo, hi, kind = PARAM_BOUNDS[k]
+        new = min(hi, max(lo, params[k] * rng.uniform(1 - MUTATION, 1 + MUTATION)))
+        new = int(round(new)) if kind is int else round(new, 4)
+        if new != params[k]:
+            changes.append(f"{k} {params[k]}→{new}")
+            params[k] = new
+    return changes
 
 
 def train(cfg: dict, port: dict, mkt: Market) -> str | None:
@@ -404,15 +478,7 @@ def train(cfg: dict, port: dict, mkt: Market) -> str | None:
     tunable = [k for k in params if k in PARAM_BOUNDS]
     if ret is None or ret >= 0 or not tunable or cfg.get("strategy") not in LIVE_ONLY:
         return None
-    rng = random.Random(f"{cfg['id']}-{mkt.as_of}")
-    changes = []
-    for k in tunable:
-        lo, hi, kind = PARAM_BOUNDS[k]
-        new = min(hi, max(lo, params[k] * rng.uniform(1 - MUTATION, 1 + MUTATION)))
-        new = int(round(new)) if kind is int else round(new, 4)
-        if new != params[k]:
-            changes.append(f"{k} {params[k]}→{new}")
-            params[k] = new
+    changes = mutate(params, random.Random(f"{cfg['id']}-{mkt.as_of}"))
     port["generation"] += 1
     note = f"{last_month}: {ret * 100:+.1f}% → geração {port['generation']}: " + (", ".join(changes) or "sem alterações")
     port["evolution"] = (port["evolution"] + [{"date": mkt.as_of.isoformat(), "note": note}])[-24:]
@@ -566,7 +632,8 @@ def s_campeao(cfg, port, mkt, p):
     by_sector: dict[str, list[str]] = {}
     for s, m in mkt.stocks.items():
         by_sector.setdefault(m["sector"], []).append(s)
-    strength = {sec: sum(mkt.stocks[s]["stage2"] for s in syms) / len(syms) for sec, syms in by_sector.items() if len(syms) >= 5}
+    strength = {sec: sum(mkt.stocks[s]["stage2"] for s in syms) / len(syms)
+                for sec, syms in by_sector.items() if len(syms) >= 5 and sec != "Unknown"}
     top = sorted(strength, key=strength.get, reverse=True)[: p["setores"]]
     targets = []
     for sec in top:
@@ -762,7 +829,7 @@ STRATEGIES = {
     "cetico": (s_cetico, "Más notícias que o mercado ignorou", {"n": 4, "limiar": 3, "stop_pct": 0.06, "alvo_pct": 0.08, "max_dias": 10}),
     "conselho": (s_conselho, "Compra o que vários agentes apoiam", {"n": 6, "min_votos": 2, "stop_pct": 0.10}),
     "maestro": (s_maestro, "Copia os agentes com melhores resultados recentes", {"n": 8, "lideres": 3, "janela": 20, "cada": 5}),
-    "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5, "ignora_resultados": True}),
+    "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5, "ignora_resultados": True, "ignora_risco": True}),
 }
 
 
@@ -830,35 +897,127 @@ def skip_bad_news(orders: list[dict], mkt: Market) -> tuple[list[dict], list[str
     return kept, skipped
 
 
-def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, dict]], list[str], list[str]]:
-    moves, training, avoided = [], [], []
+def risk_filter(orders: list[dict], port: dict, mkt: Market) -> tuple[list[dict], list[str]]:
+    """Volatility sizing, sector cap and drawdown brake for buy orders; returns (orders, skipped notes)."""
+    eq = equity(port, mkt)
+    dd = drawdown(port, eq)
+    sector_value: dict[str, float] = {}
+    for s, pos in port["positions"].items():
+        m = mkt.stocks.get(s)
+        if m:
+            sector_value[m["sector"]] = sector_value.get(m["sector"], 0.0) + position_value(mkt, s, pos)
+    kept, notes = [], []
+    for o in orders:
+        if o["side"] != "buy":
+            kept.append(o)
+            continue
+        if dd >= DD_BRAKE:
+            notes.append(f"{o['symbol']} (travão: carteira {-dd * 100:.0f}% abaixo do máximo)")
+            continue
+        m = mkt.stocks.get(o["symbol"])
+        if m:
+            if m.get("vol20"):
+                o = {**o, "eur": round(o["eur"] * max(0.5, min(1.0, TARGET_VOL / m["vol20"])), 2)}
+            if sector_value.get(m["sector"], 0.0) + o["eur"] > SECTOR_CAP * eq and m["sector"] != "Unknown":
+                notes.append(f"{o['symbol']} (setor {SECTORS_PT.get(m['sector'], m['sector'])} já com {SECTOR_CAP:.0%})")
+                continue
+            sector_value[m["sector"]] = sector_value.get(m["sector"], 0.0) + o["eur"]
+        kept.append(o)
+    return kept, notes
+
+
+def decide(cfg: dict, port: dict, mkt: Market, params: dict, live: bool = True) -> tuple[list[dict], list[str]]:
+    """The strategy's orders after the shared rules: earnings (live only), bad news, risk. Same live and in backtests."""
+    orders = STRATEGIES[cfg["strategy"]][0](cfg, port, mkt, params)
+    notes = []
+    if live and not params.get("ignora_resultados"):
+        orders, skipped = skip_earnings(orders, mkt)
+        notes += [f"{s} (resultados {earnings.label(mkt.earnings[s])})" for s in skipped]
+    if not params.get("ignora_noticias") and cfg["strategy"] != "cetico":
+        orders, skipped = skip_bad_news(orders, mkt)
+        notes += [f"{s} (notícias negativas)" for s in skipped]
+    if not params.get("ignora_risco"):
+        orders, skipped = risk_filter(orders, port, mkt)
+        notes += skipped
+    return [o for o in orders if o["side"] == "sell" or o["eur"] >= MIN_ORDER_EUR], notes
+
+
+def is_bankrupt(port: dict, mkt: Market) -> bool:
+    return bool(port["history"]) and equity(port, mkt) < port["deposits"] * (1 - BANKRUPTCY)
+
+
+def liquidate(port: dict, mkt: Market, reason: str) -> list[dict]:
+    """Sell everything at the latest close and cancel pending orders."""
+    port["pending"] = []
+    done = []
+    for s in list(port["positions"]):
+        price = last_close(mkt, s)
+        if price:
+            done.append(sell(port, mkt, s, price, mkt.as_of, reason))
+    return done
+
+
+ROMAN = ["", "", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
+
+
+def spawn_child(config: dict, state: dict, leader: dict, replaced: dict, mkt: Market) -> dict:
+    """A new agent with the leader's strategy and mutated parameters, in place of a bankrupt one."""
+    base_id, base_name = leader.get("lineage", leader["id"]), leader.get("lineage_name", leader["name"])
+    n = 1 + sum(1 for a in config["agents"] if a.get("lineage", a["id"]) == base_id)
+    params = dict(state["agents"][leader["id"]].get("params", leader["params"]))
+    changes = mutate(params, random.Random(f"{base_id}-{n}-{mkt.as_of}"))
+    child = {
+        "id": f"{base_id}-{n}", "name": f"{base_name} {ROMAN[n] if n < len(ROMAN) else n}", "emoji": leader["emoji"],
+        "strategy": leader["strategy"], "capital": 1000, "params": params, "lineage": base_id, "lineage_name": base_name,
+        "description": f"Filho de {leader['name']}, nasceu a {mkt.as_of.isoformat()} no lugar de {replaced['name']} "
+                       f"(falência). Mutação: {', '.join(changes) or 'nenhuma'}.",
+    }
+    config["agents"].append(child)
+    port = new_portfolio(1000, mkt.as_of)
+    port["params"] = params
+    port["generation"] = state["agents"][leader["id"]]["generation"] + 1
+    state["agents"][child["id"]] = port
+    return child
+
+
+def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, dict]], list[str], list[str], list[str]]:
+    """One day for every active agent; returns (moves, training notes, avoided buys, bankruptcies and births)."""
+    moves, training, avoided, events = [], [], [], []
     agents_today = sorted(active_agents(config), key=lambda c: c["strategy"] in META)  # meta-agents decide last
     for cfg in agents_today:
         port = state["agents"].setdefault(cfg["id"], new_portfolio(cfg["capital"], mkt.as_of))
         mkt.league[cfg["id"]] = (cfg, port)
+    bankrupt = []
     for cfg in agents_today:
         port = state["agents"][cfg["id"]]
         params = port.setdefault("params", dict(cfg["params"]))
-        for t in fill_pending(port, mkt) + check_exits(port, mkt):
+        for t in fill_pending(port, mkt) + check_exits(port, mkt) + [x for x in [pay_taxes(port, mkt)] if x]:
             moves.append((cfg, t))
         score_day(port, mkt)
+        if cfg["strategy"] != "indexador" and is_bankrupt(port, mkt):
+            moves += [(cfg, t) for t in liquidate(port, mkt, "falência")]
+            cfg["active"], cfg["retired"] = False, mkt.as_of.isoformat()
+            mkt.league.pop(cfg["id"], None)
+            bankrupt.append(cfg)
+            continue
         note = train(cfg, port, mkt)
         if note:
             training.append(f"{cfg['emoji']} **{cfg['name']}** {note}")
         if port["last_decision"] != mkt.as_of.isoformat() and not port["pending"]:
-            orders = STRATEGIES[cfg["strategy"]][0](cfg, port, mkt, params)
-            if not params.get("ignora_resultados"):
-                orders, skipped = skip_earnings(orders, mkt)
-                if skipped:
-                    avoided.append(f"{cfg['emoji']} {cfg['name']}: " + ", ".join(
-                        f"{s} (resultados {earnings.label(mkt.earnings[s])})" for s in skipped))
-            if not params.get("ignora_noticias") and cfg["strategy"] != "cetico":
-                orders, skipped = skip_bad_news(orders, mkt)
-                if skipped:
-                    avoided.append(f"{cfg['emoji']} {cfg['name']}: " + ", ".join(f"{s} (notícias negativas)" for s in skipped))
-            port["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders if o["side"] == "sell" or o["eur"] >= MIN_ORDER_EUR]
+            orders, notes = decide(cfg, port, mkt, params)
+            if notes:
+                avoided.append(f"{cfg['emoji']} {cfg['name']}: " + ", ".join(notes))
+            port["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders]
             port["last_decision"] = mkt.as_of.isoformat()
-    return moves, training, avoided
+    for dead in bankrupt:
+        alive = [(c, state["agents"][c["id"]]) for c in active_agents(config) if c["strategy"] not in META | {"indexador"}]
+        if not alive:
+            continue
+        leader, _ = max(alive, key=lambda cp: cp[1]["points"])
+        child = spawn_child(config, state, leader, dead, mkt)
+        events.append(f"💀 {dead['emoji']} **{dead['name']}** faliu (perdeu mais de {BANKRUPTCY:.0%}) · "
+                      f"🧬 nasceu {child['emoji']} **{child['name']}**, filho do líder {leader['name']}")
+    return moves, training, avoided, events
 
 
 def eur(x: float) -> str:
@@ -876,7 +1035,7 @@ def day_change(port: dict) -> float:
     return (h[-1]["equity"] - (h[-1]["deposits"] - h[-2]["deposits"])) / h[-2]["equity"] - 1
 
 
-def league(config: dict, state: dict, mkt: Market, title: str, moves=(), training=(), avoided=()) -> tuple[list[dict], dict]:
+def league(config: dict, state: dict, mkt: Market, title: str, moves=(), training=(), avoided=(), events=()) -> tuple[list[dict], dict]:
     rows = []
     for cfg in active_agents(config):
         port = state["agents"].get(cfg["id"])
@@ -896,11 +1055,15 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
     if moves:
         move_lines = []
         for cfg, t in list(moves)[:15]:
-            if t["side"] == "compra":
+            if t["side"] == "imposto":
+                move_lines.append(f"🧾 {cfg['emoji']} {cfg['name']} pagou {eur(t['eur'])} de imposto ({t['reason']})")
+            elif t["side"] == "compra":
                 move_lines.append(f"🟢 {cfg['emoji']} {cfg['name']} comprou **{t['symbol']}** · {eur(t['eur'])} ({t['reason']})")
             else:
                 move_lines.append(f"🔴 {cfg['emoji']} {cfg['name']} vendeu **{t['symbol']}** · {t['pnl_eur']:+.0f} € ({t['reason']})")
         fields.append(("📥 Movimentos", "\n".join(move_lines)))
+    if events:
+        fields.append(("💀🧬 Falências e nascimentos", "\n".join(events)[:1024]))
     if avoided:
         fields.append(("🚫 Compras evitadas (resultados próximos ou notícias negativas)", "\n".join(avoided)[:1024]))
     if training:
@@ -926,8 +1089,10 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
         color=GREEN if leader >= 0 else RED,
         fields=fields,
         image="agentes.png",
-        footer="Simulação com dinheiro fictício e preços reais: ordens à abertura seguinte, 0,1% de custos. "
-        "Pontos: +10 por dia em lucro, ±1 por cada 0,1% do dia. Não é recomendação de compra.",
+        footer="Simulação com dinheiro fictício e preços reais: ordens à abertura seguinte, 0,1% de custos (+0,15% câmbio "
+        "nas ações dos EUA), 28% de imposto sobre as mais-valias de cada ano. Pontos: ±1 por cada 0,1% acima/abaixo do "
+        "S&P 500 no dia, +2 por dia em lucro, penalização acima de 10% de queda desde o máximo. Falência a -50%: o lugar "
+        "passa para um filho do líder. Não é recomendação de compra.",
     )
     return [card], files
 
@@ -1065,10 +1230,10 @@ def main() -> int:
     try:
         if a.mode == "daily":
             mkt = load_market()
-            moves, training, avoided = run_day(config, state, mkt)
-            save(None, state)
+            moves, training, avoided, events = run_day(config, state, mkt)
+            save(config, state)  # bankruptcies retire agents and add their replacements
             embeds, files = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}",
-                                   moves, training, avoided)
+                                   moves, training, avoided, events)
             ended = month_changed(state)
             if ended:
                 follow_up = monthly_report(config, state, ended)

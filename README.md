@@ -234,3 +234,21 @@ them). Without that file everything posts to the webhook channel as before.
   without bad news. Maestro: copies the combined portfolio of the 3 agents with
   the best results over the last 20 sessions. Meta-agents decide after the
   others.
+
+## Agent rules v3
+
+- Reward: each day ±1 point per 0.1% the agent beat (or trailed) the S&P 500
+  (SXR8), capped at ±10; +2 for a day in profit; minus 50 points per 100% of
+  drawdown beyond 10% from the agent's best level.
+- Bankruptcy: an agent below 50% of the money it was given is liquidated and
+  retired; a child of the current leader (same strategy, mutated parameters,
+  1000 EUR, next generation) takes its place.
+- Risk (all agents without `ignora_risco`): buy size scaled down for stocks
+  with daily volatility above 2% (to half at 4%), at most 40% of equity per
+  sector, no new buys while 20% or more below the best level.
+- Costs: 0.1% per side, plus 0.15% currency conversion for US stocks; 28% tax
+  on each year's net realised gains, paid on the first run of the next year.
+- Pre-training replays the S&P 500 as it was on each day (fja05680/sp500
+  membership; delisted stocks only when Yahoo still has prices), uses the same
+  `agents.decide()` as the live league, and accepts parameters only if they
+  beat the originals in 3 of every 4 training years and then on the exam year.

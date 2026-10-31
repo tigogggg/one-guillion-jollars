@@ -417,7 +417,8 @@
     "n": 5,
     "stop_pct": 0.0743,
     "cada": 9,
-    "ignora_resultados": true
+    "ignora_resultados": true,
+    "ignora_risco": true
    }
   },
   "deriva": {
