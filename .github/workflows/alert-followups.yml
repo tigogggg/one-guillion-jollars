@@ -1,0 +1,41 @@
+name: Acompanhamento dos alertas (stand-by)
+
+# STAND-BY: not started by the Worker yet. Replies to each opportunity alert
+# 5 and 20 sessions later with how the stock did. Shares the alert history
+# cache with opportunity-alerts.yml, so it uses the same concurrency group.
+on:
+  workflow_dispatch:
+    inputs:
+      testes:
+        description: "Publicar no canal 🧪-testes (sem marcar como publicado)"
+        type: boolean
+        default: false
+
+concurrency: opportunity-alerts
+
+jobs:
+  followups:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - name: Carregar o histórico de alertas
+        uses: actions/cache/restore@v4
+        with:
+          path: state/history
+          key: alert-history-latest
+          restore-keys: alert-history-
+      - name: Publicar os acompanhamentos
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_TESTES: ${{ inputs.testes && '1' || '' }}
+        run: uv run python scripts/alert_followups.py
+      - name: Guardar o histórico de alertas
+        if: ${{ !cancelled() && !inputs.testes && hashFiles('state/history/*.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: state/history
+          key: alert-history-${{ github.run_id }}

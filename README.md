@@ -312,3 +312,22 @@ goes through `discord_post.route()` is also sent to the channel of the same
 kind there; a failed copy only warns. DMs, slash-command replies and the
 👍/👎 vote reactions are not copied. The bot must first be added to that server
 with an OAuth invite (Manage Channels and Manage Roles).
+
+## Stand-by: bot health check and alert follow-ups
+
+Built and tested but switched off: the Worker does not start these yet, and
+their workflows only run by hand (`workflow_dispatch`, available once merged
+into main). To switch one on, add it to the Worker's schedule.
+
+- **Health check** (`scripts/health.py`, `health.yml`): on weekdays, whether
+  each scheduled job (tips, agents, alerts, news) ran on main today and
+  succeeded, plus how old the two breadth CSVs are (⚠️ after 2 weekdays).
+  Posts only to a `🔧-estado` channel (key `estado` in `discord/channels.json`,
+  not created yet) or to `🧪-testes` with the `testes` input; otherwise it
+  just prints the card in the log.
+- **Alert follow-ups** (`scripts/alert_followups.py`, `alert-followups.yml`):
+  5 and 20 sessions after each opportunity alert, a reply to the original
+  message with the change since the alert, the best point and whether the stop
+  was hit. Each milestone is posted once and marked in the alert history;
+  milestones more than 3 sessions late are skipped, so switching it on does not
+  post a backlog. A `testes` run posts to `🧪-testes` without marking anything.

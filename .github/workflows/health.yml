@@ -1,0 +1,31 @@
+name: Estado do bot (stand-by)
+
+# STAND-BY: not started by the Worker yet. Checks that today's jobs ran and the
+# breadth data is fresh, and posts to 🔧-estado (or 🧪-testes with "testes").
+# Without either channel it only prints the result in the log.
+on:
+  workflow_dispatch:
+    inputs:
+      testes:
+        description: "Publicar no canal 🧪-testes"
+        type: boolean
+        default: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - name: Verificar
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_TESTES: ${{ inputs.testes && '1' || '' }}
+        run: uv run python scripts/health.py
