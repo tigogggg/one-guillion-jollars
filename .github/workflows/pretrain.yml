@@ -24,6 +24,10 @@ on:
         description: "Só voltar a publicar o relatório do último pré-treino (sem treinar)"
         type: boolean
         default: false
+      testes:
+        description: "Publicar o relatório no canal 🧪-testes"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -47,6 +51,7 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_TESTES: ${{ inputs.testes && '1' || '' }}
         run: uv run python scripts/pretrain.py --republicar
 
   plan:
