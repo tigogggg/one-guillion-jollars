@@ -82,3 +82,22 @@ def test_train_strategy_runs_end_to_end_on_synthetic_markets(monkeypatch):
     strategy, r = pretrain.train_strategy("foguetao")
     assert strategy == "foguetao" and "chosen" in r and r["search"]["candidates"] >= 4
     assert {"stop_atr", "trail_atr"} <= set(r["chosen"]) and "trade_stats" in r["year"]
+
+
+def test_position_history_groups_trades_and_justifies_them():
+    trades = [
+        {"date": "2026-10-01", "side": "compra", "symbol": "AAA", "qty": 2, "price": 10, "eur": 20, "pnl_eur": 0, "reason": "top tendência",
+         "ctx": {"trend": 90, "zone": "Alta"}},
+        {"date": "2026-10-03", "side": "compra", "symbol": "AAA", "qty": 1, "price": 11, "eur": 11, "pnl_eur": 0, "reason": "top tendência"},
+        {"date": "2026-10-08", "side": "venda", "symbol": "AAA", "qty": 3, "price": 12, "eur": 36, "pnl_eur": 5, "reason": "stop",
+         "ctx": {"stop": 11.9, "entry": 10.3, "low": 11.8}, "held": 7},
+        {"date": "2026-10-09", "side": "compra", "symbol": "BBB", "qty": 1, "price": 5, "eur": 5, "pnl_eur": 0, "reason": "rompimento"},
+        {"date": "2026-10-10", "side": "imposto", "symbol": "-", "qty": 0, "price": 0, "eur": 1, "pnl_eur": -1, "reason": "x"},
+    ]
+    lots = agents.position_history(trades, "foguetao", {"n": 5, "stop_pct": 0.1, "cada": 5})
+    assert [l["symbol"] for l in lots] == ["BBB", "AAA"]
+    bbb, aaa = lots
+    assert bbb["status"] == "aberta" and aaa["status"] == "fechada" and aaa["days"] == 7
+    assert aaa["result"] == 5 and aaa["result_pct"] == round(5 / 31 * 100, 2) and len(aaa["buys"]) == 2
+    assert aaa["buys"][0]["why"].startswith("Comprou (top tendência)") and "tendência 90/100" in aaa["buys"][0]["why"]
+    assert "tocou no stop" in aaa["sells"][0]["why"] and "mínimo do dia 11.80" in aaa["sells"][0]["why"]

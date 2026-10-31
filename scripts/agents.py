@@ -328,7 +328,8 @@ def fees(symbol: str) -> float:
     return FEE + (0.0 if is_eur(symbol) else FX_FEE)
 
 
-def sell(port: dict, mkt: Market, symbol: str, price: float, on: date, reason: str, fraction: float = 1.0) -> dict:
+def sell(port: dict, mkt: Market, symbol: str, price: float, on: date, reason: str, fraction: float = 1.0,
+         ctx: dict | None = None) -> dict:
     pos = port["positions"][symbol]
     qty = pos["qty"] * fraction
     fill = price * (1 - fees(symbol))
@@ -346,6 +347,8 @@ def sell(port: dict, mkt: Market, symbol: str, price: float, on: date, reason: s
     trade = {"date": on.isoformat(), "side": "venda", "symbol": symbol, "qty": round(qty, 6),
              "price": round(fill, 4), "eur": round(proceeds, 2), "pnl_eur": round(proceeds - cost, 2), "reason": reason,
              "ret": round(proceeds / cost - 1, 4) if cost else 0.0, "held": held}
+    if ctx:
+        trade["ctx"] = ctx
     port["trades"] = (port["trades"] + [trade])[-TRADES_KEPT:]
     return trade
 
@@ -371,6 +374,8 @@ def buy(port: dict, mkt: Market, order: dict, price: float, on: date) -> dict | 
         }
     trade = {"date": on.isoformat(), "side": "compra", "symbol": symbol, "qty": round(qty, 6),
              "price": round(fill, 4), "eur": round(eur, 2), "pnl_eur": 0.0, "reason": order.get("reason", "")}
+    if order.get("ctx"):
+        trade["ctx"] = order["ctx"]
     port["trades"] = (port["trades"] + [trade])[-TRADES_KEPT:]
     return trade
 
@@ -391,7 +396,7 @@ def fill_pending(port: dict, mkt: Market) -> list[dict]:
         if order["side"] == "sell":
             if order["symbol"] in port["positions"]:
                 done.append(sell(port, mkt, order["symbol"], float(bar["Open"]), on, order.get("reason", ""),
-                                 order.get("fraction", 1.0)))
+                                 order.get("fraction", 1.0), order.get("ctx")))
         else:
             t = buy(port, mkt, order, float(bar["Open"]), on)
             if t:
@@ -411,10 +416,12 @@ def check_exits(port: dict, mkt: Market) -> list[dict]:
         for idx, bar in bars.iterrows():
             on = idx.date()
             if pos.get("stop") and bar["Low"] <= pos["stop"]:
-                done.append(sell(port, mkt, symbol, min(float(bar["Open"]), pos["stop"]), on, "stop"))
+                done.append(sell(port, mkt, symbol, min(float(bar["Open"]), pos["stop"]), on, "stop",
+                                 ctx={"stop": round(pos["stop"], 4), "entry": round(pos["entry"], 4), "low": round(float(bar["Low"]), 4)}))
                 break
             if pos.get("tp") and bar["High"] >= pos["tp"]:
-                done.append(sell(port, mkt, symbol, max(float(bar["Open"]), pos["tp"]), on, "alvo"))
+                done.append(sell(port, mkt, symbol, max(float(bar["Open"]), pos["tp"]), on, "alvo",
+                                 ctx={"tp": round(pos["tp"], 4), "entry": round(pos["entry"], 4), "high": round(float(bar["High"]), 4)}))
                 break
             pos["checked"] = on.isoformat()
     return done
@@ -1096,7 +1103,31 @@ def decide(cfg: dict, port: dict, mkt: Market, params: dict, live: bool = True) 
     if not params.get("ignora_risco"):
         orders, skipped = risk_filter(orders, port, mkt)
         notes += skipped
-    return [o for o in orders if o["side"] == "sell" or o["eur"] >= MIN_ORDER_EUR], notes
+    orders = [o for o in orders if o["side"] == "sell" or o["eur"] >= MIN_ORDER_EUR]
+    if live:
+        orders = [{**o, "ctx": decision_context(o, port, mkt)} for o in orders]
+    return orders, notes
+
+
+def decision_context(order: dict, port: dict, mkt: Market) -> dict:
+    """The numbers behind an order when it was decided, for the agent's position history."""
+    s = order["symbol"]
+    m = mkt.stocks.get(s) or mkt.etfs.get(s) or {}
+    ctx = {"zone": mkt.zone, "date": mkt.as_of.isoformat()}
+    if m:
+        ctx.update(trend=round(m.get("trend_score", 0)), ret_3m=round(m.get("ret_3m", 0) * 100, 1),
+                   from_high=round(m.get("pct_from_high", 0) * 100, 1), vs_sma50=round((m["price"] / m["sma50"] - 1) * 100, 1),
+                   vol_ratio=round(m.get("vol_ratio", 0), 2), tech=round(tech_score(m)), price=round(m["price"], 2))
+    score = news_score(mkt, s)
+    if score:
+        ctx["news"] = score
+    if order["side"] == "buy" and order.get("stop"):
+        ctx["stop"] = order["stop"]
+    pos = port["positions"].get(s)
+    if order["side"] == "sell" and pos and m:
+        ctx.update(entry=round(pos["entry"], 4), ret=round((m["price"] / pos["entry"] - 1) * 100, 1),
+                   held=sessions_since(mkt, pos.get("entry_date")))
+    return ctx
 
 
 def is_bankrupt(port: dict, mkt: Market) -> bool:
@@ -1508,6 +1539,40 @@ def strategy_info(cfg: dict, params: dict) -> dict:
     }
 
 
+def position_history(trades: list[dict], strategy: str, params: dict, kept: int = 60) -> list[dict]:
+    """The trades grouped into positions (first buy to last sell), newest first, each trade with its justification."""
+    lots, open_lot = [], {}
+    for t in trades:
+        if t["side"] not in ("compra", "venda"):
+            continue
+        t = {**t, "why": strategy_docs.justify(strategy, params, t)}
+        lot = open_lot.get(t["symbol"])
+        if lot is None:
+            lot = {"symbol": t["symbol"], "opened": t["date"], "closed": None, "buys": [], "sells": [], "qty": 0.0,
+                   "invested": 0.0, "result": 0.0, "partial": t["side"] == "venda"}
+            open_lot[t["symbol"]] = lot
+            lots.append(lot)
+        if t["side"] == "compra":
+            lot["buys"].append(t)
+            lot["qty"] += t["qty"]
+            lot["invested"] += t["eur"]
+        else:
+            lot["sells"].append(t)
+            lot["qty"] -= t["qty"]
+            lot["result"] += t["pnl_eur"]
+            if lot["qty"] <= 1e-6:
+                lot["closed"] = t["date"]
+                open_lot.pop(t["symbol"], None)
+    for lot in lots:
+        lot["status"] = "fechada" if lot["closed"] else "aberta"
+        lot["result"] = round(lot["result"], 2)
+        lot["result_pct"] = round(lot["result"] / lot["invested"] * 100, 2) if lot["invested"] else None
+        end = date.fromisoformat(lot["closed"]) if lot["closed"] else None
+        lot["days"] = (end - date.fromisoformat(lot["opened"])).days if end else None
+        lot["qty"] = round(max(lot["qty"], 0.0), 6)
+    return list(reversed(lots))[:kept]
+
+
 def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
     """Everything about each active agent for the interactive page: holdings, orders, trades, stats, strategy."""
     out = []
@@ -1534,6 +1599,11 @@ def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
                 "earnings": (mkt.earnings.get(symbol).isoformat() if mkt.earnings.get(symbol) else None),
             })
         trades = port["trades"]
+        history = position_history(trades, cfg["strategy"], params)
+        why_open = {lot["symbol"]: (lot["buys"][-1] if lot["buys"] else {}) for lot in history if lot["status"] == "aberta"}
+        for row in positions:
+            buy_t = why_open.get(row["symbol"], {})
+            row["reason"], row["why"] = buy_t.get("reason", ""), buy_t.get("why", "")
         stats = live_stats(port)
         hist = port["history"]
         peak, max_dd = 0.0, 0.0
@@ -1555,7 +1625,8 @@ def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
             "fees_note": f"{FEE:.1%} por ordem, +{FX_FEE:.2%} de câmbio nas ações dos EUA",
             "buys": sum(t["side"] == "compra" for t in trades), "sells": sum(t["side"] == "venda" for t in trades),
             "wins": sum(t["side"] == "venda" and t["pnl_eur"] > 0 for t in trades),
-            "positions": positions, "pending": port["pending"], "trades": list(reversed(trades)),
+            "positions": positions, "pending": [{**o, "why": strategy_docs.context_text(o.get("ctx"))} for o in port["pending"]],
+            "trades": list(reversed(trades)), "history": history,
             "evolution": list(reversed(port.get("evolution", [])))[:20],
             "shadows": [{"changes": sh["changes"], "born": sh["born"], "sessions": sh.get("sessions", 0),
                          "ret_pct": round(sh.get("ret", 0) * 100, 2), "parent_ret_pct": round(sh.get("parent_ret", 0) * 100, 2)}
@@ -1667,7 +1738,7 @@ MONTHLY_TITLE = "📆 Relatório mensal dos agentes"
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("mode", choices=["daily", "config"])
+    parser.add_argument("mode", choices=["daily", "config", "portal"])
     parser.add_argument("args", nargs="?", default="{}", help="config: JSON with acao, nome, estrategia, capital, valor, emoji")
     parser.add_argument("--dry-run", action="store_true", help="Print instead of posting; state is still saved")
     a = parser.parse_args()
@@ -1675,6 +1746,11 @@ def main() -> int:
     config, state = load_config(), load_state()
     target = reply_target()
     follow_up = ([], {})
+    if a.mode == "portal":  # the portal's league page from the current state: no trading, no post
+        mkt = load_market()
+        embeds, _ = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}")
+        print(f"Portal atualizado: {embeds[0].get('url', 'sem credenciais da Cloudflare')}")
+        return 0
     try:
         if a.mode == "daily":
             mkt = load_market()

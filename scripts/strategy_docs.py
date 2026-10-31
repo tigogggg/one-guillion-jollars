@@ -163,3 +163,75 @@ class _Missing(dict):
 
 def params_lines(params: dict) -> list[str]:
     return [f"`{k}` = **{fmt_param(k, v)}** · {PARAMS.get(k, '')}" for k, v in params.items()]
+
+
+# --------------------------------------------------------------------------
+# Why an agent bought or sold: the strategy's rule plus the numbers at the time
+# --------------------------------------------------------------------------
+
+SELL_REASONS = [  # (start of the order's reason, plain explanation)
+    ("stop", "o preço tocou no stop: a regra corta a perda (ou protege o ganho) sem esperar"),
+    ("alvo", "o preço chegou ao alvo de lucro definido na compra"),
+    ("saiu da lista", "na revisão periódica deixou de estar entre as escolhidas da estratégia"),
+    ("perdeu a média 50d", "o preço fechou abaixo da média de 50 dias: a tendência que justificou a compra quebrou"),
+    ("notícias negativas", "saíram notícias claramente negativas sobre a empresa"),
+    ("não andou", "a posição estava a perder e não andou no tempo máximo definido"),
+    ("falência", "o agente perdeu metade do dinheiro e foi liquidado"),
+    ("zona", "a zona do mercado mudou e o peso alvo do ETF desceu"),
+    ("o conselho deixou de a apoiar", "menos agentes do que o mínimo continuam a ter ou a querer esta ação"),
+    ("saiu das carteiras dos líderes", "os agentes que o Maestro segue já não a têm"),
+    ("nenhum agente bate", "nesta zona de mercado nenhum agente bate o S&P 500, por isso o Maestro fica de fora"),
+]
+
+
+def sell_reason_text(reason: str) -> str:
+    for start, text in SELL_REASONS:
+        if reason.startswith(start):
+            return text
+    if reason.endswith("sessões"):
+        return f"atingiu o tempo máximo de {reason} que a estratégia mantém uma posição"
+    return reason or "venda pela regra da estratégia"
+
+
+def context_text(ctx: dict | None) -> str:
+    """The numbers at the time of the decision, in one line."""
+    if not ctx:
+        return ""
+    bits = []
+    if "trend" in ctx:
+        bits.append(f"tendência {ctx['trend']}/100")
+    if "ret_3m" in ctx:
+        bits.append(f"{ctx['ret_3m']:+.1f}% em 3 meses")
+    if "from_high" in ctx:
+        bits.append(f"{ctx['from_high']:.0f}% abaixo do máximo de 52 semanas")
+    if "vs_sma50" in ctx:
+        bits.append(f"{ctx['vs_sma50']:+.1f}% face à média de 50 dias")
+    if ctx.get("vol_ratio"):
+        bits.append(f"volume {ctx['vol_ratio']:.1f}× a média")
+    if "tech" in ctx:
+        bits.append(f"score técnico {ctx['tech']}/60")
+    if ctx.get("news"):
+        bits.append(f"notícias {ctx['news']:+d}")
+    if ctx.get("zone"):
+        bits.append(f"mercado em zona {ctx['zone']}")
+    if ctx.get("stop") and "low" not in ctx:
+        bits.append(f"stop em {ctx['stop']:.2f}")
+    if "low" in ctx:
+        bits.append(f"stop {ctx['stop']:.2f}, mínimo do dia {ctx['low']:.2f}, entrada {ctx['entry']:.2f}")
+    if "high" in ctx:
+        bits.append(f"alvo {ctx['tp']:.2f}, máximo do dia {ctx['high']:.2f}, entrada {ctx['entry']:.2f}")
+    if "ret" in ctx and "low" not in ctx and "high" not in ctx:
+        bits.append(f"{ctx['ret']:+.1f}% desde a compra" + (f" em {ctx['held']} sessões" if ctx.get("held") else ""))
+    return "Na altura: " + ", ".join(bits) + "."
+
+
+def justify(strategy: str, params: dict, trade: dict) -> str:
+    """Why this buy or sell, in the strategy's own terms."""
+    _, buys, sells, _ = describe(strategy, params)
+    if trade["side"] == "compra":
+        head = f"Comprou ({trade.get('reason') or 'regra de compra'}). Regra da estratégia: {buys}"
+    elif trade["side"] == "venda":
+        head = f"Vendeu: {sell_reason_text(trade.get('reason', ''))}. Regra da estratégia: {sells}"
+    else:
+        return trade.get("reason", "")
+    return " ".join(x for x in (head, context_text(trade.get("ctx"))) if x)

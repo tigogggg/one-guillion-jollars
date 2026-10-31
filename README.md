@@ -137,6 +137,18 @@ decided on the latest close fill at the next session's open with 0.1% costs;
 US stocks are bought in EUR at that day's EUR/USD rate, fractional shares
 allowed. Stops and targets are checked against each session's low and high.
 
+**Agents' holdings and position history.** Every live order carries the
+numbers behind it (`decision_context`: trend score, 3-month return, distance to
+the high, distance to the 50-day average, volume, technical score, zone, news,
+stop; for sells the return and sessions held), copied into the trade. The
+agent's card on the portal shows the current holdings with why each was
+bought, and the position history (`position_history`: first buy to last sell)
+as expandable entries with every buy and sell and its justification: the
+strategy's own rule (`strategy_docs.justify`, sell reasons explained in
+`SELL_REASONS`) plus those numbers. `agents.py portal` (workflow mode
+`portal`) refreshes the portal's league page from the current state without
+trading or posting.
+
 **Interactive chart page.** The league and pre-training posts carry a
 "📈 Ver gráfico interativo" button (and a clickable title). `scripts/interactive.py`
 stores the chart's data in the Worker's KV under `chart:<random id>` for 120

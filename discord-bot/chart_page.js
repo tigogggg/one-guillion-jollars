@@ -244,6 +244,9 @@ h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem
 .score.Alta { background:var(--up); } .score.Média { background:var(--gold); } .score.Baixa { background:#ff9f43; } .score.Muito { background:var(--down); }
 .bar { height:6px; background:#0b0820; border-radius:3px; overflow:hidden; } .bar i { display:block; height:100%; background:var(--neon); }
 details summary { cursor:pointer; color:var(--neon); margin-top:6px; }
+.lot { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:6px 0; }
+.lot summary { color:var(--fg); } .lot .trade { border-left:3px solid var(--line); padding:4px 10px; margin:8px 0 0 4px; }
+.lot .trade.b { border-left-color:var(--up); } .lot .trade.s { border-left-color:var(--down); } .why { color:var(--muted); margin:.3rem 0; white-space:normal; }
 .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:10px; }
 @media (max-width:640px) { .cards { grid-template-columns:1fr; } }
 .board li .nm { flex:1; font-weight:600; } .board li .val { font-family:var(--pixel); font-size:.62rem; }
@@ -367,23 +370,35 @@ function liveHtml(a) {
     tile("Dinheiro", fmtEur(a.cash), fmtNum(a.invested_pct, 0) + "% investido") +
     tile("Operações", a.buys + " compras · " + a.sells + " vendas", a.sells ? a.wins + " vendas com lucro (" + fmtNum(a.wins / a.sells * 100, 0) + "%)" : "ainda sem vendas") +
     tile("Impostos pagos", fmtEur(a.taxes), esc(a.fees_note)) + '</div>' +
-    '<h3>💼 Carteira (' + a.positions.length + ' posições)</h3>' +
-    table(["Ativo", "Nome", "Qtd.", "Custo médio", "Preço atual", "Investido", "Valor", "Ganho", "Ganho %", "Peso", "Stop", "Alvo", "Desde", "Resultados"],
-      a.positions.map((p) => ['<b>' + esc(p.symbol) + '</b>', esc(p.name || p.sector || ""), fmtNum(p.qty, 4),
+    '<h3>💼 Carteira atual (' + a.positions.length + ' posições ativas)</h3>' +
+    table(["Ativo", "Porque comprou", "Nome", "Qtd.", "Custo médio", "Preço atual", "Investido", "Valor", "Ganho", "Ganho %", "Peso", "Stop", "Alvo", "Desde", "Resultados"],
+      a.positions.map((p) => ['<b>' + esc(p.symbol) + '</b>', p.why ? '<details><summary>' + esc(p.reason || "ver") + '</summary><p class="small why">' + esc(p.why) + '</p></details>' : esc(p.reason || "—"),
+        esc(p.name || p.sector || ""), fmtNum(p.qty, 4),
         fmtNum(p.entry) + " " + p.currency, (p.price == null ? "—" : fmtNum(p.price) + " " + p.currency), fmtEur(p.cost_eur), fmtEur(p.value_eur),
         '<span class="' + cls(p.pnl_eur) + '">' + fmtEur(p.pnl_eur) + '</span>', '<span class="' + cls(p.pnl_pct) + '">' + fmtPct(p.pnl_pct) + '</span>',
         fmtNum(p.weight, 1) + "%", p.stop ? fmtNum(p.stop) : "—", p.tp ? fmtNum(p.tp) : "—", esc(p.entry_date || ""), esc(p.earnings || "—")]),
-      [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]) +
+      [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) +
     '<p class="muted small">Custo médio e preço na moeda do ativo, com custos incluídos; valores em euros ao câmbio do dia.</p>' +
     '<h3>⏳ Ordens para a próxima abertura</h3>' +
-    table(["Tipo", "Ativo", "Valor", "Stop", "Alvo", "Motivo", "Criada"],
+    table(["Tipo", "Ativo", "Valor", "Stop", "Alvo", "Motivo", "Números na decisão", "Criada"],
       (a.pending || []).map((o) => [o.side === "buy" ? "🟢 compra" : "🔴 venda", '<b>' + esc(o.symbol) + '</b>', o.eur ? fmtEur(o.eur) : (o.fraction ? fmtNum(o.fraction * 100, 0) + "% da posição" : "tudo"),
-        o.stop ? fmtNum(o.stop) : "—", o.tp ? fmtNum(o.tp) : "—", esc(o.reason || ""), esc(o.created || "")]), [2, 3, 4]) +
-    '<h3>📜 Histórico de operações (' + a.trades.length + ')</h3>' +
+        o.stop ? fmtNum(o.stop) : "—", o.tp ? fmtNum(o.tp) : "—", esc(o.reason || ""), '<span class="small" style="white-space:normal">' + esc((o.why || "").replace(/^Na altura: /, "")) + '</span>', esc(o.created || "")]), [2, 3, 4]) +
+    '<h3>📚 Histórico de posições (' + (a.history || []).length + ')</h3><p class="muted small">Cada posição da primeira compra à última venda. Toca para ver as compras, as vendas e a justificação de cada uma segundo a estratégia.</p>' +
+    ((a.history || []).map((l) => {
+      const icon = l.status === "aberta" ? "🟡" : l.result > 0 ? "✅" : "🔴";
+      const last = l.sells.length ? l.sells[l.sells.length - 1].reason : "";
+      return '<details class="lot"><summary>' + icon + ' <b>' + esc(l.symbol) + '</b> · ' + esc(l.opened) + ' → ' + esc(l.closed || "aberta") +
+        (l.status === "fechada" ? ' · <span class="' + cls(l.result) + '">' + fmtEur(l.result) + (l.result_pct != null ? " (" + fmtPct(l.result_pct) + ")" : "") + '</span>' + (l.days != null ? ' · ' + l.days + ' dias' : '') + (last ? ' · ' + esc(last) : '') : ' · ' + fmtEur(l.invested) + ' investidos') +
+        '</summary>' + l.buys.concat(l.sells).sort((x, y) => x.date.localeCompare(y.date)).map((t) =>
+          '<div class="trade ' + (t.side === "compra" ? "b" : "s") + '"><b>' + (t.side === "compra" ? "🟢 Compra" : "🔴 Venda") + '</b> · ' + esc(t.date) + ' · ' + fmtNum(t.qty, 4) + ' a ' + fmtNum(t.price) +
+          ' · ' + fmtEur(t.eur) + (t.side === "venda" ? ' · <span class="' + cls(t.pnl_eur) + '">' + fmtEur(t.pnl_eur) + '</span>' + (t.held != null ? ' em ' + t.held + ' dias' : '') : '') +
+          '<p class="small why">' + esc(t.why || t.reason || "") + '</p></div>').join("") + '</details>';
+    }).join("") || '<p class="muted">Ainda sem operações.</p>') +
+    '<details><summary>Todas as operações em lista (' + a.trades.length + ')</summary>' +
     table(["Data", "Tipo", "Ativo", "Qtd.", "Preço", "Valor", "Resultado", "Motivo"],
       a.trades.map((t) => [esc(t.date), t.side === "compra" ? "🟢 compra" : t.side === "venda" ? "🔴 venda" : "🧾 " + esc(t.side), '<b>' + esc(t.symbol) + '</b>',
         t.qty ? fmtNum(t.qty, 4) : "—", t.price ? fmtNum(t.price) : "—", fmtEur(t.eur),
-        t.side === "compra" ? "—" : '<span class="' + cls(t.pnl_eur) + '">' + fmtEur(t.pnl_eur) + '</span>', esc(t.reason || "")]), [3, 4, 5, 6]) +
+        t.side === "compra" ? "—" : '<span class="' + cls(t.pnl_eur) + '">' + fmtEur(t.pnl_eur) + '</span>', esc(t.reason || "")]), [3, 4, 5, 6]) + '</details>' +
     (realized.length ? '<h3>🧾 Mais-valias realizadas por ano</h3>' + table(["Ano", "Mais-valias"], realized.map(([y, v]) => [esc(y), '<span class="' + cls(v) + '">' + fmtEur(v) + '</span>']), [1]) : "") +
     ((a.evolution || []).length ? '<h3>🧬 Treinos e mutações</h3>' + table(["Data", "O que mudou"], a.evolution.map((e) => [esc(e.date), esc(e.note)])) : "") +
     ((a.shadows || []).length ? '<h3>👻 Cópias-fantasma a testar</h3><p class="muted small">Cópias em papel com parâmetros ligeiramente diferentes. Ao fim de 20 sessões, uma que faça 2 pontos percentuais mais do que o agente (e mais pontos) passa a ser o agente.</p>' +
