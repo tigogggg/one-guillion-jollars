@@ -34,15 +34,22 @@ SESSIONS_3M = 63
 EPU_WINDOW = 3 * 252
 
 
-def fred(series: str) -> pd.Series | None:
+def fred(series: str, tries: int = 3) -> pd.Series | None:
+    for attempt in range(tries):  # FRED sometimes times out from cloud machines
+        try:
+            resp = requests.get(FRED, params={"id": series}, timeout=90, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            break
+        except requests.RequestException as e:
+            if attempt == tries - 1:
+                warn(f"FRED {series}: {e}")
+                return None
     try:
-        resp = requests.get(FRED, params={"id": series}, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
-        resp.raise_for_status()
         df = pd.read_csv(io.StringIO(resp.text))
         col = [c for c in df.columns if c.upper() != "DATE" and c.lower() != "observation_date"][0]
         out = pd.Series(pd.to_numeric(df[col], errors="coerce").to_numpy(), index=pd.to_datetime(df.iloc[:, 0]))
         return out.dropna()
-    except (requests.RequestException, ValueError, IndexError, KeyError) as e:
+    except (ValueError, IndexError, KeyError) as e:
         warn(f"FRED {series}: {e}")
         return None
 

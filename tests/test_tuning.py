@@ -102,3 +102,16 @@ def test_position_history_groups_trades_and_justifies_them():
     assert aaa["result"] == 5 and aaa["result_pct"] == round(5 / 31 * 100, 2) and len(aaa["buys"]) == 2
     assert aaa["buys"][0]["why"].startswith("Comprou (top tendência)") and "tendência 90/100" in aaa["buys"][0]["why"]
     assert "tocou no stop" in aaa["sells"][0]["why"] and "mínimo do dia 11.80" in aaa["sells"][0]["why"]
+
+
+def test_a_broken_bar_does_not_fill_the_order():
+    idx = pd.bdate_range("2026-10-01", periods=3)
+    df = pd.DataFrame({"Open": [10.0, 0.0, 11.0], "High": [10.5, 0.0, 11.5], "Low": [9.5, 0.0, 10.5], "Close": [10.0, float("nan"), 11.0],
+                       "Volume": [1, 1, 1]}, index=idx)
+    port = agents.new_portfolio(1000, idx[0].date())
+    port["pending"] = [{"side": "buy", "symbol": "AAA.DE", "eur": 100, "created": idx[0].date().isoformat()}]
+    mkt = SimpleNamespace(hist={"AAA.DE": df}, as_of=idx[1].date(), fx=pd.Series([1.1]))
+    assert agents.fill_pending(port, mkt) == [] and len(port["pending"]) == 1
+    mkt.as_of = idx[2].date()
+    done = agents.fill_pending(port, mkt)
+    assert done[0]["price"] > 0 and not port["pending"]

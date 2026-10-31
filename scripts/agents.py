@@ -422,13 +422,21 @@ def fill_pending(port: dict, mkt: Market) -> list[dict]:
         if after.empty:
             still.append(order)
             continue
-        on, bar = after.index[0].date(), after.iloc[0]
+        on, price = None, None
+        for idx, bar in after.iterrows():  # the first session with a valid price (data can have broken bars)
+            price = next((float(bar[c]) for c in ("Open", "Close") if pd.notna(bar[c]) and float(bar[c]) > 0), None)
+            if price is not None:
+                on = idx.date()
+                break
+        if price is None:
+            still.append(order)
+            continue
         if order["side"] == "sell":
             if order["symbol"] in port["positions"]:
-                done.append(sell(port, mkt, order["symbol"], float(bar["Open"]), on, order.get("reason", ""),
+                done.append(sell(port, mkt, order["symbol"], price, on, order.get("reason", ""),
                                  order.get("fraction", 1.0), order.get("ctx")))
         else:
-            t = buy(port, mkt, order, float(bar["Open"]), on)
+            t = buy(port, mkt, order, price, on)
             if t:
                 done.append(t)
     port["pending"] = still
