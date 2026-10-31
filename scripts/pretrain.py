@@ -200,7 +200,7 @@ def load_membership() -> dict[str, list[tuple[date, date | None]]]:
     return out
 
 
-def build_markets(years: int = YEARS) -> list[Market]:
+def build_markets(years: int = YEARS, context_path: str | None = None) -> list[Market]:
     """Daily markets for the backtest, with the S&P 500 as it was on each day (survivorship bias reduced).
 
     Companies that left the index are included while they were members, when Yahoo still has their prices
@@ -234,7 +234,7 @@ def build_markets(years: int = YEARS) -> list[Market]:
     spy = stock_hist.pop("SPY")
     import context
 
-    ctx_frame = context.download(period, spy, fx)
+    ctx_frame = context.load(context_path) if context_path and Path(context_path).exists() else context.download(period, spy, fx)
     print(f"::notice title=Contexto::dados desde {context.coverage(ctx_frame)}", flush=True)
     sessions = [d.date() for d in spy.index]
     days = sessions[WARMUP:][-years * SESSIONS_PER_YEAR:]
@@ -797,6 +797,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print the report instead of posting")
     parser.add_argument("--estrategias", default="", help="Comma-separated strategies to train (default: all)")
     parser.add_argument("--anos", type=int, default=YEARS, help=f"Years of history to replay (default {YEARS})")
+    parser.add_argument("--contexto", help="CSV with the market context (context.py --guardar), shared by every strategy")
     parser.add_argument("--saida", help="Only train and write these strategies' results to this JSON file "
                                         "(one job of a parallel run)")
     parser.add_argument("--juntar", help="Merge the JSON results in this folder, then save, apply and report")
@@ -816,7 +817,7 @@ def main() -> int:
         results = {**parts[0], "strategies": {k: v for part in parts for k, v in part["strategies"].items()}}
         return finish(results, date.fromisoformat(results["valid"][1]), args.apply, args.dry_run, partial=True)
 
-    markets = build_markets(args.anos)
+    markets = build_markets(args.anos, args.contexto)
     print(f"{len(markets)} dias de {markets[0].as_of} a {markets[-1].as_of}", file=sys.stderr)
     only = {s.strip() for s in args.estrategias.split(",") if s.strip()} or None
     if args.saida:

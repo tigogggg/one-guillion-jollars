@@ -73,6 +73,18 @@ jobs:
     outputs:
       strategies: ${{ steps.list.outputs.strategies }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Contexto de mercado (uma vez, igual para todas as estratégias)
+        run: uv run python scripts/context.py --guardar ctx/context.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contexto
+          path: ctx/
+          retention-days: 3
       - id: list
         env:
           ESTRATEGIAS: ${{ inputs.estrategias }}
@@ -96,11 +108,15 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync
+      - uses: actions/download-artifact@v4
+        with:
+          name: contexto
+          path: ctx
       - name: Treinar ${{ matrix.strategy }}
         env:
           STRATEGY: ${{ matrix.strategy }}
           ANOS: ${{ inputs.anos || '20' }}
-        run: uv run python scripts/pretrain.py --estrategias "$STRATEGY" --anos "$ANOS" --saida "out/$STRATEGY.json"
+        run: uv run python scripts/pretrain.py --estrategias "$STRATEGY" --anos "$ANOS" --contexto ctx/context.csv --saida "out/$STRATEGY.json"
       - uses: actions/upload-artifact@v4
         with:
           name: pretrain-${{ matrix.strategy }}

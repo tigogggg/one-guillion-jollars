@@ -23,6 +23,8 @@ import io
 import os
 import sys
 
+from pathlib import Path
+
 import pandas as pd
 import requests
 
@@ -139,6 +141,38 @@ def on(frame: pd.DataFrame, day) -> dict:
     return {k: round(float(v), 5) for k, v in last.items() if pd.notna(v)}
 
 
+def save(frame: pd.DataFrame, path: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path)
+
+
+def load(path: str) -> pd.DataFrame:
+    return pd.read_csv(path, index_col=0, parse_dates=True)
+
+
 def coverage(frame: pd.DataFrame) -> dict[str, str]:
     """First date with data per field, for the run's log."""
     return {c: frame[c].first_valid_index().date().isoformat() for c in frame.columns if frame[c].first_valid_index() is not None}
+
+
+def main() -> int:
+    """Download the context once (e.g. in the pre-training's plan job) so every strategy trains on the same data."""
+    import argparse
+
+    from rankings import download_history
+
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--guardar", required=True, help="CSV file to write")
+    parser.add_argument("--periodo", default="max", help="Yahoo period (default max)")
+    a = parser.parse_args()
+    hist = download_history(["SPY", "EURUSD=X"], period=a.periodo)
+    frame = download(a.periodo, hist.get("SPY"), hist["EURUSD=X"]["Close"] if "EURUSD=X" in hist else None)
+    save(frame, a.guardar)
+    cov = coverage(frame)
+    missing = [c for c in ("vix", "epu_pct", "hy", "rate_chg", "usd_chg", "spy_trend") if c not in cov]
+    print(f"::notice title=Contexto::dados desde {cov}" + (f"; em falta: {missing}" if missing else ""), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

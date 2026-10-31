@@ -39,3 +39,11 @@ def test_context_rules_stop_buys_and_explain_why():
     assert not kept and "dólar caiu" in notes[0]
     kept, _ = agents.shared_rules([buy], {"positions": {}}, mkt, {"vix_meio": 25})
     assert kept[0]["eur"] == 50
+
+
+def test_saved_context_loads_back_the_same(tmp_path):
+    days = pd.bdate_range("2020-01-01", periods=400)
+    frame = context.features({"vix": pd.Series(np.linspace(12, 40, len(days)), index=days)})
+    context.save(frame, str(tmp_path / "c.csv"))
+    back = context.load(str(tmp_path / "c.csv"))
+    assert context.on(back, days[300].date()) == context.on(frame, days[300].date())
