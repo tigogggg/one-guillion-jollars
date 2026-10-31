@@ -20,6 +20,10 @@ on:
         description: "Anos de histórico a reproduzir"
         required: false
         default: "20"
+      so_relatorio:
+        description: "Só voltar a publicar o relatório do último pré-treino (sem treinar)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -29,7 +33,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  report-only:
+    if: ${{ inputs.so_relatorio }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Publicar o relatório
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: uv run python scripts/pretrain.py --republicar
+
   plan:
+    if: ${{ !inputs.so_relatorio }}
     runs-on: ubuntu-latest
     outputs:
       strategies: ${{ steps.list.outputs.strategies }}
@@ -70,7 +91,7 @@ jobs:
 
   merge:
     needs: train
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && !inputs.so_relatorio }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
