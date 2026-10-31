@@ -256,17 +256,21 @@ def strip(r: dict) -> dict:
 
 
 def apply(results: dict, today: date) -> list[str]:
-    """Give every agent of a tuned strategy its chosen parameters and let it decide again."""
+    """Give every agent of a trained strategy the parameters the exam chose, and let it decide again."""
     config, state = agents.load_config(), agents.load_state()
     changed = []
     for cfg in agents.active_agents(config):
         r = results["strategies"].get(cfg["strategy"], {})
-        if not r.get("adopted"):
+        if "chosen" not in r:  # not trained (live-only) or not part of this run
             continue
         port = state["agents"].setdefault(cfg["id"], new_portfolio(cfg["capital"], today))
         old = port.get("params", cfg["params"])
+        changes = {k: v for k, v in r["chosen"].items() if old.get(k) != v}
+        if not changes:
+            continue
+        # The exam's verdict, also when it is "back to the original parameters".
         params = {**old, **r["chosen"]}
-        note = "pré-treino: " + ", ".join(f"{k} {old.get(k)}→{v}" for k, v in r["chosen"].items() if old.get(k) != v)
+        note = "pré-treino: " + ", ".join(f"{k} {old.get(k)}→{v}" for k, v in changes.items())
         port["params"] = params
         port["pending"], port["last_decision"], port["last_rebalance"] = [], None, None
         port["evolution"] = (port["evolution"] + [{"date": today.isoformat(), "note": note}])[-24:]
