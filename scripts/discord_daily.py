@@ -238,8 +238,10 @@ def main() -> int:
 
     if vcp:
         calls = vcp.get("metadata", {}).get("api_stats", {}).get("api_calls_made")
+        universe = vcp.get("metadata", {}).get("funnel", {}).get("universe")
         if calls is not None and os.environ.get("GITHUB_ACTIONS"):  # read back by /limites
-            print(f"::notice title=FMP::{calls} chamadas à API no ecrã VCP (limite do plano gratuito: 250/dia)")
+            print(f"::notice title=FMP::{universe or '?'} ações analisadas no ecrã VCP, "
+                  f"{calls} chamadas à API (limite do plano gratuito: 250/dia)")
         # The intraday alerts read today's VCP pivots from here.
         WATCHLIST_DIR.mkdir(parents=True, exist_ok=True)
         (WATCHLIST_DIR / "vcp-latest.json").write_text(json.dumps(vcp))

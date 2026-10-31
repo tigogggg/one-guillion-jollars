@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
@@ -220,6 +221,8 @@ def main() -> int:
             )
 
     print(f"{len(watch)} ações na watchlist, {len(cards)} alertas novos", file=sys.stderr)
+    if os.environ.get("GITHUB_ACTIONS"):  # read back by /limites
+        print(f"::notice title=Alertas::{len(watch)} ações comparadas com o pivot e o volume, {len(cards)} alertas novos")
     if not cards:
         return 0
 

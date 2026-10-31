@@ -121,6 +121,23 @@ def send_dm(user_id: str, embeds: list[dict], files: dict[str, bytes] | None = N
 # --------------------------------------------------------------------------
 
 
+def kv_get(key: str):
+    """One JSON value from the Worker's KV (e.g. "schedule"), or None without credentials or on error."""
+    token, account = os.environ.get("CLOUDFLARE_API_TOKEN"), os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if not token or not account:
+        return None
+    base = f"https://api.cloudflare.com/client/v4/accounts/{account}/storage/kv/namespaces"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        spaces = requests.get(base, headers=headers, params={"per_page": 100}, timeout=30).json()["result"]
+        ns = next(s["id"] for s in spaces if s["title"] == KV_TITLE)
+        value = requests.get(f"{base}/{ns}/values/{quote(key, safe='')}", headers=headers, timeout=30)
+        return json.loads(value.text) if value.status_code == 200 else None
+    except (requests.RequestException, KeyError, StopIteration, ValueError) as e:
+        print(f"WARN: KV {key}: {e}", file=sys.stderr)
+        return None
+
+
 def load_follows() -> dict[str, list[str]]:
     """{discord user id: [tickers]}; empty without Cloudflare credentials."""
     token, account = os.environ.get("CLOUDFLARE_API_TOKEN"), os.environ.get("CLOUDFLARE_ACCOUNT_ID")

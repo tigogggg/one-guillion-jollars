@@ -77,8 +77,12 @@ starts `.github/workflows/discord-bot.yml` for the others; that workflow runs
 The interaction token passed to the workflow is visible in the Actions run and
 expires after 15 minutes.
 
-`/limites` (`scripts/limits.py`) shows how the news reading and the stock data
-are doing: from the GitHub API, the last 7 days of news runs (headlines per
+`/limites` (`scripts/limits.py`) shows, per job (news, tips and rankings,
+alerts, agents), how many times a day it runs and at what time (the Worker's
+`/horario` schedule, read from KV), when it actually ran on the last day, and
+what it compares (S&P 500 stocks and sectors, UCITS ETFs, VCP universe,
+alert watchlist, stocks whose news is read; each run annotates its counts).
+It also shows how the news reading and the stock data are doing: from the GitHub API, the last 7 days of news runs (headlines per
 source, how many Claude read versus the FinBERT fallback, Claude failures, read
 back from each run's annotations), the FMP calls of the last tips run (free
 tier 250/day) and the Actions minutes this month (private repo, 2000 free);

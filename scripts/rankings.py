@@ -15,6 +15,7 @@ import argparse
 import csv
 import io
 import json
+import os
 import sys
 import time
 from datetime import date
@@ -355,6 +356,11 @@ def main() -> int:
     missing = sorted({t for t, _ in UCITS_ETFS} - set(etf_hist))
     if missing:
         print(f"WARN: sem dados para os ETFs {', '.join(missing)}", file=sys.stderr)
+
+    if os.environ.get("GITHUB_ACTIONS"):  # read back by /limites
+        sectors = len({c["sector"] for c in constituents})
+        print(f"::notice title=Rankings::{stock_stats['with_data']} de {len(constituents)} ações do S&P 500 comparadas em "
+              f"{sectors} setores; {len(etf_hist)} de {len(UCITS_ETFS)} ETFs UCITS")
 
     WATCHLIST_DIR.mkdir(parents=True, exist_ok=True)
     (WATCHLIST_DIR / "rankings-latest.json").write_text(

@@ -23,13 +23,14 @@ def test_news_section_reads_counts_back_from_annotations(monkeypatch):
     }
     monkeypatch.setattr(limits, "runs", lambda wf, since, pages=10: [run(1), run(2, "failure")])
     monkeypatch.setattr(limits, "annotations", lambda r: notes[r["id"]])
-    lines, _ = limits.news_section(NOW)
+    lines = limits.news_section(NOW)
     text = "\n".join(t for _, t in lines)
-    assert "Títulos encontrados: 180 (35 novos)" in text
+    assert "180 títulos (35 novos)" in text
+    assert "notícias de 40 ações" in text
     assert "Yahoo RSS 150" in text and "Google 30" in text
     assert "Claude 25 (71%)" in text and "FinBERT (reserva) 10" in text
     assert "Falhas do Claude: 1" in text
-    assert "1 ok, 1 falhadas" in text
+    assert "2 leituras, 1 falhadas" in text
     assert sum(not ok for ok, _ in lines) == 3  # a failed run, Claude under 90%, one Claude failure
 
 
@@ -48,3 +49,15 @@ def test_actions_section_projects_the_month(monkeypatch):
     lines = limits.actions_section(NOW)
     assert "~300 de 2000 (15%)" in lines[0][1] and lines[0][0]
     assert not lines[1][0]  # ~3100 at this pace: over the free 2000
+
+
+def test_last_day_lists_the_latest_days_runs_in_lisbon_time():
+    found = [run(1, created="2026-11-03T12:04:00Z"), run(2, "failure", created="2026-11-03T16:03:00Z"),
+             run(3, created="2026-11-02T20:31:00Z")]
+    assert limits.last_day(found) == "03/11: ✅ 12:04 · ❌ 16:03"  # Lisbon is UTC+0 in November
+    assert limits.last_day([]) == "sem execuções nos últimos 7 dias"
+
+
+def test_times_text():
+    assert limits.times_text(["12:00", "16:00", "20:30"]) == "3× por dia útil · 12:00 · 16:00 · 20:30"
+    assert limits.times_text("11:40") == "1× por dia útil · 11:40"
