@@ -117,15 +117,19 @@
     {
      "date": "2026-10-30",
      "note": "pré-treino: stop_pct 0.1→0.0789, cada 5→21"
+    },
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: n 5→4, stop_pct 0.0789→0.2658, cada 21→17"
     }
    ],
    "last_rebalance": null,
    "last_decision": null,
    "started": "2026-10-30",
    "params": {
-    "n": 5,
-    "stop_pct": 0.0789,
-    "cada": 21
+    "n": 4,
+    "stop_pct": 0.2658,
+    "cada": 17
    }
   },
   "joalheiro": {
@@ -319,44 +323,7 @@
    "cash": 1000,
    "deposits": 1000,
    "positions": {},
-   "pending": [
-    {
-     "side": "buy",
-     "symbol": "MPC",
-     "eur": 175.0,
-     "stop": 391.3624,
-     "tp": null,
-     "reason": "setor forte: Energia, Saúde",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "PSX",
-     "eur": 175.0,
-     "stop": 248.8904,
-     "tp": null,
-     "reason": "setor forte: Energia, Saúde",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "MRNA",
-     "eur": 175.0,
-     "stop": 195.1136,
-     "tp": null,
-     "reason": "setor forte: Energia, Saúde",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "CRL",
-     "eur": 175.0,
-     "stop": 316.2808,
-     "tp": null,
-     "reason": "setor forte: Energia, Saúde",
-     "created": "2026-10-30"
-    }
-   ],
+   "pending": [],
    "history": [
     {
      "date": "2026-10-30",
@@ -368,15 +335,20 @@
    "points_log": [],
    "trades": [],
    "generation": 1,
-   "evolution": [],
-   "last_rebalance": "2026-10-30",
-   "last_decision": "2026-10-30",
+   "evolution": [
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: por_setor 2→3, stop_pct 0.12→0.2853, cada 5→17"
+    }
+   ],
+   "last_rebalance": null,
+   "last_decision": null,
    "started": "2026-10-30",
    "params": {
     "setores": 2,
-    "por_setor": 2,
-    "stop_pct": 0.12,
-    "cada": 5
+    "por_setor": 3,
+    "stop_pct": 0.2853,
+    "cada": 17
    }
   },
   "pescador": {
@@ -399,6 +371,10 @@
     {
      "date": "2026-10-30",
      "note": "pré-treino: n 5→6, queda_pct 0.05→0.1493, alvo_pct 0.06→0.0536, stop_pct 0.07→0.2668, max_dias 10→27"
+    },
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: "
     }
    ],
    "last_rebalance": null,
@@ -416,26 +392,7 @@
    "cash": 1000,
    "deposits": 1000,
    "positions": {},
-   "pending": [
-    {
-     "side": "buy",
-     "symbol": "MRNA",
-     "eur": 500.0,
-     "stop": 177.376,
-     "tp": null,
-     "reason": "maior subida a 3 meses",
-     "created": "2026-10-30"
-    },
-    {
-     "side": "buy",
-     "symbol": "P",
-     "eur": 500.0,
-     "stop": 101.584,
-     "tp": null,
-     "reason": "maior subida a 3 meses",
-     "created": "2026-10-30"
-    }
-   ],
+   "pending": [],
    "history": [
     {
      "date": "2026-10-30",
@@ -447,14 +404,19 @@
    "points_log": [],
    "trades": [],
    "generation": 1,
-   "evolution": [],
-   "last_rebalance": "2026-10-30",
-   "last_decision": "2026-10-30",
+   "evolution": [
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: n 2→5, stop_pct 0.2→0.0743, cada 5→9"
+    }
+   ],
+   "last_rebalance": null,
+   "last_decision": null,
    "started": "2026-10-30",
    "params": {
-    "n": 2,
-    "stop_pct": 0.2,
-    "cada": 5,
+    "n": 5,
+    "stop_pct": 0.0743,
+    "cada": 9,
     "ignora_resultados": true
    }
   },
@@ -472,6 +434,10 @@
     {
      "date": "2026-10-30",
      "note": "pré-treino: n 5→2, salto_pct 0.04→0.0966, max_dias 20→21"
+    },
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: "
     }
    ],
    "last_rebalance": null,
