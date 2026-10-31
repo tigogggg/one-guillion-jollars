@@ -106,7 +106,8 @@ The Worker is also the scheduler. A Cloudflare cron trigger (`*/5 * * * *`)
 calls its `scheduled()` handler, which dispatches `discord-daily.yml`,
 `opportunity-alerts.yml` and `weekly-summary.yml` at the times stored in the
 Worker's KV namespace (binding `CONFIG`), in Lisbon time. Defaults: tips and
-rankings 11:40 on weekdays, alerts 15:40/17:40/19:40 on weekdays, weekly
+rankings 11:40 on weekdays, alerts 15:40/17:40/19:40 on weekdays, alert
+follow-ups 22:30 on weekdays, weekly
 summary Saturday 10:00. Server admins change them with `/horario`.
 
 `scripts/weekly_summary.py` posts the week's index and sector changes, the
@@ -313,11 +314,21 @@ kind there; a failed copy only warns. DMs, slash-command replies and the
 👍/👎 vote reactions are not copied. The bot must first be added to that server
 with an OAuth invite (Manage Channels and Manage Roles).
 
-## Stand-by: bot health check and alert follow-ups
+## Alert follow-ups
 
-Built and tested but switched off: the Worker does not start these yet, and
-their workflows only run by hand (`workflow_dispatch`, available once merged
-into main). To switch one on, add it to the Worker's schedule.
+`scripts/alert_followups.py` (`alert-followups.yml`) is started by the Worker
+on weekdays at 22:30 Lisbon, after the US close (`/horario acompanhamento`).
+5 and 20 sessions after each opportunity alert it replies to the original
+message with the change since the alert, the best point and whether the stop
+was hit. Each milestone is posted once and marked in the alert history;
+milestones more than 3 sessions late are skipped, so switching it on did not
+post a backlog. A `testes` run posts to `🧪-testes` without marking anything.
+
+## Stand-by: bot health check
+
+Built and tested but switched off: the Worker does not start it yet, and its
+workflow only runs by hand (`workflow_dispatch`). To switch it on, add it to
+the Worker's schedule.
 
 - **Health check** (`scripts/health.py`, `health.yml`): on weekdays, whether
   each scheduled job (tips, agents, alerts, news) ran on main today and
@@ -325,9 +336,3 @@ into main). To switch one on, add it to the Worker's schedule.
   Posts only to a `🔧-estado` channel (key `estado` in `discord/channels.json`,
   not created yet) or to `🧪-testes` with the `testes` input; otherwise it
   just prints the card in the log.
-- **Alert follow-ups** (`scripts/alert_followups.py`, `alert-followups.yml`):
-  5 and 20 sessions after each opportunity alert, a reply to the original
-  message with the change since the alert, the best point and whether the stop
-  was hit. Each milestone is posted once and marked in the alert history;
-  milestones more than 3 sessions late are skipped, so switching it on does not
-  post a backlog. A `testes` run posts to `🧪-testes` without marking anything.

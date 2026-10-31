@@ -29,6 +29,7 @@ const DEFAULT_SCHEDULE = {
   dicas: "11:40",
   agentes: "12:15",
   alertas: ["15:40", "17:40", "19:40"],
+  acompanhamento: "22:30", // after the US close: how each alert did 5 and 20 sessions later
   noticias: ["12:00", "16:00", "20:30"],
   semanal: { dia: "sab", hora: "10:00" },
   treino: "07:30", // first weekday of each month: re-train the agents on the last 5 years
@@ -39,6 +40,7 @@ const WORKFLOWS = {
   dicas: "discord-daily.yml",
   agentes: "agents.yml",
   alertas: "opportunity-alerts.yml",
+  acompanhamento: "alert-followups.yml",
   noticias: "news.yml",
   semanal: "weekly-summary.yml",
   treino: "pretrain.yml",
@@ -53,6 +55,7 @@ const HELP = [
   "**O que aparece aqui** (hora de Lisboa; `/horario ver` mostra os horários atuais):",
   "• Dias úteis de manhã · 📊 Dicas do dia, 🏆 top 3 ações por setor e 📦 top 10 ETFs UCITS",
   "• Durante a sessão dos EUA · 🚨 alertas, só quando uma ação da lista rompe com volume",
+  "• Depois do fecho dos EUA · 🔁 como correu cada alerta 5 e 20 sessões depois (resposta ao alerta)",
   "• Dias úteis · 🤖 liga dos agentes: 16 estratégias com dinheiro fictício e preços reais",
   "• Dias úteis, 3 vezes · 📰 notícias que importam, lidas pelo Claude",
   "• Ao fim de semana · 🗓️ resumo semanal com o desempenho dos alertas",
@@ -135,6 +138,7 @@ export default {
       jobs.push(["dicas", schedule.dicas]);
       jobs.push(["agentes", schedule.agentes]);
       for (const t of schedule.alertas) jobs.push(["alertas", t]);
+      jobs.push(["acompanhamento", schedule.acompanhamento]);
       for (const t of schedule.noticias) jobs.push(["noticias", t]);
     }
     if (now.day === schedule.semanal.dia) jobs.push(["semanal", schedule.semanal.hora]);
@@ -192,7 +196,7 @@ async function scheduleCommand(env, sub) {
   const args = Object.fromEntries((sub?.options || []).map((o) => [o.name, String(o.value).trim()]));
   const action = sub?.name || "ver";
 
-  if (action === "dicas" || action === "agentes") {
+  if (action === "dicas" || action === "agentes" || action === "acompanhamento") {
     if (!isTime(args.hora)) return badTime(args.hora);
     schedule[action] = normaliseTime(args.hora);
   } else if (action === "alertas" || action === "noticias") {
@@ -215,6 +219,7 @@ async function scheduleCommand(env, sub) {
     `📊 Dicas do dia e rankings: **${schedule.dicas}** (dias úteis)`,
     `🤖 Liga dos agentes: **${schedule.agentes}** (dias úteis, depois das dicas)`,
     `🚨 Verificação de alertas: **${schedule.alertas.join(" · ")}** (dias úteis; a sessão dos EUA é das 14:30 às 21:00)`,
+    `🔁 Acompanhamento dos alertas: **${schedule.acompanhamento}** (dias úteis, depois do fecho dos EUA)`,
     `📰 Notícias: **${schedule.noticias.join(" · ")}** (dias úteis)`,
     `🗓️ Resumo semanal: **${DAY_NAMES[schedule.semanal.dia]} às ${schedule.semanal.hora}**`,
     `🧠 Re-treino dos agentes (últimos 5 anos): **1.º dia útil de cada mês às ${schedule.treino}**`,

@@ -1,4 +1,4 @@
-"""Follow-up of each opportunity alert, 5 and 20 sessions later (STAND-BY).
+"""Follow-up of each opportunity alert, 5 and 20 sessions later.
 
 Replies to the original alert message in 🚨-alertas-e-notícias with how each
 stock did since the alert: change, best point and whether the stop was hit.
@@ -6,7 +6,7 @@ Reads and marks state/history/alerts.json (shared through the Actions cache),
 so each milestone is posted once. Milestones more than a few sessions old are
 skipped, so switching this on does not post a backlog.
 
-Not scheduled by the Worker yet; start alert-followups.yml by hand to try it.
+Started by the Worker on weekdays after the US close (`/horario acompanhamento`).
 
     uv run python scripts/alert_followups.py --dry-run
 """

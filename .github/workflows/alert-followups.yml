@@ -1,6 +1,6 @@
-name: Acompanhamento dos alertas (stand-by)
+name: Acompanhamento dos alertas
 
-# STAND-BY: not started by the Worker yet. Replies to each opportunity alert
+# Started by the Worker on weekdays after the US close (22:30 Lisbon). Replies to each opportunity alert
 # 5 and 20 sessions later with how the stock did. Shares the alert history
 # cache with opportunity-alerts.yml, so it uses the same concurrency group.
 on:

@@ -99,6 +99,12 @@ COMMANDS = [
             },
             {
                 "type": SUB_COMMAND,
+                "name": "acompanhamento",
+                "description": "Hora do acompanhamento dos alertas (dias úteis, depois do fecho dos EUA)",
+                "options": [{"type": STRING, "name": "hora", "description": "HH:MM, ex.: 22:30", "required": True}],
+            },
+            {
+                "type": SUB_COMMAND,
                 "name": "noticias",
                 "description": "Horas da análise de notícias (dias úteis)",
                 "options": [{"type": STRING, "name": "horas", "description": "Separadas por vírgulas, ex.: 12:00,16:00,20:30", "required": True}],
@@ -396,6 +402,7 @@ def welcome_card() -> dict:
                 "**Dias úteis, 12:00 · 16:00 · 20:30** · 📰 Notícias que importam, lidas pelo Claude\n"
                 "**Dias úteis, 12:15** · 🤖 Liga dos agentes: 16 estratégias com dinheiro fictício e preços reais\n"
                 "**Dias úteis, 15:40 · 17:40 · 19:40** · 🚨 Alertas, só quando uma ação da lista rompe o pivot com volume\n"
+                "**Dias úteis, 22:30** · 🔁 Como correu cada alerta 5 e 20 sessões depois, em resposta ao alerta original\n"
                 "**Sábado, 10:00** · 🗓️ Resumo semanal: índices, setores, maiores subidas e quedas, e como correram os alertas\n"
                 "Os administradores podem mudar estas horas com `/horario`.",
             ),
