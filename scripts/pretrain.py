@@ -566,10 +566,13 @@ def main() -> int:
                                         "(one job of a parallel run)")
     parser.add_argument("--juntar", help="Merge the JSON results in this folder, then save, apply and report")
     parser.add_argument("--republicar", action="store_true", help="Only post the report of the saved results again")
+    parser.add_argument("--canal", default="agentes", choices=["agentes", "estado", "mercado"],
+                        help="Channel for --republicar (default: agentes)")
     args = parser.parse_args()
 
     if args.republicar:
-        return send(*report(json.loads(REPORT_PATH.read_text()), None), dry_run=args.dry_run, **route("agentes"), replace=REPORT_TITLE)
+        return send(*report(json.loads(REPORT_PATH.read_text()), None), dry_run=args.dry_run, **route(args.canal),
+                    replace=REPORT_TITLE)
 
     if args.juntar:
         parts = [json.loads(f.read_text()) for f in sorted(Path(args.juntar).rglob("*.json"))]

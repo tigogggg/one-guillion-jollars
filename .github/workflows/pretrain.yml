@@ -24,6 +24,11 @@ on:
         description: "Só voltar a publicar o relatório do último pré-treino (sem treinar)"
         type: boolean
         default: false
+      canal:
+        description: "Canal onde voltar a publicar o relatório (com só relatório)"
+        type: choice
+        options: [agentes, estado, mercado]
+        default: agentes
       testes:
         description: "Publicar o relatório no canal 🧪-testes"
         type: boolean
@@ -52,7 +57,8 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_TESTES: ${{ inputs.testes && '1' || '' }}
-        run: uv run python scripts/pretrain.py --republicar
+          CANAL: ${{ inputs.canal || 'agentes' }}
+        run: uv run python scripts/pretrain.py --republicar --canal "$CANAL"
 
   plan:
     if: ${{ !inputs.so_relatorio }}
