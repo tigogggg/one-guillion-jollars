@@ -87,14 +87,18 @@
     {
      "date": "2026-10-30",
      "note": "pré-treino: n 3→2, cada 5→29"
+    },
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: n 2→1, cada 29→5"
     }
    ],
    "last_rebalance": null,
    "last_decision": null,
    "started": "2026-10-30",
    "params": {
-    "n": 2,
-    "cada": 29
+    "n": 1,
+    "cada": 5
    }
   },
   "foguetao": {
@@ -121,15 +125,19 @@
     {
      "date": "2026-10-29",
      "note": "pré-treino: n 5→4, stop_pct 0.0789→0.2658, cada 21→17"
+    },
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: n 4→3, stop_pct 0.2658→0.1713, cada 17→11"
     }
    ],
    "last_rebalance": null,
    "last_decision": null,
    "started": "2026-10-30",
    "params": {
-    "n": 4,
-    "stop_pct": 0.2658,
-    "cada": 17
+    "n": 3,
+    "stop_pct": 0.1713,
+    "cada": 11
    }
   },
   "joalheiro": {
@@ -307,16 +315,20 @@
     {
      "date": "2026-10-30",
      "note": "pré-treino: n 4→3, risco_pct 0.01→0.0353, aperto_pct 0.06→0.0597, max_pos 0.3→0.1402"
+    },
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: n 3→4, risco_pct 0.0353→0.01, aperto_pct 0.0597→0.06, max_pos 0.1402→0.3"
     }
    ],
    "last_rebalance": null,
    "last_decision": null,
    "started": "2026-10-30",
    "params": {
-    "n": 3,
-    "risco_pct": 0.0353,
-    "aperto_pct": 0.0597,
-    "max_pos": 0.1402
+    "n": 4,
+    "risco_pct": 0.01,
+    "aperto_pct": 0.06,
+    "max_pos": 0.3
    }
   },
   "campeao": {
@@ -339,6 +351,10 @@
     {
      "date": "2026-10-29",
      "note": "pré-treino: por_setor 2→3, stop_pct 0.12→0.2853, cada 5→17"
+    },
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: por_setor 3→4, stop_pct 0.2853→0.16, cada 17→22"
     }
    ],
    "last_rebalance": null,
@@ -346,9 +362,9 @@
    "started": "2026-10-30",
    "params": {
     "setores": 2,
-    "por_setor": 3,
-    "stop_pct": 0.2853,
-    "cada": 17
+    "por_setor": 4,
+    "stop_pct": 0.16,
+    "cada": 22
    }
   },
   "pescador": {
@@ -375,17 +391,21 @@
     {
      "date": "2026-10-29",
      "note": "pré-treino: "
+    },
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: n 6→8, queda_pct 0.1493→0.0555, alvo_pct 0.0536→0.1771, stop_pct 0.2668→0.2876, max_dias 27→13"
     }
    ],
    "last_rebalance": null,
    "last_decision": null,
    "started": "2026-10-30",
    "params": {
-    "n": 6,
-    "queda_pct": 0.1493,
-    "alvo_pct": 0.0536,
-    "stop_pct": 0.2668,
-    "max_dias": 27
+    "n": 8,
+    "queda_pct": 0.0555,
+    "alvo_pct": 0.1771,
+    "stop_pct": 0.2876,
+    "max_dias": 13
    }
   },
   "kamikaze": {
@@ -408,15 +428,19 @@
     {
      "date": "2026-10-29",
      "note": "pré-treino: n 2→5, stop_pct 0.2→0.0743, cada 5→9"
+    },
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: n 5→9, stop_pct 0.0743→0.066, cada 9→19"
     }
    ],
    "last_rebalance": null,
    "last_decision": null,
    "started": "2026-10-30",
    "params": {
-    "n": 5,
-    "stop_pct": 0.0743,
-    "cada": 9,
+    "n": 9,
+    "stop_pct": 0.066,
+    "cada": 19,
     "ignora_resultados": true,
     "ignora_risco": true
    }
@@ -439,15 +463,19 @@
     {
      "date": "2026-10-29",
      "note": "pré-treino: "
+    },
+    {
+     "date": "2026-10-29",
+     "note": "pré-treino: n 2→5, salto_pct 0.0966→0.04, max_dias 21→20"
     }
    ],
    "last_rebalance": null,
    "last_decision": null,
    "started": "2026-10-30",
    "params": {
-    "n": 2,
-    "salto_pct": 0.0966,
-    "max_dias": 21
+    "n": 5,
+    "salto_pct": 0.04,
+    "max_dias": 20
    }
   }
  }
