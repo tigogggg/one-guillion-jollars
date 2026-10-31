@@ -63,6 +63,7 @@ const HELP = [
   "• `/mercado` · leitura do mercado agora",
   "• `/posicao capital entrada stop` · quantas ações comprar (ex.: `/posicao 10000 35.84 34.14`)",
   "• `/agentes` · liga dos agentes simulados (ou `/agentes nome` para ver um agente)",
+  "• `/estrategia nome` · como pensa um agente: regras, parâmetros, pré-treino e resultados",
   "• `/seguir adicionar NVDA` · a tua lista pessoal: avisos por mensagem privada (`/seguir lista`, `/seguir remover`)",
   "• `/horario` e `/agente` · horários e gestão dos agentes (só administradores)",
   "• `/ajuda` · esta mensagem",
@@ -99,11 +100,11 @@ export default {
     if (name === "posicao") {
       return json({ type: CHANNEL_MESSAGE, data: { content: positionSize(options), allowed_mentions: { parse: [] } } });
     }
-    if (name === "agentes" || name === "agente") {
+    if (name === "agentes" || name === "agente" || name === "estrategia") {
       const sub = name === "agente" ? interaction.data.options?.[0] : null;
       const args = sub
         ? { acao: sub.name, ...Object.fromEntries((sub.options || []).map((o) => [o.name, o.value])) }
-        : { acao: "ver", nome: String(options.nome || "") };
+        : { acao: name === "estrategia" ? "estrategia" : "ver", nome: String(options.nome || "") };
       ctx.waitUntil(startInteractionWorkflow(env, interaction, "agents.yml", { mode: "config", args: JSON.stringify(args) }));
       return json({ type: DEFERRED_CHANNEL_MESSAGE });
     }

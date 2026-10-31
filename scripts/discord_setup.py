@@ -117,6 +117,11 @@ COMMANDS = [
         "options": [{"type": STRING, "name": "nome", "description": "Nome do agente (vazio = liga completa)"}],
     },
     {
+        "name": "estrategia",
+        "description": "Como pensa cada agente: regras, parâmetros, pré-treino e resultados",
+        "options": [{"type": STRING, "name": "nome", "description": "Nome do agente (vazio = lista de todos)"}],
+    },
+    {
         "name": "agente",
         "description": "Gerir os agentes: criar, dar dinheiro, desativar",
         "default_member_permissions": MANAGE_SERVER,
@@ -318,6 +323,7 @@ def welcome_card() -> dict:
                 "`/etf VWCE` · tendência e gráfico de um ETF UCITS\n"
                 "`/mercado` · leitura do mercado agora\n"
                 "`/posicao capital entrada stop` · quantas ações comprar (ex.: 10000, 35.84, 34.14)\n"                "`/agentes` · liga dos agentes, ou `/agentes nome` para ver um agente\n"
+                "`/estrategia nome` · como pensa cada agente (regras, parâmetros, pré-treino)\n"
                 "`/seguir adicionar NVDA` · lista pessoal com avisos por mensagem privada\n"
                 "`/ajuda` · resumo destes comandos (só tu vês)\n"
                 "`/acao`, `/etf` e `/mercado` demoram 1-2 minutos: o bot mostra \"a pensar…\" e depois responde.",
