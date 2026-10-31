@@ -107,7 +107,7 @@ calls its `scheduled()` handler, which dispatches `discord-daily.yml`,
 `opportunity-alerts.yml` and `weekly-summary.yml` at the times stored in the
 Worker's KV namespace (binding `CONFIG`), in Lisbon time. Defaults: tips and
 rankings 11:40 on weekdays, alerts 15:40/17:40/19:40 on weekdays, alert
-follow-ups 22:30 on weekdays, weekly
+follow-ups 22:30 and health check 23:00 on weekdays, weekly
 summary Saturday 10:00. Server admins change them with `/horario`.
 
 `scripts/weekly_summary.py` posts the week's index and sector changes, the
@@ -324,15 +324,13 @@ was hit. Each milestone is posted once and marked in the alert history;
 milestones more than 3 sessions late are skipped, so switching it on did not
 post a backlog. A `testes` run posts to `🧪-testes` without marking anything.
 
-## Stand-by: bot health check
+## Bot health check (`🔧-estado`)
 
-Built and tested but switched off: the Worker does not start it yet, and its
-workflow only runs by hand (`workflow_dispatch`). To switch it on, add it to
-the Worker's schedule.
-
-- **Health check** (`scripts/health.py`, `health.yml`): on weekdays, whether
-  each scheduled job (tips, agents, alerts, news) ran on main today and
-  succeeded, plus how old the two breadth CSVs are (⚠️ after 2 weekdays).
-  Posts only to a `🔧-estado` channel (key `estado` in `discord/channels.json`,
-  not created yet) or to `🧪-testes` with the `testes` input; otherwise it
-  just prints the card in the log.
+`scripts/health.py` (`health.yml`) is started by the Worker on weekdays at
+23:00 Lisbon, after every other job (`/horario estado`). It checks whether
+each scheduled job (tips, agents, alerts, news, alert follow-ups) ran on main
+today and succeeded, plus how old the two breadth CSVs are (⚠️ after 2
+weekdays), and posts one card to the read-only `🔧-estado` channel (created
+with `discord_setup.py --canal-estado`, workflow input `canal_estado`). It
+never posts anywhere else: without that channel it only prints the card in the
+log, and the `testes` input sends it to `🧪-testes`.

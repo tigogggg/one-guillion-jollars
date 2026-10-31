@@ -7,6 +7,7 @@
                 write their ids to discord/channels.json
     --canal-testes  create the read-only 🧪-testes channel in that category; posts
                 go there instead of their usual channel when DISCORD_TESTES is set
+    --canal-estado  create the read-only 🔧-estado channel for the daily health check
     --espelho ID    create the same category and channels (plus #billions) in a
                 second server and write them to discord/mirror.json; every bot
                 post is then copied there
@@ -102,6 +103,12 @@ COMMANDS = [
                 "name": "acompanhamento",
                 "description": "Hora do acompanhamento dos alertas (dias úteis, depois do fecho dos EUA)",
                 "options": [{"type": STRING, "name": "hora", "description": "HH:MM, ex.: 22:30", "required": True}],
+            },
+            {
+                "type": SUB_COMMAND,
+                "name": "estado",
+                "description": "Hora da verificação do estado do bot (dias úteis, no fim do dia)",
+                "options": [{"type": STRING, "name": "hora", "description": "HH:MM, ex.: 23:00", "required": True}],
             },
             {
                 "type": SUB_COMMAND,
@@ -288,10 +295,11 @@ def create_channels() -> int:
 
 
 TEST_CHANNEL = ("testes", "🧪-testes", "Testes de funcionalidades novas antes de irem para os outros canais. Só o bot publica.")
+STATUS_CHANNEL = ("estado", "🔧-estado", "Verificação diária do bot: as tarefas do dia correram e os dados estão em dia? Só o bot publica.")
 
 
-def create_test_channel() -> int:
-    """Create (or reuse) the read-only 🧪-testes channel in the category and add it to discord/channels.json.
+def create_test_channel(spec: tuple[str, str, str] = TEST_CHANNEL) -> int:
+    """Create (or reuse) one extra read-only channel (🧪-testes by default) in the category and add it to discord/channels.json.
 
     Leaves the other channels alone; needs the category from --canais first.
     """
@@ -300,7 +308,7 @@ def create_test_channel() -> int:
         return 1
     saved = json.loads(CHANNELS_PATH.read_text())
     guild, category = saved["guild_id"], saved["category_id"]
-    key, name, topic = TEST_CHANNEL
+    key, name, topic = spec
     bot = discord_api("GET", "/users/@me")["id"]
     channel = next((c for c in discord_api("GET", f"/guilds/{guild}/channels") if c["type"] == 0 and c["name"] == name), None)
     if channel is None:
@@ -435,6 +443,7 @@ def main() -> int:
     parser.add_argument("--welcome", action="store_true", help="Post the welcome card")
     parser.add_argument("--canais", action="store_true", help="Create the 📈 FINANÇAS category and channels")
     parser.add_argument("--canal-testes", action="store_true", help="Create the 🧪-testes channel (for DISCORD_TESTES)")
+    parser.add_argument("--canal-estado", action="store_true", help="Create the 🔧-estado channel (health check)")
     parser.add_argument("--espelho", metavar="GUILD_ID", help="Create the channels in a second server and copy posts there")
     parser.add_argument("--diagnostico", action="store_true", help="Show the bot's server-wide permissions")
     parser.add_argument("--dry-run", action="store_true", help="Print the welcome card instead of posting it")
@@ -459,6 +468,12 @@ def main() -> int:
             status = status or create_test_channel()
         except (RuntimeError, KeyError, requests.RequestException) as e:
             print(f"::error title=Canal de testes::{e}")
+            status = 1
+    if args.canal_estado:
+        try:
+            status = status or create_test_channel(STATUS_CHANNEL)
+        except (RuntimeError, KeyError, requests.RequestException) as e:
+            print(f"::error title=Canal de estado::{e}")
             status = 1
     if args.espelho:
         try:

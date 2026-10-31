@@ -30,6 +30,7 @@ const DEFAULT_SCHEDULE = {
   agentes: "12:15",
   alertas: ["15:40", "17:40", "19:40"],
   acompanhamento: "22:30", // after the US close: how each alert did 5 and 20 sessions later
+  estado: "23:00", // health check, after every other weekday job
   noticias: ["12:00", "16:00", "20:30"],
   semanal: { dia: "sab", hora: "10:00" },
   treino: "07:30", // first weekday of each month: re-train the agents on the last 5 years
@@ -41,6 +42,7 @@ const WORKFLOWS = {
   agentes: "agents.yml",
   alertas: "opportunity-alerts.yml",
   acompanhamento: "alert-followups.yml",
+  estado: "health.yml",
   noticias: "news.yml",
   semanal: "weekly-summary.yml",
   treino: "pretrain.yml",
@@ -139,6 +141,7 @@ export default {
       jobs.push(["agentes", schedule.agentes]);
       for (const t of schedule.alertas) jobs.push(["alertas", t]);
       jobs.push(["acompanhamento", schedule.acompanhamento]);
+      jobs.push(["estado", schedule.estado]);
       for (const t of schedule.noticias) jobs.push(["noticias", t]);
     }
     if (now.day === schedule.semanal.dia) jobs.push(["semanal", schedule.semanal.hora]);
@@ -196,7 +199,7 @@ async function scheduleCommand(env, sub) {
   const args = Object.fromEntries((sub?.options || []).map((o) => [o.name, String(o.value).trim()]));
   const action = sub?.name || "ver";
 
-  if (action === "dicas" || action === "agentes" || action === "acompanhamento") {
+  if (action === "dicas" || action === "agentes" || action === "acompanhamento" || action === "estado") {
     if (!isTime(args.hora)) return badTime(args.hora);
     schedule[action] = normaliseTime(args.hora);
   } else if (action === "alertas" || action === "noticias") {
@@ -222,6 +225,7 @@ async function scheduleCommand(env, sub) {
     `🔁 Acompanhamento dos alertas: **${schedule.acompanhamento}** (dias úteis, depois do fecho dos EUA)`,
     `📰 Notícias: **${schedule.noticias.join(" · ")}** (dias úteis)`,
     `🗓️ Resumo semanal: **${DAY_NAMES[schedule.semanal.dia]} às ${schedule.semanal.hora}**`,
+    `🔧 Verificação do estado do bot: **${schedule.estado}** (dias úteis, no canal 🔧-estado)`,
     `🧠 Re-treino dos agentes (últimos 5 anos): **1.º dia útil de cada mês às ${schedule.treino}**`,
     "-# As análises arrancam até 5 minutos depois da hora marcada e demoram alguns minutos a chegar.",
   ].join("\n");

@@ -1,6 +1,6 @@
-name: Estado do bot (stand-by)
+name: Estado do bot
 
-# STAND-BY: not started by the Worker yet. Checks that today's jobs ran and the
+# Started by the Worker on weekdays at 23:00 Lisbon, after every other job. Checks that today's jobs ran and the
 # breadth data is fresh, and posts to 🔧-estado (or 🧪-testes with "testes").
 # Without either channel it only prints the result in the log.
 on:

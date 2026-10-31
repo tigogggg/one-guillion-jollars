@@ -1,11 +1,11 @@
-"""Daily health check of the bot, for the 🔧-estado channel (STAND-BY).
+"""Daily health check of the bot, for the 🔧-estado channel.
 
 - Did today's scheduled jobs run on main, and did they succeed? (GitHub API)
 - Is the breadth data fresh? (the two public CSVs the daily tips depend on)
 
 Posts one short card to the "estado" channel of discord/channels.json and
-never anywhere else: until that channel exists the check only prints. Not
-scheduled by the Worker yet; start health.yml by hand to try it.
+never anywhere else: until that channel exists the check only prints. Started
+by the Worker on weekdays after every other job (`/horario estado`).
 
     uv run python scripts/health.py --dry-run
 """
@@ -31,6 +31,7 @@ WEEKDAY_JOBS = [
     ("agents.yml", "Liga dos agentes", 1),
     ("opportunity-alerts.yml", "Alertas", 1),
     ("news.yml", "Notícias", 1),
+    ("alert-followups.yml", "Acompanhamento dos alertas", 1),
 ]
 DATA_SOURCES = [
     ("Breadth (uptrend)", "https://raw.githubusercontent.com/tradermonty/uptrend-dashboard/main/data/uptrend_ratio_timeseries.csv", "date"),
