@@ -136,16 +136,16 @@ export function chartPage(data, upcoming, newer, extras = {}) {
   const body = `
 ${banner}
 <header>
-  <h1>${esc(portal ? "🏟️ Portal CoutoTrading" : data.title)}</h1>
+  <h1>${esc(portal ? "🏟️ One Guillion Jollars" : data.title)}</h1>
   <p class="muted">${esc(portal ? data.title + " · " + (data.subtitle || "") : data.subtitle || "")}</p>
   <p class="muted small">Dados da liga de <span id="updated"></span> (hora de Lisboa) · simulação com dinheiro fictício e preços reais · ferramenta educativa, não é recomendação de compra</p>
 </header>
 <nav class="tabs" id="tabs">${tabs.map(([k, label], i) => `<button class="tab${i ? "" : " on"}" data-tab="${k}">${label}</button>`).join("")}</nav>
 <section class="race" id="race" data-tab="corrida">
-  <div class="marquee"><span>🏁 GRANDE PRÉMIO DOS AGENTES 🏁</span></div>
+  <div class="marquee"><span>🏁 Grande Prémio dos Agentes 🏁</span></div>
   <div class="hud">
-    <div>DIA <b id="race-date">—</b></div>
-    <div>LÍDER <b id="race-leader">—</b></div>
+    <div>Dia <b id="race-date">—</b></div>
+    <div>Líder <b id="race-leader">—</b></div>
     <div class="controls"><button id="race-play" class="btn">▶ VER A CORRIDA</button><button id="race-speed" class="btn alt">1×</button></div>
   </div>
   <div id="track" class="track"></div>
@@ -190,7 +190,7 @@ const MARKET = ${safeJson(extras.market || null)};
 const PROPOSALS = ${safeJson(extras.proposals || null)};
 ${CLIENT}
 </script>`;
-  return page(portal ? "Portal CoutoTrading" : data.title, body, `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  return page(portal ? "One Guillion Jollars" : data.title, body, `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script src="${PLOTLY}"></script>`);
 }
@@ -622,7 +622,7 @@ const store = { get(k, d) { try { const v = localStorage.getItem(k); return v ==
       if (place !== 0 && crown) crown.remove();
     });
     $("race-date").textContent = fmtDay(frames[f]);
-    $("race-leader").textContent = now.length ? (agentOf(now[0].s.name)?.emoji || "") + " " + now[0].s.name.toUpperCase() : "—";
+    $("race-leader").textContent = now.length ? (agentOf(now[0].s.name)?.emoji || "") + " " + now[0].s.name : "—";
     $("board").innerHTML = now.map((r, k) => {
       const a = agentOf(r.s.name);
       return '<li data-name="' + esc(r.s.name) + '"><span class="pos">' + (k + 1) + 'º</span><span>' + esc(a ? a.emoji : "🏇") + '</span><span class="nm">' +

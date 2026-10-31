@@ -102,7 +102,7 @@ export default {
       return portfolioRoute(request, env, wallet[1], wallet[2] || "");
     }
     if (request.method !== "POST") {
-      return new Response("CoutoTrading bot: endpoint de interações do Discord.", { status: 200 });
+      return new Response("One Guillion Jollars: endpoint de interações do Discord.", { status: 200 });
     }
     const body = await request.text();
     if (!(await isValidSignature(request, body, env.DISCORD_PUBLIC_KEY))) {
@@ -154,7 +154,7 @@ export default {
         await env.CONFIG.put("portal:token", JSON.stringify(token));
       }
       const content = token
-        ? `🏟️ **Portal CoutoTrading**: corrida e fichas dos agentes, notícias, oportunidades com score de segurança e agenda.\n${new URL(request.url).origin}/p/${token}\n-# Link do servidor: partilha só com os membros.`
+        ? `🏟️ **One Guillion Jollars**: corrida e fichas dos agentes, notícias, oportunidades com score de segurança e agenda.\n${new URL(request.url).origin}/p/${token}\n-# Link do servidor: partilha só com os membros.`
         : "⚠️ O portal aparece depois da próxima liga dos agentes (dias úteis às 12:15).";
       return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
     }

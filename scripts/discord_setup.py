@@ -327,7 +327,7 @@ def portal_card(url: str | None, sched: dict, channels: dict[str, str]) -> dict:
     alerts, news = " · ".join(sched["alertas"]), " · ".join(sched["noticias"])
     weekly = sched["semanal"]
     return embed(
-        "🏟️ Portal CoutoTrading",
+        "🏟️ One Guillion Jollars",
         "**O portal é o centro**: tudo o que o bot sabe, numa página.\n"
         "🏁 corrida e fichas completas dos 16 agentes · 📰 notícias que importam · 🎯 oportunidades de compra e venda com "
         "**score de segurança** explicado · ⏱️ contagem para cada atualização · 💼 a tua carteira pessoal\n\n"
@@ -348,7 +348,7 @@ def portal_card(url: str | None, sched: dict, channels: dict[str, str]) -> dict:
              "3. Escreve `/` em qualquer canal para ver os comandos (`/acao`, `/agentes`, `/limites`…)."),
         ],
         footer="Ferramenta educativa com dinheiro fictício nos agentes. Nada aqui é recomendação de compra.",
-    ) if url else embed("🏟️ Portal CoutoTrading", "O portal ainda não está ligado (faltam as credenciais da Cloudflare).", color=PINK)
+    ) if url else embed("🏟️ One Guillion Jollars", "O portal ainda não está ligado (faltam as credenciais da Cloudflare).", color=PINK)
 
 
 def create_portal() -> int:
