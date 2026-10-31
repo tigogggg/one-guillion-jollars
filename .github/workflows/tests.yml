@@ -1,0 +1,19 @@
+name: Testes
+
+# Runs the repo's own tests (tests/) on every pull request. The skills' tests
+# under skills/ are upstream's and some need files that are not copied here.
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run python -m pytest tests -q
