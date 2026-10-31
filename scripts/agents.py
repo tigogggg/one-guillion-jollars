@@ -125,6 +125,7 @@ class Market:
     closes: dict[str, float] | None = None  # as_of closes, precomputed by the backtest for speed
     news: dict[str, dict] = field(default_factory=dict)  # news.py signals: {symbol: {score, importance, items}}
     league: dict[str, tuple[dict, dict]] = field(default_factory=dict)  # {agent id: (cfg, portfolio)}, for meta-agents
+    priors: dict[str, dict] = field(default_factory=dict)  # pre-training: {strategy: {zone: avg daily excess return}}
 
 
 # --------------------------------------------------------------------------
@@ -218,6 +219,10 @@ def load_market() -> Market:
     signals = WATCHLIST_DIR.parent / "news" / "signals.json"
     if signals.exists():
         market.news = json.loads(signals.read_text())
+    pretrained = REPO_AGENTS / "pretrain.json"
+    if pretrained.exists():
+        market.priors = {s: r["by_zone"] for s, r in json.loads(pretrained.read_text())["strategies"].items()
+                         if r.get("by_zone")}
     vcp = WATCHLIST_DIR / "vcp-latest.json"
     if vcp.exists():
         market.vcp = {
@@ -436,6 +441,8 @@ def score_day(port: dict, mkt: Market) -> int | None:
         prev = hist[-1]
         day = (eq - (port["deposits"] - prev["deposits"])) / prev["equity"] - 1 if prev["equity"] else 0.0
         excess = day - benchmark_return(mkt, date.fromisoformat(prev["date"]), mkt.as_of)
+        zone = port.setdefault("zone_stats", {}).setdefault(mkt.zone, [0.0, 0])  # [sum of excess, days], for the Maestro
+        zone[0], zone[1] = round(zone[0] + excess, 6), zone[1] + 1
         pts = (max(-10, min(10, round(excess * 1000)))
                + (PROFIT_BONUS if eq > port["deposits"] else 0)
                - round(max(0.0, dd - DD_FREE) * DD_PENALTY))
@@ -789,15 +796,34 @@ def recent_return(port: dict, sessions: int) -> float | None:
     return (h[-1]["equity"] - h[0]["equity"] - (h[-1]["deposits"] - h[0]["deposits"])) / h[0]["equity"]
 
 
+ZONE_MIN_DAYS = 15  # live days in a zone before the Maestro trusts an agent's record there over its pre-training
+
+
+def regime_score(mkt: Market, cfg: dict, port: dict, window: int) -> float | None:
+    """How well an agent does in the current market zone: average daily return above the S&P 500.
+
+    Live record in this zone when it has ZONE_MIN_DAYS, else the pre-training average for its strategy in this
+    zone, else its recent return.
+    """
+    total, days = port.get("zone_stats", {}).get(mkt.zone, [0.0, 0])
+    if days >= ZONE_MIN_DAYS:
+        return total / days
+    prior = mkt.priors.get(cfg["strategy"], {}).get(mkt.zone)
+    if prior is not None:
+        return prior
+    recent = recent_return(port, window)
+    return None if recent is None else recent / max(window, 1)
+
+
 def s_maestro(cfg, port, mkt, p):
-    """Central coordinator: copy the combined portfolio of the agents with the best recent results."""
+    """Central coordinator: copy the agents that do best in the current market regime."""
     if not due(port, mkt, p["cada"]):
         return []
-    ranked = sorted(((recent_return(o, p["janela"]), c, o) for c, o in peers(mkt, cfg)),
+    ranked = sorted(((regime_score(mkt, c, o, p["janela"]), c, o) for c, o in peers(mkt, cfg)),
                     key=lambda x: -999 if x[0] is None else x[0], reverse=True)
-    leaders = [(c, o) for r, c, o in ranked[: p["lideres"]] if r is not None and r > 0]
+    leaders = [(c, o) for r, c, o in ranked[: p["lideres"]] if r is not None and r > 0 and o["positions"]]
     if not leaders:
-        return [order_sell(s, "nenhum agente a ganhar") for s in port["positions"]]
+        return [order_sell(s, f"nenhum agente bate o S&P 500 em zona {mkt.zone}") for s in port["positions"]]
     weights: dict[str, float] = {}
     for _, other in leaders:
         other_eq = equity(other, mkt)
@@ -811,7 +837,7 @@ def s_maestro(cfg, port, mkt, p):
     names = ", ".join(c["name"] for c, _ in leaders)
     for s in targets:
         if s not in port["positions"]:
-            orders.append(order_buy(s, eq * weights[s] * scale, f"segue {names}"))
+            orders.append(order_buy(s, eq * weights[s] * scale, f"zona {mkt.zone}: segue {names}"))
     return orders
 
 
@@ -830,7 +856,7 @@ STRATEGIES = {
     "catalisador": (s_catalisador, "Notícias positivas confirmadas pelo preço", {"n": 5, "limiar": 3, "stop_pct": 0.08, "max_dias": 15}),
     "cetico": (s_cetico, "Más notícias que o mercado ignorou", {"n": 4, "limiar": 3, "stop_pct": 0.06, "alvo_pct": 0.08, "max_dias": 10}),
     "conselho": (s_conselho, "Compra o que vários agentes apoiam", {"n": 6, "min_votos": 2, "stop_pct": 0.10}),
-    "maestro": (s_maestro, "Copia os agentes com melhores resultados recentes", {"n": 8, "lideres": 3, "janela": 20, "cada": 5}),
+    "maestro": (s_maestro, "Copia os agentes que melhor se portam no regime de mercado atual", {"n": 8, "lideres": 3, "janela": 20, "cada": 5}),
     "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5, "ignora_resultados": True, "ignora_risco": True}),
 }
 

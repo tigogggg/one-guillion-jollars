@@ -213,7 +213,7 @@
         "janela": 20,
         "cada": 5
       },
-      "description": "Coordenador: copia a carteira combinada dos 3 agentes com melhores resultados nas últimas 20 sessões."
+      "description": "Coordenador por regime: copia os 3 agentes que mais batem o S&P 500 no tipo de mercado atual (alta, neutra, cautelosa, queda)."
     }
   ]
 }

@@ -320,3 +320,21 @@ def test_every_strategy_has_an_explanation():
     assert set(strategy_docs.DOCS) == set(agents.STRATEGIES)
     for key, (_, _, default) in agents.STRATEGIES.items():
         assert "«" not in "".join(strategy_docs.describe(key, default)), key  # every placeholder is a real parameter
+
+
+def test_maestro_follows_the_best_agents_in_the_current_zone():
+    mkt = league_market({"bull": ["NVDA"], "bear": ["XLU"]},
+                        {"bull": [1000, 1010, 1020, 1030, 1040, 1050], "bear": [1000] * 6})
+    mkt.zone = "Queda"
+    mkt.league["bull"][1]["zone_stats"] = {"Queda": [-0.02, 20]}  # loses to the index when the market falls
+    mkt.league["bear"][1]["zone_stats"] = {"Queda": [0.03, 20]}  # beats it when the market falls
+    orders = agents.s_maestro({"id": "me"}, new_portfolio(1000, DATES[0].date()), mkt,
+                              {"n": 8, "lideres": 1, "janela": 20, "cada": 5})
+    assert [o["symbol"] for o in orders] == ["XLU"] and "zona Queda" in orders[0]["reason"]
+    # without enough live days in the zone, the pre-training record decides
+    for _, port in mkt.league.values():
+        port["zone_stats"] = {}
+    mkt.priors = {"foguetao": {"Queda": 0.001}}
+    orders = agents.s_maestro({"id": "me"}, new_portfolio(1000, DATES[0].date()), mkt,
+                              {"n": 8, "lideres": 2, "janela": 20, "cada": 5})
+    assert {o["symbol"] for o in orders} == {"NVDA", "XLU"}
