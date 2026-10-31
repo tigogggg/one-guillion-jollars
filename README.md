@@ -154,6 +154,27 @@ crises, Monte Carlo and points per year instead of holdings. The static image
 colours only the top 5 and the Indexador; the rest are faint grey. An older
 page links to the newest one of its kind (`chart-latest:<kind>`).
 
+**Portal (`/portal`) and personal portfolios (`/carteira`).** `/portal` gives
+the server's private portal link (`/p/<token>`, token in KV `portal:token`):
+tabs for the race and chart, every agent's full card plus an overview table,
+the news of the last 36 h with filters (`portal:news`, written by
+`scripts/news.py`), buy and sell opportunities with a safety score
+(`portal:market`, written by the agents' daily run with
+`scripts/opportunities.py`), the schedule countdowns and how to use
+`/carteira`. The safety score (0-100) adds eight published criteria: trend 25,
+volatility 20, distance to the 52-week high 15, liquidity 10, company quality
+15, results date 5, news 5, market zone 5 (rules in `opportunities.CRITERIA`
+and on the page).
+
+`/carteira` works only inside the server, so only its members get one: each
+member gets one private link (`/c/<token>`, KV `portfolio-user:<discord id>`
+and `portfolio:<token>`), `novo_link:True` replaces it.
+`discord-bot/portfolio.js` stores their buys and sells (validated: the ticker
+must exist on Yahoo Finance and a sale needs the shares on that date), values
+the holdings with Yahoo Finance quotes every minute (average cost, gain per
+position, today's change, realised gains, totals in euros at the current
+rate) and draws value versus money invested since the first purchase.
+
 Only the latest chart of each kind stays in `🤖-agentes`: after posting the
 daily league, the monthly report or the pre-training report, the bot deletes
 its own older posts with the same title in that channel (last 100 messages;

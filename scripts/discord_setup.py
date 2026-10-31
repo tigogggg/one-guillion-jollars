@@ -30,7 +30,7 @@ import requests
 
 from discord_post import BLUE, CHANNELS_PATH, MIRROR_PATH, embed, send
 
-SUB_COMMAND, STRING, NUMBER = 1, 3, 10
+SUB_COMMAND, STRING, BOOLEAN, NUMBER = 1, 3, 5, 10
 MANAGE_SERVER = "32"  # permission bit: only server admins see /horario
 # Mirrors agents.STRATEGIES (not imported: that module pulls in pandas and yfinance).
 STRATEGY_CHOICES = [
@@ -66,6 +66,12 @@ COMMANDS = [
         "options": [{"type": STRING, "name": "ticker", "description": "Ex.: VWCE, SXR8, VVSM", "required": True}],
     },
     {"name": "mercado", "description": "Leitura do mercado agora: breadth, exposição sugerida e setores"},
+    {"name": "portal", "description": "Link do portal: corrida dos agentes, notícias, oportunidades e agenda"},
+    {
+        "name": "carteira",
+        "description": "A tua carteira pessoal: regista compras e vendas e acompanha o desempenho (link privado)",
+        "options": [{"type": BOOLEAN, "name": "novo_link", "description": "Trocar o link (o antigo deixa de funcionar)"}],
+    },
     {"name": "limites", "description": "Estado da leitura de notícias e das fontes de dados das ações, e limites gastos"},
     {
         "name": "posicao",
@@ -433,6 +439,8 @@ def welcome_card() -> dict:
                 "`/posicao capital entrada stop` · quantas ações comprar (ex.: 10000, 35.84, 34.14)\n"                "`/agentes` · liga dos agentes, ou `/agentes nome` para ver um agente\n"
                 "`/estrategia nome` · como pensa cada agente (regras, parâmetros, pré-treino)\n"
                 "`/seguir adicionar NVDA` · lista pessoal com avisos por mensagem privada\n"
+                "`/portal` · corrida dos agentes, notícias, oportunidades com score de segurança e agenda\n"
+                "`/carteira` · a tua carteira pessoal (compras, vendas e desempenho), com link privado\n"
                 "`/ajuda` · resumo destes comandos (só tu vês)\n"
                 "`/acao`, `/etf`, `/mercado` e `/limites` demoram 1-2 minutos: o bot mostra \"a pensar…\" e depois responde.",
             ),

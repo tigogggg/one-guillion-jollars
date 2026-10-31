@@ -32,6 +32,17 @@ export async function chartResponse(env, id, schedule) {
   return html(chartPage(data, upcoming, latest && latest !== id ? latest : null));
 }
 
+export async function portalResponse(env, token, schedule) {
+  const saved = await env.CONFIG.get("portal:token", "json");
+  if (!saved || saved !== token) return html(page("Link inválido", "<p class='muted'>Este link do portal não é válido. Pede o link atual com /portal no Discord.</p>"), 404);
+  // the latest league page; until there is one, the latest pre-training race
+  const latest = (await env.CONFIG.get("chart-latest:liga", "json")) || (await env.CONFIG.get("chart-latest:pretreino", "json"));
+  const data = (latest && (await env.CONFIG.get(`chart:${latest}`, "json"))) ||
+    { title: "Liga dos agentes", subtitle: "ainda sem dados", updated: new Date().toISOString(), series: [], agents: [] };
+  const [news, market] = await Promise.all([env.CONFIG.get("portal:news", "json"), env.CONFIG.get("portal:market", "json")]);
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market }));
+}
+
 // ---------------------------------------------------------------------------
 // Schedule: next run of each job, as epoch milliseconds
 // ---------------------------------------------------------------------------
@@ -82,23 +93,23 @@ export function nextRuns(schedule, now) {
 // Page
 // ---------------------------------------------------------------------------
 
-function html(body, status = 200) {
+export function html(body, status = 200) {
   return new Response(body, {
     status,
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex" },
   });
 }
 
-function esc(s) {
+export function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
 // JSON inside <script>: no "</script>" or line separators can break out.
-function safeJson(value) {
+export function safeJson(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
 
-function page(title, body, head = "") {
+export function page(title, body, head = "") {
   return `<!doctype html>
 <html lang="pt-PT">
 <head>
@@ -113,18 +124,24 @@ ${head}
 </html>`;
 }
 
-function chartPage(data, upcoming, newer) {
+export function chartPage(data, upcoming, newer, extras = {}) {
   const banner = newer
     ? `<a class="banner" href="/g/${esc(newer)}">🔄 Há uma versão mais recente deste gráfico · abrir</a>`
     : "";
+  const portal = !!extras.portal;
+  const tabs = [["corrida", "🏁 Corrida"], ["agentes", "🧾 Agentes"]]
+    .concat(portal ? [["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
+    .concat([["agenda", "⏱️ Agenda"]])
+    .concat(portal ? [["carteira", "💼 A tua carteira"]] : []);
   const body = `
 ${banner}
 <header>
-  <h1>${esc(data.title)}</h1>
-  <p class="muted">${esc(data.subtitle || "")}</p>
-  <p class="muted small">Dados de <span id="updated"></span> (hora de Lisboa) · simulação com dinheiro fictício e preços reais · não é recomendação de compra</p>
+  <h1>${esc(portal ? "🏟️ Portal CoutoTrading" : data.title)}</h1>
+  <p class="muted">${esc(portal ? data.title + " · " + (data.subtitle || "") : data.subtitle || "")}</p>
+  <p class="muted small">Dados da liga de <span id="updated"></span> (hora de Lisboa) · simulação com dinheiro fictício e preços reais · ferramenta educativa, não é recomendação de compra</p>
 </header>
-<section class="race" id="race">
+<nav class="tabs" id="tabs">${tabs.map(([k, label], i) => `<button class="tab${i ? "" : " on"}" data-tab="${k}">${label}</button>`).join("")}</nav>
+<section class="race" id="race" data-tab="corrida">
   <div class="marquee"><span>🏁 GRANDE PRÉMIO DOS AGENTES 🏁</span></div>
   <div class="hud">
     <div>DIA <b id="race-date">—</b></div>
@@ -134,28 +151,44 @@ ${banner}
   <div id="track" class="track"></div>
   <input type="range" id="race-scrub" min="0" value="0" aria-label="Dia da corrida">
   <p class="muted small">Cada corredor avança com a rentabilidade do agente; a meta é o melhor resultado da corrida. Toca num corredor para abrir a ficha dele.</p>
-  <h2 class="pixel">🏆 Placar</h2>
+  <h2>🏆 Placar</h2>
   <ol id="board" class="board"></ol>
-</section>
-<section>
-  <h2>⏱️ Próximas atualizações</h2>
-  <div id="countdowns" class="grid"></div>
-</section>
-<section>
+  <h2>📈 Gráfico</h2>
   <div id="chart" class="chart"></div>
-  <p class="muted small">Toca numa linha da legenda para a esconder ou mostrar, toca duas vezes para ver só essa. Arrasta para fazer zoom; duplo toque no gráfico volta ao início. Toca numa linha para abrir a ficha do agente.</p>
+  <p class="muted small">Toca numa linha da legenda para a esconder ou mostrar, toca duas vezes para ver só essa. Arrasta para fazer zoom; duplo toque volta ao início.</p>
 </section>
-<section id="agents-section">
-  <h2>🧾 Agentes</h2>
+<section id="agents-section" data-tab="agentes" hidden>
+  <h2>🧾 Todos os agentes</h2>
+  <div id="overview"></div>
+  <h2>🔎 Ficha do agente</h2>
   <div id="chips" class="chips"></div>
   <div id="detail"></div>
 </section>
+${portal ? `<section data-tab="noticias" hidden><div id="news"></div></section>
+<section data-tab="oportunidades" hidden><div id="opps"></div></section>` : ""}
+<section data-tab="agenda" hidden>
+  <h2>⏱️ Próximas atualizações</h2>
+  <div id="countdowns" class="grid"></div>
+  <p class="muted small">Horários de Lisboa, os mesmos do /horario no Discord. Cada tarefa demora alguns minutos a chegar.</p>
+</section>
+${portal ? `<section data-tab="carteira" hidden>
+  <h2>💼 A tua carteira</h2>
+  <div class="panel prose">
+    <p>Cada pessoa pode registar as suas compras e vendas reais e acompanhar o desempenho com preços quase em tempo real.</p>
+    <p>1. No Discord, escreve <code>/carteira</code>. O bot responde <b>só para ti</b> com o teu link privado.</p>
+    <p>2. Abre o link e adiciona as compras e vendas: ação ou ETF, data, quantidade, preço e comissão.</p>
+    <p>3. A página mostra o valor atual, o ganho de cada posição e da carteira, o resultado das vendas e a evolução desde a primeira compra.</p>
+    <p class="muted small">Quem tiver o teu link vê e edita a tua carteira: não o partilhes. Para trocar de link, usa <code>/carteira novo</code>.</p>
+  </div>
+</section>` : ""}
 <script>
 const DATA = ${safeJson(data)};
 const UPCOMING = ${safeJson(upcoming)};
+const NEWS = ${safeJson(extras.news || null)};
+const MARKET = ${safeJson(extras.market || null)};
 ${CLIENT}
 </script>`;
-  return page(data.title, body, `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  return page(portal ? "Portal CoutoTrading" : data.title, body, `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script src="${PLOTLY}"></script>`);
 }
@@ -196,6 +229,21 @@ h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem
 .board li .pos { font-family:var(--pixel); font-size:.65rem; width:34px; color:var(--gold); }
 .board li:nth-child(1) { border-color:var(--gold); box-shadow:0 0 10px rgba(255,225,77,.45); }
 .board li:nth-child(2) { border-color:#c0c7d6; } .board li:nth-child(3) { border-color:#d08a4a; }
+.tabs { position:sticky; top:0; z-index:5; display:flex; gap:6px; overflow-x:auto; padding:8px 0; margin:6px 0 4px; background:linear-gradient(var(--bg) 70%,transparent); }
+.tab { flex:none; font-family:var(--pixel); font-size:.55rem; background:var(--card); color:var(--fg); border:2px solid var(--line); border-radius:6px; padding:9px 10px; cursor:pointer; }
+.tab.on { border-color:var(--accent); color:#fff; box-shadow:0 0 10px rgba(255,46,136,.5); }
+.news { display:grid; gap:8px; } .news article { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--line); border-radius:8px; padding:10px 12px; }
+.news article.pos { border-left-color:var(--up); } .news article.neg { border-left-color:var(--down); }
+.news .meta { color:var(--muted); font-size:.8rem; } .news a { color:var(--neon); }
+.filters { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; } .filters input, .filters select { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:7px 9px; font:inherit; }
+.opp { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; }
+.opp .top { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:baseline; } .opp .sym { font-weight:700; font-size:1.05rem; }
+.score { font-family:var(--pixel); font-size:.62rem; padding:5px 7px; border-radius:4px; color:#0b0820; }
+.score.Alta { background:var(--up); } .score.Média { background:var(--gold); } .score.Baixa { background:#ff9f43; } .score.Muito { background:var(--down); }
+.bar { height:6px; background:#0b0820; border-radius:3px; overflow:hidden; } .bar i { display:block; height:100%; background:var(--neon); }
+details summary { cursor:pointer; color:var(--neon); margin-top:6px; }
+.cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:10px; }
+@media (max-width:640px) { .cards { grid-template-columns:1fr; } }
 .board li .nm { flex:1; font-weight:600; } .board li .val { font-family:var(--pixel); font-size:.62rem; }
 main { max-width:1100px; margin:0 auto; padding:16px; }
 h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 0 .6rem; } h3 { font-size:1rem; margin:1.1rem 0 .4rem; }
@@ -365,9 +413,99 @@ function show(i, scroll) {
   document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", +c.dataset.i === i));
   $("detail").innerHTML = '<div class="panel"><h2>' + esc(a.emoji + " " + a.name) + '</h2>' +
     (a.backtest ? backtestHtml(a) : liveHtml(a)) + strategyHtml(a.strategy) + '</div>';
-  if (scroll) $("detail").scrollIntoView({ behavior: "smooth", block: "start" });
+  if (scroll) { openTab("agentes"); $("detail").scrollIntoView({ behavior: "smooth", block: "start" }); }
 }
 if (agents.length) show(0, false);
+
+// ---- tabs ----
+function openTab(name) {
+  document.querySelectorAll("#tabs .tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
+  document.querySelectorAll("section[data-tab]").forEach((sec) => { sec.hidden = sec.dataset.tab !== name; });
+  if (name === "corrida" && window.Plotly) Plotly.Plots.resize("chart");
+  try { history.replaceState(null, "", "#" + name); } catch (e) {}
+}
+$("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
+if (location.hash && document.querySelector('#tabs .tab[data-tab="' + location.hash.slice(1) + '"]')) openTab(location.hash.slice(1));
+
+// ---- overview of all agents ----
+(function overview() {
+  if (!agents.length) return;
+  const live = !agents[0].backtest;
+  const rows = agents.slice().sort((a, b) => headline(b) - headline(a));
+  $("overview").innerHTML = live
+    ? table(["#", "Agente", "Património", "Rentab.", "Hoje", "Pontos", "Queda máx.", "Sharpe", "Posições", "Investido", "Compras/vendas", "Estratégia"],
+        rows.map((a, k) => [k + 1, '<a href="#" data-i="' + agents.indexOf(a) + '">' + esc(a.emoji + " " + a.name) + '</a>', fmtEur(a.equity),
+          '<span class="' + cls(a.return_pct) + '">' + fmtPct(a.return_pct) + '</span>', '<span class="' + cls(a.day_pct) + '">' + fmtPct(a.day_pct) + '</span>',
+          fmtNum(a.points, 0), fmtPct(-a.max_dd_pct), fmtNum(a.sharpe), a.positions.length, fmtNum(a.invested_pct, 0) + "%", a.buys + "/" + a.sells,
+          esc(a.strategy.label)]), [2, 3, 4, 5, 6, 7, 8, 9])
+    : table(["#", "Agente", "Rentab. no período", "Queda máx.", "Sharpe", "Operações", "Parâmetros", "Estratégia"],
+        rows.map((a, k) => [k + 1, '<a href="#" data-i="' + agents.indexOf(a) + '">' + esc(a.emoji + " " + a.name) + '</a>',
+          '<span class="' + cls(a.backtest.return_pct) + '">' + fmtPct(a.backtest.return_pct, 0) + '</span>', fmtPct(-a.backtest.max_dd_pct, 0),
+          fmtNum(a.backtest.sharpe), a.backtest.trades ?? "—", a.backtest.adopted ? "novos" : "mantidos", esc(a.strategy.label)]), [2, 3, 4, 5]);
+  $("overview").addEventListener("click", (e) => { const l = e.target.closest("a[data-i]"); if (l) { e.preventDefault(); show(+l.dataset.i, true); } });
+})();
+
+// ---- news ----
+(function news() {
+  if (!$("news")) return;
+  if (!NEWS || !(NEWS.items || []).length) { $("news").innerHTML = '<p class="muted">Ainda não há notícias lidas. A leitura corre ' + esc((UPCOMING.find((j) => j.key === "noticias") || { times: [] }).times.join(" · ")) + ' nos dias úteis.</p>'; return; }
+  const sentiment = { 2: "🟢 muito positiva", 1: "🟢 positiva", 0: "⚪ neutra", "-1": "🔴 negativa", "-2": "🔴 muito negativa" };
+  const ago = (iso) => { const h = (Date.now() - Date.parse(iso)) / 3.6e6; return h < 1 ? Math.max(1, Math.round(h * 60)) + " min" : Math.round(h) + " h"; };
+  const scores = Object.entries(NEWS.scores || {}).sort((a, b) => b[1] - a[1]);
+  $("news").innerHTML = '<h2>📰 Principais notícias do mercado</h2><p class="muted small">Últimas 36 horas · lidas às ' +
+    lisbon(Date.parse(NEWS.updated), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) +
+    ' · ' + NEWS.items.length + ' títulos das ações do ranking, das carteiras dos agentes, do /seguir e das que mais mexeram</p>' +
+    (scores.length ? '<div class="grid">' + tile("Mais positivas", scores.slice(0, 3).map(([k, v]) => esc(k) + " " + (v > 0 ? "+" : "") + v).join(" · ") || "—", "score = sentimento × importância", "up") +
+      tile("Mais negativas", scores.slice(-3).reverse().filter(([, v]) => v < 0).map(([k, v]) => esc(k) + " " + v).join(" · ") || "—", "", "down") + '</div>' : "") +
+    '<div class="filters"><input id="nf-q" placeholder="Procurar ação ou palavra"><select id="nf-s"><option value="">Todos os sentimentos</option><option value="pos">Positivas</option><option value="neg">Negativas</option><option value="neu">Neutras</option></select>' +
+    '<select id="nf-i"><option value="0">Toda a importância</option><option value="2" selected>Importância 2+</option><option value="3">Só as materiais (3)</option></select></div><div id="news-list" class="news"></div>';
+  function draw() {
+    const q = $("nf-q").value.trim().toLowerCase(), sv = $("nf-s").value, imin = +$("nf-i").value;
+    const list = NEWS.items.filter((i) => (i.importancia || 0) >= imin &&
+      (!sv || (sv === "pos" ? i.sentimento > 0 : sv === "neg" ? i.sentimento < 0 : !i.sentimento)) &&
+      (!q || [i.symbol, i.company, i.title, i.resumo].join(" ").toLowerCase().includes(q)));
+    $("news-list").innerHTML = list.length ? list.map((i) => '<article class="' + (i.sentimento > 0 ? "pos" : i.sentimento < 0 ? "neg" : "") + '"><div><b>' + esc(i.symbol) + '</b>' +
+      (i.company ? ' <span class="muted">' + esc(i.company) + '</span>' : "") + ' · ' + (sentiment[i.sentimento] || "⚪") + ' · ' + "★".repeat(i.importancia || 0) + "☆".repeat(3 - (i.importancia || 0)) +
+      (i.surpresa ? ' · ⚡ surpresa' : "") + '</div><div>' + esc(i.resumo || i.title) + '</div><div class="meta">' +
+      (i.url ? '<a href="' + esc(i.url) + '" target="_blank" rel="noopener noreferrer">' + esc(i.title) + '</a>' : esc(i.title)) +
+      ' · ' + esc(i.publisher || "") + ' · há ' + ago(i.published) + ' · lida por ' + esc(i.fonte || "?") + '</div></article>').join("")
+      : '<p class="muted">Nenhuma notícia com estes filtros.</p>';
+  }
+  ["nf-q", "nf-s", "nf-i"].forEach((id) => $(id).addEventListener("input", draw));
+  draw();
+})();
+
+// ---- opportunities ----
+(function opps() {
+  if (!$("opps")) return;
+  if (!MARKET) { $("opps").innerHTML = '<p class="muted">As oportunidades aparecem depois da próxima liga dos agentes (dias úteis).</p>'; return; }
+  const lv = (s) => (MARKET.levels.find((l) => s >= l.from) || { name: "" }).name;
+  const badge = (r) => '<span class="score ' + esc(r.level.split(" ")[0]) + '">🛡️ ' + r.safety + '/100 · ' + esc(r.level) + '</span>';
+  const card = (r, kind) => '<div class="opp"><div class="top"><span class="sym">' + esc(r.symbol) + '</span><span class="muted">' + esc(r.name || "") +
+    (r.sector ? " · " + esc(r.sector) : "") + '</span>' + badge(r) + '</div><div class="bar"><i style="width:' + r.safety + '%"></i></div>' +
+    '<p class="small">' + fmtNum(r.price) + (r.etf ? " €" : " $") + ' · dia <span class="' + cls(r.ret_1d) + '">' + fmtPct(r.ret_1d) + '</span> · semana <span class="' + cls(r.ret_1w) + '">' +
+    fmtPct(r.ret_1w) + '</span> · 3 meses <span class="' + cls(r.ret_3m) + '">' + fmtPct(r.ret_3m) + '</span> · tendência ' + r.trend_score + '/100</p>' +
+    '<p>' + (kind === "buy" ? r.reasons : r.warnings).map((x) => '<span class="tag">' + esc(x) + '</span>').join("") + '</p>' +
+    '<p class="small">' + (kind === "buy" ? '🛑 Stop sugerido ' + fmtNum(r.stop) + ' (risco ' + fmtNum(r.risk_pct, 1) + '%: mínimo de 10 dias, no máx. 3% abaixo)' : '') +
+    (r.earnings ? ' · 📅 resultados ' + esc(r.earnings) : '') + (r.held_by.length ? ' · 🤖 na carteira de ' + esc(r.held_by.join(", ")) : '') + '</p>' +
+    (r.news ? '<p class="small muted">📰 ' + esc(r.news) + '</p>' : '') +
+    '<details><summary>Como chegou a ' + r.safety + ' pontos</summary>' +
+    table(["Critério", "Pontos", "Porquê"], r.parts.map((x) => [esc(x.label), fmtNum(x.points, 1) + " / " + x.max, esc(x.why)]), [1]) + '</details></div>';
+  $("opps").innerHTML = '<h2>🎯 Oportunidades de compra e venda</h2><p class="muted small">Fecho de ' + esc(MARKET.as_of) + ' · mercado em zona <b>' + esc(MARKET.zone) + '</b> (' +
+    fmtNum(MARKET.stage2_pct, 0) + '% das ações do S&P 500 em tendência de alta) · ideias para estudar, não recomendações: confirma sempre antes de decidir.</p>' +
+    '<details class="panel" open><summary><b>🛡️ Como se calcula o score de segurança (0-100)</b></summary><p class="small">Mede quão ordenada e suportada está a ação agora: tendência, volatilidade, distância ao máximo, liquidez, qualidade da empresa, resultados, notícias e mercado. ' +
+    'Não diz quanto vai subir. Níveis: ' + MARKET.levels.map((l) => esc(l.name) + " ≥ " + l.from).join(" · ") + '.</p>' +
+    table(["Critério", "Máx.", "Regra"], MARKET.criteria.map((c) => [esc(c.label), c.max, esc(c.rule)]), [1]) + '</details>' +
+    '<h2>🟢 Comprar: candidatas (' + MARKET.buy.length + ')</h2><p class="muted small">Ações em tendência de alta (Stage 2) que estão no ranking, num setup VCP, a romper com volume ou com notícias muito positivas, e os ETFs UCITS mais fortes. Ordenadas pelo score de segurança.</p>' +
+    '<div class="filters"><select id="of-min"><option value="0">Qualquer score</option><option value="55">Score 55+</option><option value="75" selected>Score 75+ (alta)</option></select></div>' +
+    '<div id="buy" class="cards"></div>' +
+    '<h2>🔴 Vender ou evitar (' + MARKET.sell.length + ')</h2><p class="muted small">Ações que os agentes têm ou que estão no ranking e mostram sinais de alerta. Ordenadas pela gravidade dos sinais.</p>' +
+    '<div class="cards">' + (MARKET.sell.map((r) => card(r, "sell")).join("") || '<p class="muted">Nenhuma com sinais de alerta.</p>') + '</div>';
+  const drawBuy = () => { const min = +$("of-min").value; const list = MARKET.buy.filter((r) => r.safety >= min);
+    $("buy").innerHTML = list.map((r) => card(r, "buy")).join("") || '<p class="muted">Nenhuma com este score; baixa o filtro.</p>'; };
+  $("of-min").addEventListener("input", drawBuy);
+  drawBuy();
+})();
 
 // ---- race ----
 (function race() {

@@ -79,6 +79,24 @@ def publish(title: str, series: dict[str, list[tuple]], references: dict[str, li
     return url
 
 
+def portal_url() -> str | None:
+    """The shared portal's private link (/p/<token>), creating the token on first use; None without Cloudflare."""
+    base = worker_url()
+    if not base:
+        return None
+    token = discord_bot.kv_get("portal:token")
+    if not token:
+        token = secrets.token_hex(12)
+        if not discord_bot.kv_put("portal:token", token):
+            return None
+    return f"{base}/p/{token}"
+
+
+def publish_section(name: str, data) -> bool:
+    """One section of the portal (news, market), read by the Worker when the portal opens."""
+    return discord_bot.kv_put(f"portal:{name}", data)
+
+
 def leaders(series: dict[str, list[tuple]], n: int = 5, always: tuple[str, ...] = ("Indexador",)) -> set[str]:
     """The n series that end highest, plus the benchmark: the ones drawn in colour."""
     last = {name: points[-1][1] for name, points in series.items() if points}

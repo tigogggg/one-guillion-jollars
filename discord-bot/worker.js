@@ -15,7 +15,8 @@
 //   GITHUB_REPO         tigogggg/one-guillion-jollars
 // Bindings: KV namespace as CONFIG. Triggers: cron "*/5 * * * *".
 
-import { chartResponse } from "./chart_page.js";
+import { chartResponse, portalResponse } from "./chart_page.js";
+import { portfolioCommand, portfolioRoute } from "./portfolio.js";
 
 const PING = 1;
 const APPLICATION_COMMAND = 2;
@@ -73,6 +74,8 @@ const HELP = [
   "• `/agentes` · liga dos agentes simulados (ou `/agentes nome` para ver um agente)",
   "• `/estrategia nome` · como pensa um agente: regras, parâmetros, pré-treino e resultados",
   "• `/prontidao` · que agentes já merecem confiança (5 critérios)",
+  "• `/portal` · página com a corrida dos agentes, notícias, oportunidades com score de segurança e agenda",
+  "• `/carteira` · a tua carteira pessoal: regista compras e vendas e acompanha o desempenho (link privado, só para ti)",
   "• `/seguir adicionar NVDA` · a tua lista pessoal: avisos por mensagem privada (`/seguir lista`, `/seguir remover`)",
   "• `/horario` e `/agente` · horários e gestão dos agentes (só administradores)",
   "• `/ajuda` · esta mensagem",
@@ -84,9 +87,18 @@ const HELP = [
 
 export default {
   async fetch(request, env, ctx) {
-    const chart = request.method === "GET" && new URL(request.url).pathname.match(/^\/g\/([0-9a-f]{24})$/);
+    const path = new URL(request.url).pathname;
+    const chart = request.method === "GET" && path.match(/^\/g\/([0-9a-f]{24})$/);
     if (chart && env.CONFIG) {
       return chartResponse(env, chart[1], await getSchedule(env));
+    }
+    const portal = request.method === "GET" && path.match(/^\/p\/([0-9a-f]{24})$/);
+    if (portal && env.CONFIG) {
+      return portalResponse(env, portal[1], await getSchedule(env));
+    }
+    const wallet = path.match(/^\/c\/([0-9a-f]{24})(\/data|\/history)?$/);
+    if (wallet && env.CONFIG) {
+      return portfolioRoute(request, env, wallet[1], wallet[2] || "");
     }
     if (request.method !== "POST") {
       return new Response("CoutoTrading bot: endpoint de interações do Discord.", { status: 200 });
@@ -120,6 +132,22 @@ export default {
         : { acao: name === "agentes" ? "ver" : name, nome: String(options.nome || "") };
       ctx.waitUntil(startInteractionWorkflow(env, interaction, "agents.yml", { mode: "config", args: JSON.stringify(args) }));
       return json({ type: DEFERRED_CHANNEL_MESSAGE });
+    }
+    if (name === "carteira") {
+      const content = env.CONFIG ? await portfolioCommand(env, interaction, new URL(request.url).origin)
+        : "⚠️ As carteiras ainda não estão ativas.";
+      return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
+    }
+    if (name === "portal") {
+      let token = env.CONFIG ? await env.CONFIG.get("portal:token", "json") : null;
+      if (env.CONFIG && !token) {  // first use: create the server's portal link
+        token = [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, "0")).join("");
+        await env.CONFIG.put("portal:token", JSON.stringify(token));
+      }
+      const content = token
+        ? `🏟️ **Portal CoutoTrading**: corrida e fichas dos agentes, notícias, oportunidades com score de segurança e agenda.\n${new URL(request.url).origin}/p/${token}\n-# Link do servidor: partilha só com os membros.`
+        : "⚠️ O portal aparece depois da próxima liga dos agentes (dias úteis às 12:15).";
+      return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
     }
     if (name === "seguir") {
       const user = interaction.member?.user?.id || interaction.user?.id;

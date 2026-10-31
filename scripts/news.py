@@ -325,6 +325,23 @@ def digest(rated: list[dict], source: str, now: datetime, names: dict[str, str] 
     )]
 
 
+def publish_portal(signals: dict, names: dict[str, str], now: datetime) -> None:
+    """The portal's news tab: every rated headline of the last 36 h, most important first."""
+    items = [i for sig in signals.values() for i in sig.get("items", [])
+             if now - datetime.fromisoformat(i["published"]) <= MAX_AGE]
+    items.sort(key=lambda i: (i.get("importancia", 0), i.get("published", "")), reverse=True)
+    rows = [{k: i.get(k) for k in ("symbol", "title", "resumo", "publisher", "url", "published", "sentimento",
+                                    "importancia", "surpresa", "fonte")} | {"company": names.get(i["symbol"], "")}
+            for i in items[:150]]
+    scores = {s: sig["score"] for s, sig in signals.items() if sig.get("score")}
+    try:
+        import interactive
+
+        interactive.publish_section("news", {"updated": now.isoformat(timespec="minutes"), "items": rows, "scores": scores})
+    except Exception as e:  # the Discord digest matters more
+        print(f"WARN: portal (notícias): {e!r}", file=sys.stderr)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="Print instead of posting; state is still saved")
@@ -340,6 +357,7 @@ def main() -> int:
         recent = [i for sig in signals.values() for i in sig.get("items", [])
                   if now - datetime.fromisoformat(i["published"]) <= MAX_AGE]
         names = {c["symbol"]: c["name"] for c in load_constituents()}
+        publish_portal(signals, names, now)
         sources = sorted({i.get("fonte", "FinBERT") for i in recent}) or ["Claude"]
         cards = digest(recent, " e ".join(sources), now, names)
         log(f"Republicar: {len(recent)} títulos guardados, {'1 cartão' if cards else 'nada importante'}")
@@ -378,7 +396,9 @@ def main() -> int:
 
     previous = json.loads(SIGNALS_PATH.read_text()) if SIGNALS_PATH.exists() else {}
     NEWS_DIR.mkdir(parents=True, exist_ok=True)
-    SIGNALS_PATH.write_text(json.dumps(merge_signals(previous, rated, now), indent=1, ensure_ascii=False))
+    merged = merge_signals(previous, rated, now)
+    SIGNALS_PATH.write_text(json.dumps(merged, indent=1, ensure_ascii=False))
+    publish_portal(merged, names, now)
     SEEN_PATH.write_text(json.dumps((seen_list + [i for i in by_id if i not in seen])[-SEEN_KEPT:]))
 
     log(f"{len(rated)} títulos analisados ({source}), {sum(i['importancia'] >= 2 and i['sentimento'] != 0 for i in rated)} importantes")

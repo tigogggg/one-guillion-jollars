@@ -41,6 +41,7 @@ import pandas as pd
 import discord_bot
 import earnings
 import interactive
+import opportunities
 import strategy_docs
 from charts import lines_chart, returns_chart
 from references import reference_lines
@@ -183,6 +184,7 @@ def zone_for(stage2_share: float) -> str:
 def load_market() -> Market:
     constituents = load_constituents()
     sector_of = {c["symbol"]: c["sector"] for c in constituents}
+    name_of = {c["symbol"]: c["name"] for c in constituents}
     stock_hist = download_history(list(sector_of) + ["SPY"])
     etf_hist = download_history([t for t, _ in UCITS_ETFS])
     fx_hist = download_history(["EURUSD=X"])
@@ -193,7 +195,8 @@ def load_market() -> Market:
     for sym, df in stock_hist.items():
         m = trend_metrics(df) if sym in sector_of else None
         if m:
-            stocks[sym] = {**m, **extra_metrics(df), "sector": sector_of[sym], "stage2": is_stage2(m)}
+            stocks[sym] = {**m, **extra_metrics(df), "sector": sector_of[sym], "name": name_of.get(sym, ""),
+                            "stage2": is_stage2(m)}
     add_trend_scores(stocks)
     names = dict(UCITS_ETFS)
     etfs = {}
@@ -1517,7 +1520,19 @@ def main() -> int:
     if a.mode == "daily" and not target:
         target = route("agentes") or {"thread_id": discord_bot.todays_thread()}
         replace = {"replace": LEAGUE_TITLE}  # only the latest league chart stays in the channel
-    buttons = [(interactive.BUTTON, embeds[0]["url"])] if embeds and embeds[0].get("url") else None
+    buttons = [(interactive.BUTTON, embeds[0]["url"])] if embeds and embeds[0].get("url") else []
+    if a.mode == "daily" and not a.dry_run:
+        try:  # the portal's opportunities tab, from the market this run already loaded
+            holders: dict[str, list[str]] = {}
+            for cfg in active_agents(config):
+                for sym in (state["agents"].get(cfg["id"]) or {}).get("positions", {}):
+                    holders.setdefault(sym, []).append(f"{cfg['emoji']} {cfg['name']}")
+            interactive.publish_section("market", opportunities.build(mkt, holders, earnings.next_earnings_many))
+            portal = interactive.portal_url()
+            if portal:
+                buttons.append(("🏟️ Abrir o portal", portal))
+        except Exception as e:  # the league post matters more than the portal
+            print(f"WARN: portal: {e!r}", file=sys.stderr)
     status = send(embeds, files, dry_run=a.dry_run, buttons=buttons, **target, **replace)
     if follow_up[0]:
         status = status or send(*follow_up, dry_run=a.dry_run, **target, **({"replace": MONTHLY_TITLE} if replace else {}))
