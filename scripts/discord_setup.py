@@ -5,6 +5,8 @@
     --canais    create the 📈 FINANÇAS category with read-only channels for the bot's
                 posts (needs the bot with Manage Channels and Manage Roles) and
                 write their ids to discord/channels.json
+    --canal-testes  create the read-only 🧪-testes channel in that category; posts
+                go there instead of their usual channel when DISCORD_TESTES is set
 
 Run from the "Configurar o bot do Discord" workflow. Keep the command list in
 step with discord-bot/worker.js.
@@ -276,6 +278,36 @@ def create_channels() -> int:
     return 0
 
 
+TEST_CHANNEL = ("testes", "🧪-testes", "Testes de funcionalidades novas antes de irem para os outros canais. Só o bot publica.")
+
+
+def create_test_channel() -> int:
+    """Create (or reuse) the read-only 🧪-testes channel in the category and add it to discord/channels.json.
+
+    Leaves the other channels alone; needs the category from --canais first.
+    """
+    if not os.environ.get("DISCORD_BOT_TOKEN") or not CHANNELS_PATH.exists():
+        print("Faltam DISCORD_BOT_TOKEN e/ou discord/channels.json (corre --canais primeiro).", file=sys.stderr)
+        return 1
+    saved = json.loads(CHANNELS_PATH.read_text())
+    guild, category = saved["guild_id"], saved["category_id"]
+    key, name, topic = TEST_CHANNEL
+    bot = discord_api("GET", "/users/@me")["id"]
+    channel = next((c for c in discord_api("GET", f"/guilds/{guild}/channels") if c["type"] == 0 and c["name"] == name), None)
+    if channel is None:
+        channel = discord_api("POST", f"/guilds/{guild}/channels", json={
+            "name": name, "type": 0, "parent_id": category, "topic": topic, "permission_overwrites": [
+                {"id": guild, "type": 0, "deny": str(SEND), "allow": str(MEMBERS_ALLOW)},
+                {"id": bot, "type": 1, "allow": str(BOT_ALLOW | PIN), "deny": "0"},
+            ]})
+        print(f"::notice title=Canais::Criado #{name}")
+        discord_api("POST", f"/channels/{channel['id']}/messages",
+                    json={"embeds": [embed(f"Bem-vindo a #{name}", topic, color=BLUE, footer="")]})
+    saved["channels"][key] = channel["id"]
+    CHANNELS_PATH.write_text(json.dumps(saved, indent=2) + "\n")
+    return 0
+
+
 def diagnose() -> int:
     """Annotate the bot's server-wide permissions, to explain Missing Access errors."""
     hook = requests.get(os.environ["DISCORD_WEBHOOK_URL"], timeout=30).json()
@@ -346,6 +378,7 @@ def main() -> int:
     parser.add_argument("--register", action="store_true", help="Register the slash commands")
     parser.add_argument("--welcome", action="store_true", help="Post the welcome card")
     parser.add_argument("--canais", action="store_true", help="Create the 📈 FINANÇAS category and channels")
+    parser.add_argument("--canal-testes", action="store_true", help="Create the 🧪-testes channel (for DISCORD_TESTES)")
     parser.add_argument("--diagnostico", action="store_true", help="Show the bot's server-wide permissions")
     parser.add_argument("--dry-run", action="store_true", help="Print the welcome card instead of posting it")
     args = parser.parse_args()
@@ -363,6 +396,12 @@ def main() -> int:
         except (RuntimeError, KeyError, requests.RequestException) as e:
             # An annotation shows on the run page even when the job log is not reachable.
             print(f"::error title=Criar canais::{e}")
+            status = 1
+    if args.canal_testes:
+        try:
+            status = status or create_test_channel()
+        except (RuntimeError, KeyError, requests.RequestException) as e:
+            print(f"::error title=Canal de testes::{e}")
             status = 1
     if args.welcome:
         status = status or send([welcome_card()], dry_run=args.dry_run)

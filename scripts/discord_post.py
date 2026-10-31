@@ -38,8 +38,15 @@ def route(kind: str) -> dict:
 
     Uses the bot to post into the channels created by discord_setup.py --canais
     (discord/channels.json); empty, i.e. the default webhook channel, until then.
+    With DISCORD_TESTES set every kind goes to the 🧪-testes channel, and it is
+    an error if that channel is missing rather than a post in the real one.
     """
     token = os.environ.get("DISCORD_BOT_TOKEN")
+    if os.environ.get("DISCORD_TESTES"):
+        channel = json.loads(CHANNELS_PATH.read_text()).get("channels", {}).get("testes") if CHANNELS_PATH.exists() else None
+        if not token or not channel:
+            raise RuntimeError("DISCORD_TESTES definido mas sem canal 🧪-testes (discord_setup.py --canal-testes)")
+        return {"url": f"{API}/channels/{channel}/messages", "headers": {"Authorization": f"Bot {token}"}}
     if not token or not CHANNELS_PATH.exists():
         return {}
     channel = json.loads(CHANNELS_PATH.read_text()).get("channels", {}).get(kind)

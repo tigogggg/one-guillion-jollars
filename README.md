@@ -290,3 +290,13 @@ published) and **Depósito** (money at the ECB deposit facility rate, compounded
 daily and floored at 0%). An agent below Depósito did not earn its risk; one
 below Inflação lost purchasing power. The lines are not scored, and a chart
 is drawn without them when either source is unreachable.
+
+## Test channel (`🧪-testes`)
+
+`discord_setup.py --canal-testes` (workflow input `canal_testes`) creates a
+read-only `🧪-testes` channel in the 📈 FINANÇAS category and saves its id to
+`discord/channels.json` on the branch the workflow ran from. With
+`DISCORD_TESTES` set, `discord_post.route()` sends every post there, and fails
+instead of posting to the real channel when it is missing. The pre-training
+workflow's `testes` input does this for the report-only run, so a branch can be
+tried out with `gh workflow run pretrain.yml --ref <branch> -f so_relatorio=true -f testes=true`.

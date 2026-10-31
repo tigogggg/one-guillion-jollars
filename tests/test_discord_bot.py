@@ -100,3 +100,43 @@ def test_create_channels_is_idempotent_and_read_only(monkeypatch, tmp_path):
     assert discord_post.route("alertas")["url"].endswith(f"/channels/{saved['channels']['alertas']}/messages")
     monkeypatch.delenv("DISCORD_BOT_TOKEN")
     assert discord_post.route("alertas") == {}
+
+
+def test_test_channel_is_created_once_and_takes_every_post(monkeypatch, tmp_path):
+    import discord_post
+    import discord_setup
+    import pytest
+
+    path = tmp_path / "channels.json"
+    path.write_text(json.dumps({"guild_id": "G", "category_id": "C", "channels": {"agentes": "601"}}))
+    monkeypatch.setattr(discord_setup, "CHANNELS_PATH", path)
+    monkeypatch.setattr(discord_post, "CHANNELS_PATH", path)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "t")
+    guild_channels = [{"id": "601", "type": 0, "name": "🤖-agentes"}]
+    calls = []
+
+    def fake_request(method, url, **kw):
+        path_ = url.split("/api/v10")[1]
+        calls.append((method, path_))
+        if path_ == "/users/@me":
+            return Resp({"id": "BOT"})
+        if method == "GET":
+            return Resp(guild_channels)
+        if path_ == "/guilds/G/channels":
+            guild_channels.append({"id": "700", "type": 0, "name": kw["json"]["name"]})
+            assert kw["json"]["parent_id"] == "C"
+            return Resp(guild_channels[-1])
+        return Resp({"id": "M"})
+    monkeypatch.setattr(discord_setup.requests, "request", fake_request)
+
+    assert discord_setup.create_test_channel() == 0
+    assert discord_setup.create_test_channel() == 0
+    assert [c for c in calls if c == ("POST", "/guilds/G/channels")] == [("POST", "/guilds/G/channels")]
+    assert json.loads(path.read_text())["channels"] == {"agentes": "601", "testes": "700"}
+
+    assert discord_post.route("agentes")["url"].endswith("/channels/601/messages")
+    monkeypatch.setenv("DISCORD_TESTES", "1")
+    assert discord_post.route("agentes")["url"].endswith("/channels/700/messages")
+    path.write_text(json.dumps({"guild_id": "G", "category_id": "C", "channels": {"agentes": "601"}}))
+    with pytest.raises(RuntimeError):  # never fall back to the real channel
+        discord_post.route("agentes")
