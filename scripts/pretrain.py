@@ -350,6 +350,33 @@ def variants(strategy: str, n: int) -> list[dict]:
 
 
 REVIEW_PATH = agents.REPO_AGENTS / "claude_review.json"
+HISTORY_KEEP = 3  # earlier choices kept per strategy, each one a candidate in the next pre-training
+
+
+def previous_choices(strategy: str) -> list[dict]:
+    """The parameters chosen in the last pre-trainings ({"chosen", "until"}), newest first."""
+    try:
+        report = json.loads(REPORT_PATH.read_text())
+    except (OSError, ValueError):
+        return []
+    r = report.get("strategies", {}).get(strategy) or {}
+    out = ([{"chosen": r["chosen"], "until": (report.get("valid") or [None, None])[1]}] if r.get("chosen") else []) + list(r.get("history") or [])
+    seen, kept = [], []
+    for h in out:
+        if h.get("chosen") and h["chosen"] not in seen:
+            seen.append(h["chosen"])
+            kept.append(h)
+    return kept[:HISTORY_KEEP]
+
+
+def incumbent_candidates(strategy: str, base: dict) -> list[dict]:
+    """Earlier choices as candidates (zone parameters included), so a retrain only replaces them with something better."""
+    out = []
+    for h in previous_choices(strategy):
+        cand = {**base, **{k: v for k, v in h["chosen"].items() if k in base or k == "por_zona"}}
+        if cand != base and cand not in out:
+            out.append(cand)
+    return out
 
 
 def claude_candidates(strategy: str, base: dict) -> list[dict]:
@@ -525,12 +552,18 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     n_random = len(pool)
     claude = claude_candidates(strategy, pool[0]) if strategy != "indexador" else []
     pool += [c["params"] for c in claude]
+    history = previous_choices(strategy) if strategy != "indexador" else []
+    incumbents = incumbent_candidates(strategy, pool[0]) if strategy != "indexador" else []
+    first_incumbent = len(pool)
+    pool += incumbents
     scored = [run_years(p) for p in pool]
     base = scored[0][0]
     need = -(-3 * len(blocks) // 4)  # ceil(0.75 x years)
 
     def ok(i: int) -> bool:
         years, trades = scored[i]
+        if first_incumbent <= i < first_incumbent + len(incumbents):  # passed before: still faces plateau, crises, exam and Monte Carlo
+            return True
         return i == 0 or (sum(a > b for a, b in zip(years, base)) >= need and (low_turnover or trades >= MIN_TRADES))
 
     def ranked() -> list[int]:
@@ -636,7 +669,10 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
         "crises": crashes.get(best_i if adopt else 0, crashes[0]),
         "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried, "importance": importance, "greedy": greedy_log,
         "claude": claude_log,
-        "search": {"candidates": len(pool), "generation2": len(pool) - n_random - len(claude), "claude": len(claude),
+        "history": history,
+        "incumbents": [{"score": round(weighted(scored[first_incumbent + j][0]), 1), "picked": best_i == first_incumbent + j,
+                        "adopted": adopt and best_i == first_incumbent + j} for j in range(len(incumbents))],
+        "search": {"candidates": len(pool), "generation2": len(pool) - n_random - len(claude) - len(incumbents), "claude": len(claude), "incumbents": len(incumbents),
                    "plateau": plateau.get(best_i), "recency": RECENCY, "min_trades": MIN_TRADES},
         "year": strip(full), "curve": light_curve(full["curve"]),
     }

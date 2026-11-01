@@ -47,3 +47,17 @@ def test_claude_candidates_build_on_last_choice(tmp_path, monkeypatch):
 def test_claude_candidates_without_review(tmp_path, monkeypatch):
     monkeypatch.setattr(pretrain, "REVIEW_PATH", tmp_path / "nada.json")
     assert pretrain.claude_candidates(STRATEGY, pretrain.variants(STRATEGY, 0)[0]) == []
+
+
+def test_incumbents_include_last_choices_with_zones(tmp_path, monkeypatch):
+    report = tmp_path / "pretrain.json"
+    report.write_text(json.dumps({"valid": ["2025-10-30", "2026-10-30"], "strategies": {STRATEGY: {
+        "chosen": {"vix_max": 30},
+        "history": [{"chosen": {"vix_max": 25, "por_zona": {"Alta": {"vix_max": 20}}}, "until": "2026-09-30"}, {"chosen": {"vix_max": 30}}],
+    }}}))
+    monkeypatch.setattr(pretrain, "REPORT_PATH", report)
+    base = pretrain.variants(STRATEGY, 0)[0]
+    out = pretrain.incumbent_candidates(STRATEGY, base)
+    assert [c["vix_max"] for c in out] == [30, 25]
+    assert out[1]["por_zona"] == {"Alta": {"vix_max": 20}}
+    assert len(pretrain.previous_choices(STRATEGY)) == 2

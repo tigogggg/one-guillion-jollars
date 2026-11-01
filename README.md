@@ -267,7 +267,10 @@ hypothesis (`agents/claude_review.json`, validated: known parameters only,
 within bounds). The next pre-training adds them to the candidates on top of the
 last chosen parameters; they are adopted only if they pass the same tests as
 any other candidate. The report and the portal show each proposal's outcome.
-Claude proposes; the backtest decides.
+Claude proposes; the backtest decides. The parameters chosen in the last three
+pre-trainings are candidates too (exempt from the 3-in-4-years rule, which they
+passed before, but not from the plateau, crisis, exam and Monte Carlo tests), so
+a retrain never drops a good set unless something beats it.
 
 **Signing in.** Nothing inside the site (portal, charts, portfolios) opens
 without a session: `/entrar` is the front door, and after signing in the member
