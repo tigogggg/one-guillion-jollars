@@ -162,6 +162,25 @@ const MUSIC = `<button id="music" type="button" aria-label="Ligar a música" tit
 })();
 </script>`;
 
+// Scripts and styles that never change between requests are served once from /static/<name>-<hash>
+// and kept by the browser for a year (a new deploy changes the hash, so nobody gets a stale copy).
+export const STATIC = {};
+const STATIC_PATHS = {};
+function fnv(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+export function staticAsset(name, body, kind) {
+  const path = `/static/${name}-${fnv(body)}.${kind}`;
+  STATIC[path] = { body, type: kind === "css" ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8" };
+  return path;
+}
+export function staticResponse(path) {
+  const a = STATIC[path];
+  return a ? new Response(a.body, { headers: { "Content-Type": a.type, "Cache-Control": "public, max-age=31536000, immutable" } }) : null;
+}
+
 export function page(title, body, head = "") {
   return `<!doctype html>
 <html lang="pt-PT">
@@ -170,7 +189,7 @@ export function page(title, body, head = "") {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>${esc(title)}</title>
-<style>${CSS}</style>
+<link rel="stylesheet" href="${STATIC_PATHS.css}">
 ${head}
 </head>
 <body><main>${body}</main>${MUSIC}</body>
@@ -186,7 +205,7 @@ export function chartPage(data, upcoming, newer, extras = {}) {
     .concat(portal && extras.pretrain ? [["pretreino", "⏪ Pré-treino"]] : []).concat([["agentes", "🧾 Agentes"]])
     .concat(portal ? [["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
     .concat([["agenda", "⏱️ Agenda"]])
-    .concat(portal ? [["carteira", "💼 Carteira"], ["ajuda", "❓ Glossário"]] : []);
+    .concat(portal ? [["carteira", "💼 Carteira"], ["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]] : []);
   const body = `
 ${banner}
 <header>
@@ -194,6 +213,11 @@ ${banner}
   <p class="muted">${esc(portal ? data.title + " · " + (data.subtitle || "") : data.subtitle || "")}</p>
   <p class="muted small">Dados da liga de <span id="updated"></span> (hora de Lisboa) · simulação com dinheiro fictício e preços reais · ferramenta educativa, não é recomendação de compra</p>
 </header>
+${portal ? `<form id="search" class="search" role="search" autocomplete="off">
+  <input id="q" type="search" list="q-list" placeholder="🔎 Procurar um ticker: notícias, score, agentes e a tua posição (ex.: NVDA, VUSA)" aria-label="Procurar ticker">
+  <datalist id="q-list"></datalist><button class="btn" type="submit">PROCURAR</button>
+  <button class="btn alt" type="button" id="guide-open" title="Guia rápido">📖 GUIA</button>
+</form>` : ""}
 <nav class="tabs" id="tabs">${tabs.map(([k, label], i) => `<button class="tab${i ? "" : " on"}" data-tab="${k}">${label}</button>`).join("")}</nav>
 ${portal ? `<section data-tab="hoje"><div id="today"></div></section>` : ""}
 <section class="race" id="race" data-tab="corrida"${portal ? " hidden" : ""}>
@@ -251,6 +275,8 @@ ${portal ? `<section data-tab="propostas" hidden><div id="props"></div></section
   <p class="muted small">Horários de Lisboa, os mesmos do /horario no Discord. Cada tarefa demora alguns minutos a chegar.</p>
 </section>
 ${portal ? `<section data-tab="ajuda" hidden><div id="glossary"></div></section>` : ""}
+${portal ? `<section data-tab="pesquisa" hidden><div id="q-out"></div></section>
+<section data-tab="estado" hidden><div id="status"></div></section>` : ""}
 ${portal ? `<section data-tab="carteira" hidden>
   <h2>💼 A tua carteira</h2>
   <div class="panel prose">
@@ -271,8 +297,9 @@ const MARKET = ${safeJson(extras.market || null)};
 const PROPOSALS = ${safeJson(extras.proposals || null)};
 const CALENDAR = ${safeJson(extras.calendar || null)};
 const PRETRAIN = ${safeJson(extras.pretrain || null)};
-${CLIENT}
-</script>`;
+</script>
+<script src="${STATIC_PATHS.portal}"></script>
+${portal ? `<script src="${STATIC_PATHS.extra}"></script>` : ""}`;
   return page(portal ? "One Guillion Jollars" : data.title, body, `${extras.manifest ? `<link rel="manifest" href="${esc(extras.manifest)}"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png">` : ""}
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
@@ -359,6 +386,10 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .chip { background:var(--card); border:1px solid var(--line); color:var(--fg); border-radius:999px; padding:6px 10px; cursor:pointer; font:inherit; font-size:.88rem; }
 .chip.on { border-color:var(--accent); background:#3a0f45; box-shadow:0 0 8px rgba(255,46,136,.5); }
 .panel { background:var(--card); border:2px solid var(--neon); box-shadow:0 0 12px rgba(0,229,255,.25); border-radius:10px; padding:14px; margin-top:12px; }
+.search { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 10px; } .search input { flex:1; min-width:220px; background:var(--card); color:var(--fg); border:2px solid var(--neon); border-radius:6px; padding:9px 11px; font:inherit; }
+.dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; } .dot.ok { background:var(--up); box-shadow:0 0 6px var(--up); } .dot.old { background:var(--gold); } .dot.bad { background:var(--down); }
+#guide { position:fixed; inset:0; z-index:80; background:rgba(5,3,20,.78); display:flex; align-items:center; justify-content:center; padding:16px; }
+#guide[hidden] { display:none; } #guide .panel { max-width:520px; width:100%; } #guide .steps { font-family:var(--pixel); font-size:.55rem; color:var(--muted); }
 .row-btns { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
 @media (max-width:640px) { .lane { height:40px; } .racer .avatar { width:30px; height:30px; font-size:16px; } .racer .tag { display:none; } .controls { margin-left:0; } }
 .scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
@@ -1065,3 +1096,127 @@ if (PRETRAIN && $("pt-race")) {
   if (ptAgents.length) showPt(ptAgents.slice().sort((x, y) => (y.backtest?.return_pct ?? 0) - (x.backtest?.return_pct ?? 0))[0], false);
 }
 `;
+
+STATIC_PATHS.css = staticAsset("style", CSS, "css");
+STATIC_PATHS.portal = staticAsset("portal", CLIENT, "js");
+
+// Search, status and guide: a separate script, so they work even if a section above fails on odd data.
+const EXTRA = String.raw`// ---- ticker search: everything the portal knows about one ticker, and the member's own position ----
+(function search() {
+  if (!$("search")) return;
+  const N = NEWS || {}, M = MARKET || {}, P = PROPOSALS || {}, C = CALENDAR || {};
+  const base = (x) => String(x || "").toUpperCase().split(".")[0];
+  const names = {};
+  const add = (sym, name) => { if (sym && !names[sym]) names[sym] = name || ""; };
+  (M.buy || []).concat(M.sell || []).forEach((r) => add(r.symbol, r.name));
+  (P.buys || []).forEach((b) => add(b.symbol, b.name)); (P.sells || []).forEach((x) => add(x.symbol, ""));
+  Object.keys(N.timeline || {}).forEach((k) => add(k, ((N.timeline[k] || [])[0] || {}).company));
+  agents.forEach((a) => (a.positions || []).forEach((p) => add(p.symbol, p.name)));
+  (C.earnings || []).forEach((e) => add(e.symbol, e.name));
+  $("q-list").innerHTML = Object.keys(names).sort().map((k) => '<option value="' + esc(k) + '">' + esc(names[k] || "") + '</option>').join("");
+  let wallet = null;
+  const walletPath = store.get("carteira", null);
+  const loadWallet = () => wallet || (walletPath && /^\/c\/[0-9a-f]{24}$/.test(walletPath)
+    ? (wallet = fetch(walletPath + "/data", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).catch(() => null)) : Promise.resolve(null));
+  const same = (a, b) => a && b && (a.toUpperCase() === b.toUpperCase() || base(a) === base(b));
+  async function run(raw) {
+    const q = String(raw || "").trim().toUpperCase();
+    if (!q) return;
+    const out = $("q-out");
+    const mk = (M.buy || []).map((r) => [r, "buy"]).concat((M.sell || []).map((r) => [r, "sell"])).filter(([r]) => same(r.symbol, q));
+    const pb = (P.buys || []).filter((b) => same(b.symbol, q)), ps = (P.sells || []).filter((x) => same(x.symbol, q));
+    const held = agents.flatMap((a) => (a.positions || []).filter((p) => same(p.symbol, q)).map((p) => [a, p]));
+    const newsKey = Object.keys(N.timeline || {}).find((k) => same(k, q));
+    const items = newsKey ? N.timeline[newsKey] : [];
+    const earn = (C.earnings || []).filter((e) => same(e.symbol, q));
+    const name = names[Object.keys(names).find((k) => same(k, q))] || "";
+    let html = '<h2>🔎 ' + esc(q) + (name ? ' <span class="muted small">' + esc(name) + '</span>' : '') + '</h2>';
+    const w = await loadWallet();
+    if (w && w.tx) {
+      const mine = w.tx.filter((t) => same(t.symbol, q));
+      if (mine.length) {
+        let qty = 0, cost = 0;
+        mine.slice().sort((a, b) => a.date.localeCompare(b.date)).forEach((t) => {
+          if (t.side === "buy") { qty += t.qty; cost += t.qty * t.price + (t.fee || 0); } else { const avg = qty ? cost / qty : 0; cost -= avg * t.qty; qty -= t.qty; } });
+        const sym = mine[0].symbol, quote = (w.quotes || {})[sym] || {}, v = (w.verdicts || {})[sym] || {};
+        html += '<div class="panel"><h3>💼 A tua posição</h3><div class="grid">' + tile("Quantidade", fmtNum(qty, 4)) +
+          tile("Custo médio", qty > 0 ? fmtNum(cost / qty) : "—") + tile("Preço", fmtNum(quote.price), quote.currency || "") +
+          (qty > 0 && quote.price ? tile("Ganho", fmtPct((quote.price / (cost / qty) - 1) * 100), "", cls(quote.price - cost / qty)) : "") +
+          (v.verdict ? tile("Veredito", esc(v.verdict), (v.reasons || []).slice(0, 2).map(esc).join(" · ")) : "") + '</div>' +
+          '<p class="small"><a href="' + esc(walletPath) + '">Abrir a minha carteira →</a></p></div>';
+      }
+    } else if (!walletPath) {
+      html += '<p class="muted small">Para ver aqui a tua posição, abre a tua carteira uma vez neste aparelho (separador 💼 Carteira).</p>';
+    }
+    if (mk.length) html += '<div class="panel"><h3>🛡️ Score de segurança</h3>' + mk.map(([r, kind]) =>
+      '<p><span class="score ' + esc((r.level || "").split(" ")[0]) + '">🛡️ ' + r.safety + '/100 · ' + esc(r.level) + '</span> ' + (kind === "buy" ? "🟢 candidata a compra" : "🔴 sinais de venda") +
+      ' · ' + fmtNum(r.price) + ' · 3 meses <span class="' + cls(r.ret_3m) + '">' + fmtPct(r.ret_3m) + '</span></p><p>' + (kind === "buy" ? r.reasons : r.warnings).map((x) => '<span class="tag">' + esc(x) + '</span>').join("") + '</p>' +
+      (kind === "buy" && r.stop ? '<p class="small">🛑 Stop sugerido ' + fmtNum(r.stop) + '</p>' : '')).join("") + '<p class="small"><a href="#oportunidades" data-go="oportunidades">Ver em Oportunidades →</a></p></div>';
+    if (pb.length || ps.length) html += '<div class="panel"><h3>🧠 Propostas dos agentes</h3>' + pb.map((b) => '<p>🟢 <b>Comprar</b> · confiança ' + fmtNum(b.confidence, 0) + '% · entrada até ' + fmtNum(b.plan.entry_max) +
+      ' · stop ' + fmtNum(b.plan.stop) + ' · alvo ' + fmtNum(b.plan.target) + '</p><p>' + b.agents.map((a) => '<span class="tag">' + esc(a.emoji + " " + a.name) + '</span>').join("") + '</p>').join("") +
+      ps.map((x) => '<p>🔴 <b>A vender</b>: ' + x.agents.map((a) => esc(a.emoji + " " + a.name)).join(", ") + '</p>').join("") + '<p class="small"><a href="#propostas" data-go="propostas">Ver em Propostas →</a></p></div>';
+    if (held.length) html += '<div class="panel"><h3>🤖 Nas carteiras dos agentes</h3>' + table(["Agente", "Porquê", "Desde"], held.map(([a, p]) =>
+      [esc(a.emoji + " " + a.name), esc(p.reason || "—"), esc(p.since || p.date || "—")])) + '</div>';
+    if (earn.length) html += '<div class="panel"><h3>📅 Resultados</h3><p>' + earn.map((e) => esc(e.date)).join(" · ") + '</p></div>';
+    if (items.length) html += '<div class="panel"><h3>📰 Notícias (' + items.length + ')' + (N.scores && N.scores[newsKey] != null ? ' · score ' + N.scores[newsKey] : '') + '</h3>' +
+      items.slice(0, 10).map((i) => '<p class="small">' + (i.sentimento > 0 ? "🟢" : i.sentimento < 0 ? "🔴" : "⚪") + ' ' + esc((i.published || "").slice(0, 10)) + ' · ' +
+        (i.url ? '<a href="' + esc(i.url) + '" target="_blank" rel="noopener noreferrer">' + esc(i.resumo || i.title) + '</a>' : esc(i.resumo || i.title)) + '</p>').join("") + '</div>';
+    if (!mk.length && !pb.length && !ps.length && !held.length && !earn.length && !items.length && !(w && w.tx && w.tx.some((t) => same(t.symbol, q)))) {
+      html += '<p class="muted">Nada sobre ' + esc(q) + ' nos dados de hoje. O portal só conhece as ações do ranking, das carteiras dos agentes, do /seguir, das notícias lidas e das propostas. Para seguir uma ação, usa /seguir no Discord.</p>';
+    }
+    out.innerHTML = html;
+    openTab("pesquisa");
+  }
+  $("search").addEventListener("submit", (e) => { e.preventDefault(); run($("q").value); });
+  $("q").addEventListener("change", (e) => { if (names[e.target.value.toUpperCase()] !== undefined) run(e.target.value); });
+  document.addEventListener("click", (e) => { const a = e.target.closest("[data-go]"); if (a) { e.preventDefault(); openTab(a.dataset.go); } });
+})();
+
+// ---- status: when each part was last updated ----
+(function status() {
+  if (!$("status")) return;
+  const when = (x) => x && (x.updated || x.as_of || x.date || x.created);
+  const hours = (iso) => iso ? (Date.now() - Date.parse(iso.length === 10 ? iso + "T18:00:00Z" : iso)) / 3.6e6 : null;
+  const weekendSlack = [0, 1].includes(new Date().getDay()) ? 48 : 0;  // Sunday and Monday: Friday's data is fine
+  const rows = [
+    ["🏁 Liga dos agentes", DATA.updated, 30 + weekendSlack, "dias úteis às 12:15"],
+    ["📰 Notícias", NEWS && NEWS.updated, 8 + weekendSlack, "várias vezes por dia"],
+    ["🎯 Oportunidades e contexto", when(MARKET), 30 + weekendSlack, "com a liga"],
+    ["🧠 Propostas", when(PROPOSALS), 30 + weekendSlack, "com a liga"],
+    ["📅 Agenda", when(CALENDAR), 30 + weekendSlack, "com a liga"],
+    ["⏪ Pré-treino", PRETRAIN && PRETRAIN.updated, 24 * 35, "no 1.º dia útil de cada mês"],
+  ];
+  const dot = (h, max) => h == null ? '<span class="dot bad"></span>sem dados' : h <= max ? '<span class="dot ok"></span>em dia' : h <= max * 2 ? '<span class="dot old"></span>atrasado' : '<span class="dot bad"></span>parado';
+  const ago = (h) => h == null ? "—" : h < 1 ? Math.max(1, Math.round(h * 60)) + " min" : h < 48 ? Math.round(h) + " h" : Math.round(h / 24) + " dias";
+  $("status").innerHTML = '<h2>🩺 Estado do sistema</h2><p class="muted small">Quando cada parte do portal foi atualizada pela última vez. As próximas atualizações estão em ⏱️ Agenda.</p>' +
+    table(["Parte", "Estado", "Última atualização", "Há", "Costuma atualizar"], rows.map(([k, iso, max, every]) => { const h = hours(iso);
+      return [k, dot(h, max), iso ? esc(lisbon(Date.parse(iso.length === 10 ? iso + "T18:00:00Z" : iso), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) : "—", ago(h), esc(every)]; })) +
+    '<p class="muted small">🟢 em dia · 🟡 atrasado (mais do que o normal) · 🔴 parado ou sem dados. Se algo ficar parado, avisa no Discord: o canal 🔧-estado mostra os erros.</p>';
+})();
+
+// ---- quick guide on the first visit ----
+(function guide() {
+  if (!$("guide-open")) return;
+  const steps = [
+    ["🏠 Hoje", "O resumo do dia: o mercado, as melhores propostas dos agentes e a tua carteira. Começa sempre aqui."],
+    ["🧠 Propostas e 🎯 Oportunidades", "O que os agentes (estratégias simuladas, treinadas em 20 anos de mercado) querem comprar ou vender, com plano (entrada, stop, alvo) e um score de segurança explicado. São ideias para estudar, não ordens."],
+    ["💼 A tua carteira", "Entra com o Discord (ou uma conta Google associada), importa o histórico da XTB e acompanha tudo em tempo quase real. Podes pedir uma análise ao Claude. Usa a 🔎 pesquisa para ver tudo sobre um ticker."],
+  ];
+  let i = 0;
+  const box = document.body.appendChild(Object.assign(document.createElement("div"), { id: "guide", hidden: true }));
+  const draw = () => {
+    box.innerHTML = '<div class="panel"><p class="steps">PASSO ' + (i + 1) + ' DE ' + steps.length + '</p><h2>' + esc(steps[i][0]) + '</h2><p>' + esc(steps[i][1]) + '</p>' +
+      '<p class="row-btns"><button class="btn" id="g-next">' + (i < steps.length - 1 ? "SEGUINTE" : "COMEÇAR") + '</button><button class="btn alt" id="g-skip">SALTAR</button></p></div>';
+    $("g-next").onclick = () => { if (i < steps.length - 1) { i++; draw(); } else close(); };
+    $("g-skip").onclick = close;
+  };
+  const close = () => { box.hidden = true; try { localStorage.setItem("guia-visto", "1"); } catch (e) {} };
+  const open = () => { i = 0; draw(); box.hidden = false; };
+  $("guide-open").onclick = open;
+  box.addEventListener("click", (e) => { if (e.target === box) close(); });
+  let seen = false;
+  try { seen = localStorage.getItem("guia-visto") === "1"; } catch (e) { seen = true; }
+  if (!seen) open();
+})();
+`;
+STATIC_PATHS.extra = staticAsset("portal-extra", EXTRA, "js");

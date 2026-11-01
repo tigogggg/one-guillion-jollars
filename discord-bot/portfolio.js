@@ -9,7 +9,7 @@
 // Finance quotes (refreshed every minute, usually ~15 min behind the exchange),
 // converts everything to euros, and draws the value since the first purchase.
 
-import { esc, html, page, safeJson } from "./chart_page.js";
+import { esc, html, page, safeJson, staticAsset } from "./chart_page.js";
 import { currentSession, loginActive } from "./session.js";
 import { cached, createPortfolio, deletePortfolio, getVersion, hasDb, listVersions, loadPortfolio, renamePortfolio, savePortfolio } from "./store.js";
 
@@ -95,7 +95,10 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
   if (data.require_login && !mine && (await loginActive(env)).any) {  // the link alone is not enough
     return rest === "" ? redirect("/entrar?motivo=login") : json({ error: "Esta carteira pede login: entra outra vez em /entrar." }, 401);
   }
-  if (rest === "" && request.method === "GET") return html(portfolioPage(data, tok, { signedIn: mine, loginOn: (await loginActive(env)).any, versions: hasDb(env) }));
+  if (rest === "" && request.method === "GET") {
+    const login = await loginActive(env);
+    return html(portfolioPage(data, tok, { signedIn: mine, loginOn: login.any, googleOn: login.google, versions: hasDb(env) }));
+  }
   if (rest === "/data" && request.method === "GET") return json(await snapshot(env, data));
   if (rest === "/history" && request.method === "GET") return json(await history(env, data));
   if (rest === "/analysis" && request.method === "GET") return json(await analysisStatus(env, data));
@@ -711,7 +714,7 @@ function portfolioPage(data, tok, opts = {}) {
       ${opts.signedIn ? "Este aparelho tem sessão iniciada." : "Este aparelho não tem sessão iniciada."}</p>
     <p class="row-btns">${data.google
       ? '<button class="btn alt" id="g-unlink" type="button">DESASSOCIAR GOOGLE</button>'
-      : `<a class="btn" style="display:inline-block;text-decoration:none" href="/entrar/google?ligar=${tok}">ASSOCIAR CONTA GOOGLE</a>`}
+      : opts.googleOn ? `<a class="btn" style="display:inline-block;text-decoration:none" href="/entrar/google?ligar=${tok}">ASSOCIAR CONTA GOOGLE</a>` : ""}
       ${opts.signedIn ? '<a class="btn alt" style="display:inline-block;text-decoration:none" href="/sair">TERMINAR SESSÃO AQUI</a>' : '<a class="btn alt" style="display:inline-block;text-decoration:none" href="/entrar">INICIAR SESSÃO</a>'}
       <button class="btn alt" id="logout-all" type="button">TERMINAR SESSÃO EM TODOS OS APARELHOS</button></p>
   </div>
@@ -820,8 +823,8 @@ function portfolioPage(data, tok, opts = {}) {
 </section>
 <script>
 const TOKEN = ${safeJson(tok)};
-${CLIENT}
-</script>`;
+</script>
+<script src="${CLIENT_PATH}"></script>`;
   return page(`Carteira de ${data.name || "membro"}`, body, `<link rel="manifest" href="/c/${tok}/manifest.webmanifest"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
@@ -1407,3 +1410,5 @@ $("txs").addEventListener("click", async (e) => {
 load().then(drawHistory);
 setInterval(load, 60000);
 `;
+
+const CLIENT_PATH = staticAsset("carteira", CLIENT, "js");

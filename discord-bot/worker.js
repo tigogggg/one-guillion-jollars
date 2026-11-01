@@ -16,7 +16,7 @@
 // Bindings: KV namespace as CONFIG. Triggers: cron "*/5 * * * *".
 
 import { loginRoute, rememberDiscord } from "./login.js";
-import { chartResponse, portalResponse } from "./chart_page.js";
+import { chartResponse, portalResponse, staticResponse } from "./chart_page.js";
 import { portfolioCommand, portfolioRoute } from "./portfolio.js";
 import { ICONS } from "./icons.js";
 import { dailyBackup } from "./store.js";
@@ -166,6 +166,9 @@ async function route(request, env, ctx) {
     if (request.method === "GET" && ICONS[path.slice(1)]) {
       const bytes = Uint8Array.from(atob(ICONS[path.slice(1)]), (c) => c.charCodeAt(0));
       return new Response(bytes, { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=604800" } });
+    }
+    if (request.method === "GET" && path.startsWith("/static/")) {
+      return staticResponse(path) || new Response("Não encontrado.", { status: 404 });
     }
     if (request.method === "GET" && path === "/sw.js") {
       return new Response(SERVICE_WORKER, { headers: { "Content-Type": "text/javascript", "Cache-Control": "no-cache" } });
