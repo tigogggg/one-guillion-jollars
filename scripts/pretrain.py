@@ -53,6 +53,9 @@ from discord_post import BLUE, embed, route, send
 from rankings import UCITS_ETFS, download_history, load_constituents
 
 SESSIONS_PER_YEAR = 252
+# Changes the random candidates of each run (--semente): consecutive runs explore different parameters, and the
+# best of the earlier runs stays a candidate (incumbent_candidates), so each run can only keep or improve it.
+SEED = os.environ.get("PRETRAIN_SEED", "")
 YEARS = 20
 VARIANTS_LONG = 16  # fewer variants above LONG_YEARS, which also run in one process (memory)
 LONG_YEARS = 10
@@ -348,7 +351,7 @@ def variants(strategy: str, n: int) -> list[dict]:
     if strategy != "indexador":
         base.update({k: agents.COMMON[k] for k in SHARED_IN_BACKTEST})
     tunable = [k for k in base if k in PARAM_BOUNDS]
-    rng = random.Random(f"pretrain-{strategy}")
+    rng = random.Random(f"pretrain-{strategy}{SEED}")
     out = [dict(base)]
     for _ in range(n if tunable else 0):
         p = dict(base)
@@ -556,7 +559,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     train_mk, blocks, valid = markets[:split], yearly_blocks(markets[:split]), markets[split:]
     windows = crisis_windows(train_mk)
     low_turnover = strategy in agents.LOW_TURNOVER
-    rng = random.Random(f"evolve-{strategy}")
+    rng = random.Random(f"evolve-{strategy}{SEED}")
 
     def run_years(p: dict) -> tuple[list[int], int]:
         runs = [simulate(strategy, p, b) for b in blocks]
@@ -975,6 +978,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print the report instead of posting")
     parser.add_argument("--estrategias", default="", help="Comma-separated strategies to train (default: all)")
     parser.add_argument("--anos", type=int, default=YEARS, help=f"Years of history to replay (default {YEARS})")
+    parser.add_argument("--semente", default="", help="Seed for the random candidates (a different one explores other parameters)")
     parser.add_argument("--contexto", help="CSV with the market context (context.py --guardar), shared by every strategy")
     parser.add_argument("--saida", help="Only train and write these strategies' results to this JSON file "
                                         "(one job of a parallel run)")
@@ -983,6 +987,10 @@ def main() -> int:
     parser.add_argument("--canal", default="agentes", choices=["agentes", "estado", "mercado"],
                         help="Channel for --republicar (default: agentes)")
     args = parser.parse_args()
+    global SEED
+    if args.semente:
+        SEED = f"-{args.semente}"
+        os.environ["PRETRAIN_SEED"] = SEED  # the worker processes read it too
 
     if args.republicar:
         return post_report(json.loads(REPORT_PATH.read_text()), None, args.dry_run, args.canal)

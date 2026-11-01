@@ -140,8 +140,11 @@ PARAM_BOUNDS = {
     "dias_resultados": (0, 10, int),
     "evita_macro": (1, 1, int),
     "evita_geo": (1, 1, int),
-    # the Analista's own
+    # the Analista's own: the minimum value score and how much quality, value and trend weigh in its ranking
     "valor_min": (20.0, 70.0, float),
+    "peso_qualidade": (0.2, 2.0, float),
+    "peso_valor": (0.2, 2.0, float),
+    "peso_tendencia": (0.2, 2.0, float),
 }
 # Variables every strategy (but the Indexador) has, on top of its own. The defaults keep the original
 # behaviour; the training (pre-training, monthly mutation and the shadow copies) switches them on and tunes them.
@@ -747,7 +750,8 @@ def s_analista(cfg, port, mkt, p):
         return []
     pool = [s for s, m in mkt.stocks.items() if m["stage2"] and m.get("fund_q") is not None and m.get("fund_v") is not None
             and m["fund_q"] >= p["qualidade_min"] and m["fund_v"] >= p["valor_min"]]
-    score = lambda s: mkt.stocks[s]["fund_q"] + mkt.stocks[s]["fund_v"] + mkt.stocks[s]["trend_score"]  # noqa: E731
+    wq, wv, wt = p.get("peso_qualidade", 1.0), p.get("peso_valor", 1.0), p.get("peso_tendencia", 1.0)
+    score = lambda s: wq * mkt.stocks[s]["fund_q"] + wv * mkt.stocks[s]["fund_v"] + wt * mkt.stocks[s]["trend_score"]  # noqa: E731
     ranked = sorted(pool, key=score, reverse=True)
     n = p["n"]
     return rebalance(port, mkt, ranked[:n], exposure(mkt) / n, set(ranked[: 2 * n]), p["stop_pct"], "qualidade, valor e tendência")
@@ -1003,7 +1007,8 @@ STRATEGIES = {
     "foguetao": (s_foguetao, "Top ações por score de tendência", {"n": 5, "stop_pct": 0.10, "cada": 5}),
     "joalheiro": (s_joalheiro, "Melhores do ranking com qualidade alta", {"n": 6, "qualidade_min": 70, "stop_pct": 0.15, "cada": 20}),
     "analista": (s_analista, "Empresas sólidas e baratas em tendência de alta (fundamentos da SEC)",
-                 {"n": 6, "qualidade_min": 60, "valor_min": 40, "stop_pct": 0.15, "cada": 10}),
+                 {"n": 6, "qualidade_min": 60, "valor_min": 40, "stop_pct": 0.15, "cada": 10,
+                  "peso_qualidade": 1.0, "peso_valor": 1.0, "peso_tendencia": 1.0}),
     "cacador": (s_cacador, "Rompimentos com volume", {"n": 5, "risco_pct": 0.02, "alvo_r": 3.0, "max_pos": 0.30}),
     "sniper": (s_sniper, "Contração de volatilidade (VCP)", {"n": 4, "risco_pct": 0.01, "aperto_pct": 0.06, "max_pos": 0.30}),
     "campeao": (s_campeao, "Melhores ações dos setores mais fortes", {"setores": 2, "por_setor": 2, "stop_pct": 0.12, "cada": 5}),

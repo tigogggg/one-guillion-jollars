@@ -55,6 +55,9 @@ PARAMS = {
     "valor_fund_min": "só compra empresas com score de valor (P/E, cash flow livre, margem de segurança) de pelo menos isto, 0-100 (0 = desligado)",
     "evita_geo": "não compra quando o Claude classifica o risco geopolítico do dia como alto (1 = ligado)",
     "valor_min": "score de valor mínimo (0-100): rendimento dos lucros, do cash flow livre e margem de segurança",
+    "peso_qualidade": "peso da qualidade dos fundamentos na ordenação das ações",
+    "peso_valor": "peso do valor (preço face aos lucros, cash flow e valor intrínseco) na ordenação",
+    "peso_tendencia": "peso da tendência do preço na ordenação",
 }
 
 PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext",
@@ -94,7 +97,7 @@ DOCS = {
     ),
     "analista": (
         "Fundamentos: empresas com bons números (margens, crescimento, cash flow, pouca dívida) a preço razoável e em tendência de alta.",
-        "A cada {cada} sessões compra as {n} ações em Stage 2 com qualidade ≥ {qualidade_min} e valor ≥ {valor_min} (relatórios da SEC já publicados nesse dia), ordenadas por qualidade + valor + tendência.",
+        "A cada {cada} sessões compra as {n} ações em Stage 2 com qualidade ≥ {qualidade_min} e valor ≥ {valor_min} (relatórios da SEC já publicados nesse dia), ordenadas por {peso_qualidade}×qualidade + {peso_valor}×valor + {peso_tendencia}×tendência.",
         "Vende as que saem do top {n}×2, ou no stop de {stop_pct}.",
         "Partes iguais, ajustadas à zona do mercado.",
     ),

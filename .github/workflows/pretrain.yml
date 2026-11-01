@@ -37,6 +37,10 @@ on:
         description: "Publicar o relatório no canal 🧪-testes"
         type: boolean
         default: false
+      semente:
+        description: "Semente dos candidatos aleatórios (vazio = o número da execução: cada execução explora outros parâmetros)"
+        required: false
+        default: ""
       revisao_claude:
         description: "No fim, o Claude revê os resultados e propõe parâmetros para o próximo treino"
         type: boolean
@@ -120,7 +124,8 @@ jobs:
         env:
           STRATEGY: ${{ matrix.strategy }}
           ANOS: ${{ inputs.anos || '20' }}
-        run: uv run python scripts/pretrain.py --estrategias "$STRATEGY" --anos "$ANOS" --contexto ctx/context.csv --saida "out/$STRATEGY.json"
+          SEMENTE: ${{ inputs.semente || github.run_id }}
+        run: uv run python scripts/pretrain.py --estrategias "$STRATEGY" --anos "$ANOS" --contexto ctx/context.csv --saida "out/$STRATEGY.json" --semente "$SEMENTE"
       - uses: actions/upload-artifact@v4
         with:
           name: pretrain-${{ matrix.strategy }}
