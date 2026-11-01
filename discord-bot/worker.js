@@ -110,9 +110,9 @@ export default {
     if (portal && env.CONFIG) {
       return portalResponse(env, portal[1], await getSchedule(env), !!portal[2]);
     }
-    const wallet = path.match(/^\/c\/([0-9a-f]{24})(\/data|\/history|\/manifest\.webmanifest)?$/);
+    const wallet = path.match(/^\/c\/([0-9a-f]{24})(\/data|\/history|\/analysis|\/manifest\.webmanifest)?$/);
     if (wallet && env.CONFIG) {
-      return portfolioRoute(request, env, wallet[1], wallet[2] || "");
+      return portfolioRoute(request, env, wallet[1], wallet[2] || "", (workflow, inputs) => dispatchWorkflow(env, workflow, inputs));
     }
     if (request.method !== "POST") {
       return new Response("One Guillion Jollars: endpoint de interações do Discord.", { status: 200 });

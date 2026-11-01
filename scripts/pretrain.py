@@ -601,7 +601,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
         "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried, "importance": importance, "greedy": greedy_log,
         "search": {"candidates": len(pool), "generation2": len(pool) - len(scored[:1]) - (VARIANTS_LONG if len(blocks) > LONG_YEARS else VARIANTS),
                    "plateau": plateau.get(best_i), "recency": RECENCY, "min_trades": MIN_TRADES},
-        "year": strip(full), "curve": full["curve"][::5],  # weekly points are enough for the chart
+        "year": strip(full), "curve": light_curve(full["curve"]),
     }
 
 
@@ -676,6 +676,14 @@ def pretrain(markets: list[Market], only: set[str] | None = None, processes: int
     results["strategies"].update(done)
     results["coverage"] = dict(COVERAGE)
     return results
+
+
+DAILY_TAIL = SESSIONS_PER_YEAR  # the last year day by day (for 1D, 1W and 1M on the portal), weekly before
+
+
+def light_curve(curve: list) -> list:
+    """Weekly points for the older years and daily points for the last one: light for the page, exact for short periods."""
+    return curve[:-DAILY_TAIL][::5] + curve[-DAILY_TAIL:] if len(curve) > DAILY_TAIL else curve
 
 
 def strip(r: dict) -> dict:

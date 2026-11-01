@@ -1,0 +1,37 @@
+name: Análise de carteira (Claude)
+run-name: "Análise de carteira"
+
+# Started by the Worker when a member asks for an analysis on their portfolio page.
+# The input is only an id: the portfolio data stays in the Worker's KV (analysis-req:<id>),
+# so nothing personal shows in the run's inputs. scripts/portfolio_analysis.py asks Claude
+# with the owner's subscription and stores the answer under analysis-res:<id>.
+on:
+  workflow_dispatch:
+    inputs:
+      rid:
+        description: "ID do pedido (24 hex)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Instalar o Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Analisar
+        env:
+          RID: ${{ inputs.rid }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: uv run python scripts/portfolio_analysis.py "$RID"

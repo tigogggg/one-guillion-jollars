@@ -591,8 +591,9 @@ function perfTable(boxId, data, people) {
     return { v: ((1 + end / 100) / (1 + base / 100) - 1) * 100, late };
   };
   let custom = { from: shift(last, 30), to: last };
-  // weekly data (the pre-training) cannot show one day: periods shorter than the spacing of the points are left out
-  const gaps = series[0].x.slice(1).map((d, i) => (Date.parse(d) - Date.parse(series[0].x[i])) / 864e5).sort((a, b) => a - b);
+  // weekly data cannot show one day: periods shorter than the spacing of the latest points are left out
+  const tail = series[0].x.slice(-21);
+  const gaps = tail.slice(1).map((d, i) => (Date.parse(d) - Date.parse(tail[i])) / 864e5).sort((a, b) => a - b);
   const step = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 1;
   let sortCol = "all";
   function draw() {

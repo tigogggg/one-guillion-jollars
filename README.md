@@ -247,6 +247,17 @@ or the same side, ticker, date, quantity and price from any account), the
 operations tab offers to remove repeated operations, and an account can be
 removed with or without its operations.
 
+**Claude's portfolio analysis.** On the portfolio page, "🤖 Análise do Claude"
+asks Claude (Sonnet, with the owner's subscription) for a structured analysis:
+summary and score, diagnosis (diversification, ETF overlap, concentration,
+currency, Portuguese taxes, idle cash), concrete moves (what, how much, why,
+when, what would change the view), risks, scenarios and questions. The Worker
+packs the holdings, cash per account, settings, verdicts, safety scores, news
+and price reactions, calendar, market context and the agents' proposals into
+KV (`analysis-req:<id>`) and starts `portfolio-analysis.yml` with only the id;
+`scripts/portfolio_analysis.py` stores the answer under `analysis-res:<id>` and
+the page polls for it. At most 3 analyses per member per 24 hours.
+
 `/carteira` works only inside the server, so only its members get one: each
 member gets one private link (`/c/<token>`, KV `portfolio-user:<discord id>`
 and `portfolio:<token>`), `novo_link:True` replaces it.

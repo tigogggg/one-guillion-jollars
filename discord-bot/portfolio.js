@@ -49,12 +49,19 @@ export async function portfolioCommand(env, interaction, origin) {
 }
 
 // /c/<token>, /c/<token>/data (GET quotes, POST add/delete) and /c/<token>/history
-export async function portfolioRoute(request, env, tok, rest) {
+export async function portfolioRoute(request, env, tok, rest, dispatch) {
   const data = await env.CONFIG.get(`portfolio:${tok}`, "json");
   if (!data) return html(page("Carteira", "<p class='muted'>Link inválido ou substituído. Pede o teu link com /carteira no Discord.</p>"), 404);
   if (rest === "" && request.method === "GET") return html(portfolioPage(data, tok));
   if (rest === "/data" && request.method === "GET") return json(await snapshot(env, data));
   if (rest === "/history" && request.method === "GET") return json(await history(data));
+  if (rest === "/analysis" && request.method === "GET") return json(await analysisStatus(env, data));
+  if (rest === "/analysis" && request.method === "POST") {
+    const out = await requestAnalysis(env, data, dispatch);
+    if (out.error) return json({ error: out.error }, 400);
+    await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
+    return json(await analysisStatus(env, data));
+  }
   if (rest === "/manifest.webmanifest") return manifest(data, tok);
   if (rest === "/data" && request.method === "POST") {
     let body;
@@ -353,6 +360,87 @@ const VERDICT_RULES = [
   "Stop sugerido: o mais alto entre 2,5× a variação diária média abaixo do preço e a média de 200 dias.",
 ];
 
+// ---------------------------------------------------------------------------
+// Claude's analysis of the portfolio: the Worker packs what it knows, a GitHub workflow
+// (portfolio-analysis.yml, scripts/portfolio_analysis.py) asks Claude with the owner's
+// subscription and stores the answer in KV; the page polls /analysis until it is there.
+// ---------------------------------------------------------------------------
+
+const ANALYSES_PER_DAY = 3;
+
+function recentAnalyses(data) {
+  const since = Date.now() - 864e5;
+  return (data.analyses || []).filter((a) => Date.parse(a.at) > since);
+}
+
+async function analysisStatus(env, data) {
+  const last = (data.analyses || []).slice(-1)[0];
+  const remaining = Math.max(0, ANALYSES_PER_DAY - recentAnalyses(data).length);
+  if (!last) return { status: "none", remaining, limit: ANALYSES_PER_DAY };
+  const res = await env.CONFIG.get(`analysis-res:${last.rid}`, "json");
+  const stale = !res && Date.now() - Date.parse(last.at) > 15 * 60e3;
+  return { status: res?.status || (stale ? "error" : "pending"), at: last.at, result: res?.result || null, model: res?.model || null,
+           error: res?.error || (stale ? "A análise não chegou em 15 minutos. Tenta outra vez." : null), remaining, limit: ANALYSES_PER_DAY };
+}
+
+function holdings(data, quotes, fx) {
+  const pos = {};
+  for (const t of data.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq)) {
+    const p = pos[t.symbol] ||= { symbol: t.symbol, name: t.name, currency: t.currency, qty: 0, cost: 0, realized: 0, first: t.date, buys: 0, sells: 0 };
+    if (t.side === "buy") { p.qty += t.qty; p.cost += t.qty * t.price + t.fee; p.buys++; }
+    else { const avg = p.qty ? p.cost / p.qty : 0; p.realized += t.qty * t.price - t.fee - avg * t.qty; p.cost -= avg * t.qty; p.qty -= t.qty; p.sells++; }
+  }
+  const open = Object.values(pos).filter((p) => p.qty > 1e-9).map((p) => {
+    const q = quotes[p.symbol], rate = fx[p.currency] ?? null;
+    const value = q && rate != null ? p.qty * q.price * rate : null;
+    return { symbol: p.symbol, name: q?.name || p.name, currency: p.currency, qty: +p.qty.toFixed(6), avg_cost: +(p.cost / p.qty).toFixed(4),
+             price: q?.price ?? null, day_change_pct: q?.prev ? +((q.price / q.prev - 1) * 100).toFixed(2) : null,
+             value_eur: value != null ? +value.toFixed(2) : null, cost_eur: rate != null ? +(p.cost * rate).toFixed(2) : null,
+             gain_pct: q ? +((q.price / (p.cost / p.qty) - 1) * 100).toFixed(2) : null, first_buy: p.first, buys: p.buys };
+  });
+  const total = open.reduce((s, h) => s + (h.value_eur || 0), 0);
+  open.forEach((h) => { h.weight_pct = total ? +((h.value_eur || 0) / total * 100).toFixed(1) : null; });
+  const closed = Object.values(pos).filter((p) => p.qty <= 1e-9).map((p) => ({ symbol: p.symbol, realized: +p.realized.toFixed(2), currency: p.currency }));
+  return { open, closed, invested_eur: +total.toFixed(2) };
+}
+
+async function requestAnalysis(env, data, dispatch) {
+  if (!dispatch) return { error: "Análises indisponíveis." };
+  if (recentAnalyses(data).length >= ANALYSES_PER_DAY) return { error: `Limite de ${ANALYSES_PER_DAY} análises por dia. Tenta mais tarde.` };
+  const last = (data.analyses || []).slice(-1)[0];
+  if (last && Date.now() - Date.parse(last.at) < 15 * 60e3 && !(await env.CONFIG.get(`analysis-res:${last.rid}`))) return { error: "Já há uma análise a caminho." };
+  const snap = await snapshot(env, data);
+  if (!snap.tx.length && !Object.keys(snap.accounts).length) return { error: "A carteira está vazia: importa ou adiciona operações primeiro." };
+  const [market, news, calendar, proposals] = await Promise.all(["market", "news", "calendar", "proposals"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
+  const h = holdings(data, snap.quotes, snap.fx);
+  const held = new Set(h.open.map((x) => x.symbol));
+  const cash = Object.entries(snap.accounts).map(([name, a]) => ({ account: name, currency: a.currency, cash: a.cash,
+    cash_eur: +(a.cash * (snap.fx[a.currency] ?? (a.currency === "EUR" ? 1 : 0))).toFixed(2) }));
+  const pick = (rows) => (rows || []).filter((r) => held.has(r.symbol)).map((r) => ({ symbol: r.symbol, safety: r.safety, level: r.level,
+    parts: (r.parts || []).map((p) => `${p.label} ${p.points}/${p.max}: ${p.why}`), warnings: r.warnings, reasons: r.reasons }));
+  const payload = {
+    created: new Date().toISOString(),
+    portfolio: { holdings: h.open, closed: h.closed, invested_eur: h.invested_eur, cash,
+                 total_eur: +(h.invested_eur + cash.reduce((s, c) => s + c.cash_eur, 0)).toFixed(2), settings: snap.settings },
+    verdicts: Object.fromEntries(Object.entries(snap.verdicts || {}).filter(([k]) => k !== "rules").map(([k, v]) => [k, { verdict: v.verdict, reasons: v.reasons, stop: v.stop }])),
+    market: market ? { as_of: market.as_of, zone: market.zone, stage2_pct: market.stage2_pct, context: market.context } : null,
+    safety_of_holdings: pick((market?.buy || []).concat(market?.sell || [])),
+    news_of_holdings: Object.fromEntries([...held].map((s) => [s, (news?.timeline?.[s] || []).slice(0, 6).map((i) => ({ date: i.published?.slice(0, 10),
+      sentiment: i.sentimento, importance: i.importancia, summary: i.resumo || i.title, reaction_next_day: i.r1 }))])),
+    news_score_36h: Object.fromEntries([...held].map((s) => [s, news?.scores?.[s] ?? 0])),
+    calendar: calendar ? { macro: calendar.macro, earnings_of_holdings: (calendar.earnings || []).filter((e) => held.has(e.symbol)) } : null,
+    agents_proposals_today: (proposals?.buys || []).slice(0, 8).map((b) => ({ symbol: b.symbol, name: b.name, confidence_pct: b.confidence,
+      entry_max: b.plan.entry_max, stop: b.plan.stop, target: b.plan.target, currency: b.plan.currency, safety: b.safety, agents: b.agents.map((a) => a.name) })),
+    agents_selling_today: (proposals?.sells || []).map((x) => ({ symbol: x.symbol, agents: x.agents.map((a) => a.name) })),
+  };
+  const rid = token();
+  await env.CONFIG.put(`analysis-req:${rid}`, JSON.stringify(payload), { expirationTtl: 86400 });
+  const resp = await dispatch("portfolio-analysis.yml", { rid });
+  if (!resp || !resp.ok) return { error: "Não consegui iniciar a análise (GitHub)." };
+  data.analyses = (data.analyses || []).concat([{ rid, at: new Date().toISOString() }]).slice(-20);
+  return {};
+}
+
 async function judge(data, quotes, fx, proposals, news) {
   const pos = {};
   for (const t of data.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq)) {
@@ -443,6 +531,7 @@ function portfolioPage(data, tok) {
   <button class="tab" data-tab="propostas">🧠 Propostas para ti</button>
   <button class="tab" data-tab="seguir">👀 Seguir</button>
   <button class="tab" data-tab="importar">📥 Importar</button>
+  <button class="tab" data-tab="analise">🤖 Análise do Claude</button>
 </nav>
 <section data-tab="resumo">
   <div id="totals" class="grid"></div>
@@ -452,6 +541,15 @@ function portfolioPage(data, tok) {
   <p class="muted small" id="chart-note">Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.</p>
 </section>
 <section data-tab="posicoes" hidden><div id="positions"></div><div id="verdict-rules"></div><h2>✅ Posições fechadas</h2><div id="closed"></div></section>
+<section data-tab="analise" hidden>
+  <h2>🤖 Análise da carteira pelo Claude</h2>
+  <div class="panel prose small">
+    <p>O Claude recebe as tuas posições, custos médios, pesos, ganhos, o dinheiro de cada conta, o capital e o risco que definiste, os vereditos, o score de segurança e as notícias de cada posição, o calendário, o contexto de mercado e o que os agentes propõem hoje. Devolve um diagnóstico, os riscos e movimentos concretos (o quê, quanto e porquê).</p>
+    <p class="muted">Demora 1 a 2 minutos. Máximo de 3 análises por dia. É uma análise educativa gerada por IA: não é aconselhamento financeiro personalizado e a decisão é sempre tua.</p>
+  </div>
+  <p><button class="btn" id="an-go">🤖 PEDIR ANÁLISE</button> <span id="an-left" class="muted small"></span></p>
+  <div id="an-out"></div>
+</section>
 <section data-tab="importar" hidden>
   <h2>📥 Importar da XTB</h2>
   <div class="panel prose small">
@@ -536,6 +634,51 @@ function openTab(name) {
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
 
 let SNAP = null;
+
+// ---- Claude's analysis ----
+let anTimer = null;
+function renderAnalysis(a) {
+  $("an-left").textContent = a.remaining + " de " + a.limit + " análises disponíveis hoje";
+  $("an-go").disabled = a.status === "pending" || a.remaining <= 0;
+  if (a.status === "none") { $("an-out").innerHTML = '<p class="muted">Ainda não pediste nenhuma análise.</p>'; return; }
+  if (a.status === "pending") { $("an-out").innerHTML = '<p class="muted">⏳ O Claude está a analisar a tua carteira… (pedida às ' + new Date(a.at).toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" }) + ')</p>'; return; }
+  if (a.status === "error") { $("an-out").innerHTML = '<p class="down">⚠️ ' + esc(a.error || "A análise falhou.") + '</p>'; return; }
+  const r = a.result || {};
+  const badge = { bom: "🟢", "atenção": "🟠", problema: "🔴" };
+  const act = { comprar: "🟢 Comprar", "reforçar": "🟢 Reforçar", reduzir: "🟠 Reduzir", vender: "🔴 Vender", manter: "⚪ Manter", trocar: "🔄 Trocar" };
+  const pr = { alta: "🔥 alta", "média": "média", baixa: "baixa" };
+  $("an-out").innerHTML = '<p class="muted small">Análise de ' + new Date(a.at).toLocaleString("pt-PT", { dateStyle: "medium", timeStyle: "short" }) + (a.model ? ' · Claude ' + esc(a.model) : '') + '</p>' +
+    '<div class="grid">' + tile("Nota da carteira", (r.nota ?? "—") + "/10", esc(r.nota_porque || ""), (r.nota ?? 5) >= 7 ? "up" : (r.nota ?? 5) <= 4 ? "down" : "") + '</div>' +
+    '<div class="panel prose"><p>' + esc(r.resumo || "") + '</p></div>' +
+    ((r.movimentos || []).length ? '<h2>🎯 Movimentos propostos</h2><div class="cards">' + r.movimentos.map((m) => '<div class="opp"><div class="top"><span class="sym">' +
+      esc(act[m.acao] || m.acao) + ' ' + esc(m.ativo || "") + (m.para ? ' → ' + esc(m.para) : '') + '</span><span class="tag">prioridade ' + esc(pr[m.prioridade] || m.prioridade || "") + '</span></div>' +
+      ((m.montante_eur != null || m.percentagem != null) ? '<p><b>' + (m.montante_eur != null ? eur(m.montante_eur) : '') + (m.montante_eur != null && m.percentagem != null ? ' · ' : '') + (m.percentagem != null ? nf(m.percentagem, 0) + '%' : '') + '</b></p>' : '') +
+      '<p class="small">' + esc(m.porque || "") + '</p><p class="small muted">⏱️ ' + esc(m.quando || "") + (m.condicao ? ' · 🔁 ' + esc(m.condicao) : '') + '</p></div>').join("") + '</div>' : '') +
+    ((r.diagnostico || []).length ? '<h2>🩺 Diagnóstico</h2>' + table(["", "Tema", "Avaliação"], r.diagnostico.map((d) => [badge[d.avaliacao] || "⚪", '<b>' + esc(d.tema) + '</b>',
+      '<span style="white-space:normal">' + esc(d.texto) + '</span>'])) : '') +
+    ((r.riscos || []).length ? '<h2>⚠️ Riscos</h2><ul>' + r.riscos.map((x) => '<li>' + esc(x) + '</li>').join("") + '</ul>' : '') +
+    ((r.cenarios || []).length ? '<h2>🌪️ Cenários</h2>' + table(["Cenário", "Impacto"], r.cenarios.map((c) => [esc(c.cenario), '<span style="white-space:normal">' + esc(c.impacto) + '</span>'])) : '') +
+    ((r.perguntas || []).length ? '<h2>❓ Para afinar a análise</h2><ul>' + r.perguntas.map((x) => '<li>' + esc(x) + '</li>').join("") + '</ul>' : '') +
+    '<p class="muted small">' + esc(r.aviso || "Análise educativa gerada por IA, não é aconselhamento financeiro personalizado.") + '</p>';
+}
+async function loadAnalysis() {
+  try {
+    const a = await (await fetch(location.pathname.replace(/\/$/, "") + "/analysis", { cache: "no-store" })).json();
+    renderAnalysis(a);
+    clearTimeout(anTimer);
+    if (a.status === "pending") anTimer = setTimeout(loadAnalysis, 8000);
+  } catch (e) {}
+}
+$("an-go").addEventListener("click", async () => {
+  $("an-go").disabled = true;
+  try {
+    const r = await fetch(location.pathname.replace(/\/$/, "") + "/analysis", { method: "POST" });
+    const a = await r.json();
+    if (!r.ok) { alert(a.error); $("an-go").disabled = false; return; }
+    renderAnalysis(a); anTimer = setTimeout(loadAnalysis, 8000);
+  } catch (e) { $("an-go").disabled = false; }
+});
+loadAnalysis();
 
 function renderAccounts() {
   const acc = Object.entries(SNAP.accounts || {});
