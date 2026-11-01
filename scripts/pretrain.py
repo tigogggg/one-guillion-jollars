@@ -22,6 +22,7 @@ import argparse
 import csv
 import io
 import json
+import math
 import multiprocessing
 import os
 import random
@@ -429,6 +430,10 @@ def nudge(params: dict, rng: random.Random, size: float = 0.10) -> dict:
 
 RECENCY = 0.85  # each older training year counts 15% less
 GEN2_PARENTS, GEN2_CHILDREN = 6, 3
+GENERATIONS = 2  # rounds of mutations after the random variants
+# A candidate must beat the original parameters in this share of the training years (was 3 of 4: too strict to
+# let the search climb; the plateau, crisis, exam and Monte Carlo tests still guard against luck).
+CONSISTENCY = 0.65
 NEIGHBOURS, PLATEAU = 3, 0.7
 MIN_TRADES = 20
 ZONE_TRIES, ZONE_MIN_SHARE = 3, 0.10
@@ -543,7 +548,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     """Pick parameters that are consistently good, robust, survive the crises and hold up on the exam year.
 
     1. Generation 1: the original and random variants (shared rules included). Each runs every training year
-       separately (fresh 1000 EUR each) and must beat the original in at least 3 of every 4 years, with at
+       separately (fresh 1000 EUR each) and must beat the original in at least CONSISTENCY (65%) of the years, with at
        least MIN_TRADES trades (not for low-turnover strategies). Ranked by recency-weighted points.
     2. Generation 2: the best GEN2_PARENTS get GEN2_CHILDREN mutations each (agents.mutate), judged the same way.
     3. The best candidate must be on a plateau (NEIGHBOURS nearby values keep PLATEAU of its score, so it is
@@ -575,7 +580,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     pool += incumbents
     scored = [run_years(p) for p in pool]
     base = scored[0][0]
-    need = -(-3 * len(blocks) // 4)  # ceil(0.75 x years)
+    need = math.ceil(CONSISTENCY * len(blocks))  # years a candidate must beat the original in
 
     def ok(i: int) -> bool:
         years, trades = scored[i]
@@ -586,14 +591,27 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     def ranked() -> list[int]:
         return sorted((i for i in range(len(pool)) if ok(i)), key=lambda i: weighted(scored[i][0]), reverse=True)
 
-    if len(pool) > 1:  # generation 2: mutations of the best
-        for i in [i for i in ranked() if i != 0][:GEN2_PARENTS]:
-            for _ in range(GEN2_CHILDREN):
-                child = dict(pool[i])
-                agents.mutate(child, rng, strategy)
-                child = {k: v for k, v in child.items() if k in pool[0]}
-                pool.append(child)
-                scored.append(run_years(child))
+    def parents() -> list[int]:
+        """The consistent candidates first, then the best scores of the rest, the incumbent and the original: a local
+        search keeps going even when no random variant beats the original in enough years."""
+        out = [i for i in ranked() if i != 0][:GEN2_PARENTS]
+        rest = sorted((i for i in range(1, len(pool)) if i not in out), key=lambda i: weighted(scored[i][0]), reverse=True)
+        out += rest[: max(GEN2_PARENTS - len(out), 2)]
+        if incumbents and first_incumbent not in out:
+            out.append(first_incumbent)
+        return out + [0]
+
+    if len(pool) > 1:  # generations 2 and 3: mutations of the best so far
+        for _generation in range(GENERATIONS):
+            for i in parents():
+                for _ in range(GEN2_CHILDREN):
+                    child = dict(pool[i])
+                    agents.mutate(child, rng, strategy)
+                    child = {k: v for k, v in child.items() if k in pool[0]}
+                    if child in pool:
+                        continue
+                    pool.append(child)
+                    scored.append(run_years(child))
     crashes = {0: crash_test(strategy, pool[0], windows)}
     plateau = {}
     best_i = 0
@@ -838,7 +856,7 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
         )
     fields = [("🧪 Como foi feito",
                f"Treino {results['train'][0]} a {results['train'][1]} · exame {results['valid'][0]} a {results['valid'][1]}.\n"
-               "Variações por estratégia; só passam as que batem os parâmetros originais em 3 de cada 4 anos de treino, "
+               "Variações por estratégia; só passam as que batem os parâmetros originais em 65% dos anos de treino, "
                "não caem mais do que eles nas crises (2008, 2011, 2020, 2022) e passam o exame. Pontos da liga (face ao S&P 500, com penalização das quedas). Composição "
                "histórica do S&P 500, ordens à abertura seguinte, custos, câmbio e 28% de imposto, sem ver o futuro.\n"
                "*O período inclui os anos em que os parâmetros foram escolhidos, por isso é otimista; "

@@ -656,7 +656,7 @@ function backtestHtml(a) {
       ((b.review.fracos || []).length ? '<p><b>Pontos fracos:</b> ' + b.review.fracos.map(esc).join(" · ") + '</p>' : "") +
       (b.review.manter === false ? '<p class="down">⚠️ O Claude sugere repensar esta estratégia.</p>' : "") +
       ((b.review.regras_novas || []).length ? '<p><b>Regras novas sugeridas:</b> ' + b.review.regras_novas.map(esc).join(" · ") + '</p>' : "") : "") +
-    ((b.claude || []).length ? '<h3>🧪 Propostas do Claude no treino</h3><p class="muted small">O Claude propõe; o backtest decide. Cada proposta entrou como candidato e passou pelos mesmos testes: bater os originais em 3 de cada 4 anos, robustez, crises e exame.</p>' +
+    ((b.claude || []).length ? '<h3>🧪 Propostas do Claude no treino</h3><p class="muted small">O Claude propõe; o backtest decide. Cada proposta entrou como candidato e passou pelos mesmos testes: bater os originais em 65% dos anos, robustez, crises e exame.</p>' +
       table(["Alterações", "Hipótese", "Anos ganhos", "Pontuação", "Resultado"], b.claude.map((c) => [
         Object.entries(c.changes || {}).map(([k, v]) => '<code>' + esc(k) + ' ' + esc(v) + '</code>').join(" "), esc(c.hipotese || ""),
         esc(c.beats_years) + "/" + esc(c.years), '<span class="' + cls(c.score - c.score_original) + '">' + fmtNum(c.score, 0) + '</span> vs ' + fmtNum(c.score_original, 0),

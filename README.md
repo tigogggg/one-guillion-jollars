@@ -268,7 +268,7 @@ within bounds). The next pre-training adds them to the candidates on top of the
 last chosen parameters; they are adopted only if they pass the same tests as
 any other candidate. The report and the portal show each proposal's outcome.
 Claude proposes; the backtest decides. The parameters chosen in the last three
-pre-trainings are candidates too (exempt from the 3-in-4-years rule, which they
+pre-trainings are candidates too (exempt from the years rule, which they
 passed before, but not from the plateau, crisis, exam and Monte Carlo tests), so
 a retrain never drops a good set unless something beats it.
 
@@ -561,14 +561,14 @@ per agent.
 - Pre-training replays the S&P 500 as it was on each day (fja05680/sp500
   membership; delisted stocks only when Yahoo still has prices), uses the same
   `agents.decide()` as the live league, and accepts parameters only if they
-  beat the originals in 3 of every 4 training years and then on the exam year.
+  beat the originals in 65% of the training years and then on the exam year.
 
 ## Training v4: 20 years, crash tests, Monte Carlo, regime-aware Maestro
 
 - `pretrain.py` replays 20 years by default (`--anos`), with the last year as
   the exam. UCITS ETFs that did not exist yet are extended backwards with US
   proxies (SPY, QQQ, sector SPDRs, …) converted to EUR (`ETF_PROXIES`).
-- A candidate must beat the original parameters in 3 of every 4 training
+- A candidate must beat the original parameters in 65% of the training
   years, must not go bankrupt or fall more than 5 points deeper than the
   original in the 2008, 2011, 2020 and 2022 crises, must hold up on the exam,
   and its Monte Carlo risk of ruin (1000 alternative years from one-month

@@ -7,7 +7,7 @@ and proposes up to MAX_PROPOSALS parameter sets per strategy, each with the hypo
 
 The proposals are validated (known parameters only, clamped to their bounds) and saved in
 agents/claude_review.json. The next pre-training adds them to its candidates: they are adopted only if
-they pass the same tests as any other candidate (3 of every 4 training years, plateau, crises, exam).
+they pass the same tests as any other candidate (65% of the training years, plateau, crises, exam).
 Nothing is applied because Claude says so. A summary card goes to the agents channel.
 
     uv run python scripts/agent_review.py [--dry-run]
