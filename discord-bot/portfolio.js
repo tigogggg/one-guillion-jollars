@@ -233,6 +233,14 @@ async function importRows(data, body) {
     }
   }
   const added = next.length - data.tx.length;
+  data.dividends ||= [];
+  const seenDiv = new Set(data.dividends.map((d) => d.ext));
+  for (const d of (Array.isArray(body.dividends) ? body.dividends : []).slice(0, 2000)) {
+    const ext = String(d.ext || "").slice(0, 60), amount = Number(d.amount), symbol = String(d.symbol || "").toUpperCase();
+    if (!ext || seenDiv.has(ext) || !DAY.test(String(d.date || "")) || !isFinite(amount) || !SYMBOL.test(symbol)) continue;
+    data.dividends.push({ symbol, date: d.date, amount, currency: body.currency || "EUR", account, ext });
+    seenDiv.add(ext);
+  }
   data.tx = next;
   if (body.cash != null && body.cash !== "") {
     setAccount(data, { name: account, currency: body.currency, cash: body.cash, source: "importado", number });
@@ -253,6 +261,25 @@ async function change(data, body) {
       }
     }
     data.tx = data.tx.filter((x) => x.id !== body.id);
+    return null;
+  }
+  if (body.action === "profile") {
+    const p = body.profile || {};
+    const pick = (v, ok) => (ok.includes(v) ? v : null);
+    const n = (v, lo, hi) => (v === "" || v == null ? null : Number.isFinite(+v) && +v >= lo && +v <= hi ? +v : null);
+    data.profile = {
+      horizon_years: n(p.horizon_years, 0, 80),
+      goal: pick(p.goal, ["crescimento", "reforma", "casa", "rendimento", "preservar", "outro"]),
+      max_drawdown_pct: n(p.max_drawdown_pct, 0, 100),
+      monthly_eur: n(p.monthly_eur, 0, 1e7),
+      emergency_months: n(p.emergency_months, 0, 120),
+      experience: pick(p.experience, ["iniciante", "intermedio", "avancado"]),
+      etf_preference: pick(p.etf_preference, ["acumulacao", "distribuicao", "indiferente"]),
+      other: String(p.other || "").slice(0, 300),
+      avoid: String(p.avoid || "").slice(0, 200),
+      notes: String(p.notes || "").slice(0, 500),
+      updated: new Date().toISOString().slice(0, 10),
+    };
     return null;
   }
   if (body.action === "settings") {
@@ -345,7 +372,8 @@ async function snapshot(env, data) {
     return { symbol: t, name: q?.name || "", price: q?.price ?? null, currency: q?.currency || "", change: q?.prev ? q.price / q.prev - 1 : null,
              news: news?.scores?.[t] ?? null, proposed: (proposals?.buys || []).some((b) => b.symbol === t) };
   }));
-  return { name: data.name, tx: data.tx, quotes, fx, verdicts, follows, accounts: data.accounts || {}, settings: data.settings || { capital: 10000, risk: 1 },
+  return { name: data.name, tx: data.tx, quotes, fx, verdicts, follows, accounts: data.accounts || {}, profile: data.profile || null,
+           dividends: data.dividends || [], settings: data.settings || { capital: 10000, risk: 1 },
            proposals: proposals ? { as_of: proposals.as_of, zone: proposals.zone, buys: proposals.buys.slice(0, 12) } : null, at: Date.now() };
 }
 
@@ -357,7 +385,7 @@ const VERDICT_RULES = [
   "🔴 Vender: o preço está abaixo da média de 200 dias e a de 50 abaixo da de 200 (tendência de fundo perdida); ou perde 15% ou mais face ao custo médio; ou agentes que pesam 25% ou mais da liga estão a vender esta ação; ou notícias claramente negativas com o preço abaixo da média de 50 dias.",
   "🟠 Reduzir: abaixo da média de 50 dias (mas acima da de 200); ou mais de 25% da carteira numa só posição; ou ganho de 30%+ com o preço 15%+ acima da média de 50 dias (esticada: realizar parte).",
   "🟢 Manter: nenhum dos sinais acima.",
-  "Stop sugerido: o mais alto entre 2,5× a variação diária média abaixo do preço e a média de 200 dias.",
+  "Stop sugerido: ações, o mais alto entre 2,5× a variação diária média abaixo do preço e a média de 200 dias; ETFs de índice (mexem menos por dia), o mais baixo entre 4× a variação diária e a média de 200 dias, para não sair por ruído.",
 ];
 
 // ---------------------------------------------------------------------------
@@ -367,6 +395,28 @@ const VERDICT_RULES = [
 // ---------------------------------------------------------------------------
 
 const ANALYSES_PER_DAY = 3;
+
+// Basic facts of common UCITS ETFs (policy: acc = accumulating, dist = distributing; TER in % a year).
+// A convenience for the analysis, not a source of truth: the fund's KID is.
+const ETF_FACTS = {
+  "VUSA.DE": { index: "S&P 500", policy: "dist", ter: 0.07, issuer: "Vanguard", domicile: "IE" },
+  "VUSA.AS": { index: "S&P 500", policy: "dist", ter: 0.07, issuer: "Vanguard", domicile: "IE" },
+  "VUAA.DE": { index: "S&P 500", policy: "acc", ter: 0.07, issuer: "Vanguard", domicile: "IE" },
+  "SXR8.DE": { index: "S&P 500", policy: "acc", ter: 0.07, issuer: "iShares", domicile: "IE" },
+  "CSPX.AS": { index: "S&P 500", policy: "acc", ter: 0.07, issuer: "iShares", domicile: "IE" },
+  "EUNL.DE": { index: "MSCI World", policy: "acc", ter: 0.20, issuer: "iShares", domicile: "IE" },
+  "IWDA.AS": { index: "MSCI World", policy: "acc", ter: 0.20, issuer: "iShares", domicile: "IE" },
+  "XDWD.DE": { index: "MSCI World", policy: "acc", ter: 0.19, issuer: "Xtrackers", domicile: "IE" },
+  "VWCE.DE": { index: "FTSE All-World", policy: "acc", ter: 0.22, issuer: "Vanguard", domicile: "IE" },
+  "VWRL.AS": { index: "FTSE All-World", policy: "dist", ter: 0.22, issuer: "Vanguard", domicile: "IE" },
+  "IUSQ.DE": { index: "MSCI ACWI", policy: "acc", ter: 0.20, issuer: "iShares", domicile: "IE" },
+  "IS3N.DE": { index: "MSCI EM IMI", policy: "acc", ter: 0.18, issuer: "iShares", domicile: "IE" },
+  "EIMI.L": { index: "MSCI EM IMI", policy: "acc", ter: 0.18, issuer: "iShares", domicile: "IE" },
+  "SXRV.DE": { index: "Nasdaq-100", policy: "acc", ter: 0.33, issuer: "iShares", domicile: "IE" },
+  "EQQQ.DE": { index: "Nasdaq-100", policy: "dist", ter: 0.30, issuer: "Invesco", domicile: "IE" },
+  "VHYL.AS": { index: "FTSE All-World High Dividend Yield", policy: "dist", ter: 0.29, issuer: "Vanguard", domicile: "IE" },
+  "MEUD.PA": { index: "STOXX Europe 600", policy: "acc", ter: 0.07, issuer: "Amundi", domicile: "LU" },
+};
 
 function recentAnalyses(data) {
   const since = Date.now() - 864e5;
@@ -422,6 +472,13 @@ async function requestAnalysis(env, data, dispatch) {
     created: new Date().toISOString(),
     portfolio: { holdings: h.open, closed: h.closed, invested_eur: h.invested_eur, cash,
                  total_eur: +(h.invested_eur + cash.reduce((s, c) => s + c.cash_eur, 0)).toFixed(2), settings: snap.settings },
+    investor_profile: data.profile || null,
+    dividends_received: Object.values((data.dividends || []).reduce((m, d) => {
+      const r = (m[d.symbol] ||= { symbol: d.symbol, payments: 0, total: 0, last_12m: 0, last: null, currency: d.currency });
+      r.payments++; r.total = +(r.total + d.amount).toFixed(2); if (!r.last || d.date > r.last) r.last = d.date;
+      if (Date.parse(d.date) > Date.now() - 365 * 864e5) r.last_12m = +(r.last_12m + d.amount).toFixed(2);
+      return m; }, {})),
+    fund_facts: Object.fromEntries(h.open.filter((x) => ETF_FACTS[x.symbol]).map((x) => [x.symbol, { ...ETF_FACTS[x.symbol], source: "tabela interna: confirmar no KID do fundo" }])),
     verdicts: Object.fromEntries(Object.entries(snap.verdicts || {}).filter(([k]) => k !== "rules").map(([k, v]) => [k, { verdict: v.verdict, reasons: v.reasons, stop: v.stop }])),
     market: market ? { as_of: market.as_of, zone: market.zone, stage2_pct: market.stage2_pct, context: market.context } : null,
     safety_of_holdings: pick((market?.buy || []).concat(market?.sell || [])),
@@ -482,7 +539,9 @@ async function judge(data, quotes, fx, proposals, news) {
     if (price > sma50) good.push("acima da média de 50 dias");
     if (sma200 && price > sma200) good.push("acima da média de 200 dias");
     if ((scores[sym] ?? 0) >= 3) good.push(`notícias positivas (score +${scores[sym]})`);
-    const stop = Math.max(atr ? price - 2.5 * atr : 0, sma200 || 0);
+    const etf = /ETF|UCITS|Index|iShares|Vanguard|Xtrackers|Amundi|SPDR|Lyxor|Invesco/i.test(q.name || "");
+    const atrStop = atr ? price - (etf ? 4 : 2.5) * atr : 0;
+    const stop = etf ? Math.min(atrStop || Infinity, sma200 || Infinity) : Math.max(atrStop, sma200 || 0);
     out[sym] = {
       verdict: sell.length ? "Vender" : reduce.length ? "Reduzir" : "Manter",
       reasons: (sell.length ? sell : reduce.length ? reduce : good.length ? good : ["sem sinais de alerta"])
@@ -545,8 +604,25 @@ function portfolioPage(data, tok) {
   <h2>🤖 Análise da carteira pelo Claude</h2>
   <div class="panel prose small">
     <p>O Claude recebe as tuas posições, custos médios, pesos, ganhos, o dinheiro de cada conta, o capital e o risco que definiste, os vereditos, o score de segurança e as notícias de cada posição, o calendário, o contexto de mercado e o que os agentes propõem hoje. Devolve um diagnóstico, os riscos e movimentos concretos (o quê, quanto e porquê).</p>
-    <p class="muted">Demora 1 a 2 minutos. Máximo de 3 análises por dia. É uma análise educativa gerada por IA: não é aconselhamento financeiro personalizado e a decisão é sempre tua.</p>
+    <p class="muted">Preenche o teu perfil (abaixo) para uma análise à tua medida. Demora 1 a 2 minutos. Máximo de 3 análises por dia. É uma análise educativa gerada por IA: não é aconselhamento financeiro personalizado e a decisão é sempre tua.</p>
   </div>
+  <details class="panel" id="profile-box"><summary><b>👤 O teu perfil de investidor</b> <span id="pf-state" class="muted small"></span></summary>
+    <p class="muted small">Com isto o Claude adapta a análise ao teu caso (o mesmo conselho não serve a quem investe para a reforma daqui a 25 anos e a quem compra casa daqui a 3). Fica só na tua carteira.</p>
+    <form id="profile" class="form">
+      <label>Horizonte (anos até precisares do dinheiro) <input name="horizon_years" type="number" min="0" max="80"></label>
+      <label>Objetivo <select name="goal"><option value="">—</option><option value="crescimento">Fazer crescer o património</option><option value="reforma">Reforma</option>
+        <option value="casa">Comprar casa / grande despesa</option><option value="rendimento">Rendimento regular (dividendos)</option><option value="preservar">Preservar o capital</option><option value="outro">Outro</option></select></label>
+      <label>Queda que aguentas sem vender (%) <input name="max_drawdown_pct" type="number" min="0" max="100" placeholder="ex.: 20"></label>
+      <label>Entradas mensais (€) <input name="monthly_eur" type="number" min="0" step="10"></label>
+      <label>Fundo de emergência fora da XTB (meses de despesas) <input name="emergency_months" type="number" min="0" max="120"></label>
+      <label>Experiência <select name="experience"><option value="">—</option><option value="iniciante">Iniciante</option><option value="intermedio">Intermédio</option><option value="avancado">Avançado</option></select></label>
+      <label>ETFs: prefiro <select name="etf_preference"><option value="">—</option><option value="acumulacao">Acumulação</option><option value="distribuicao">Distribuição</option><option value="indiferente">Indiferente</option></select></label>
+      <label>Outros investimentos (imobiliário, PPR, depósitos…) <input name="other" maxlength="300"></label>
+      <label>A evitar (setores, países, temas) <input name="avoid" maxlength="200"></label>
+      <label>Notas para o Claude <input name="notes" maxlength="500" placeholder="ex.: o VUSA é de distribuição"></label>
+      <button class="btn" type="submit">GUARDAR PERFIL</button>
+    </form>
+  </details>
   <p><button class="btn" id="an-go">🤖 PEDIR ANÁLISE</button> <span id="an-left" class="muted small"></span></p>
   <div id="an-out"></div>
 </section>
@@ -634,6 +710,19 @@ function openTab(name) {
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
 
 let SNAP = null;
+
+function renderProfile() {
+  const p = SNAP.profile || {}, f = $("profile");
+  if (document.activeElement?.form === f) return;
+  for (const el of f.elements) if (el.name && el.name in p) el.value = p[el.name] ?? "";
+  const filled = Object.entries(p).filter(([k, v]) => k !== "updated" && v !== null && v !== "").length;
+  $("pf-state").textContent = filled ? "· " + filled + " campos preenchidos (" + p.updated + ")" : "· por preencher";
+}
+$("profile").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try { SNAP = await post({ action: "profile", profile: Object.fromEntries(new FormData(e.target).entries()) }); render(); alert("Perfil guardado. A próxima análise já o usa."); }
+  catch (err) { alert(err.message); }
+});
 
 // ---- Claude's analysis ----
 let anTimer = null;
@@ -739,6 +828,7 @@ const COLS = {
   closeTime: /(close|closing|fecho|encerramento).*(time|date|hora|data)|(time|date|hora|data).*(close|fecho|encerramento)/,
   closePrice: /(close|closing|fecho|encerramento).*(price|preco)|(price|preco).*(close|fecho|encerramento)/,
   amount: /^(amount|montante|valor|quantia|importancia)( .*)?$/,
+  time: /^(time|date|data|hora)( .*)?$/,
 };
 function findHeader(rows) {
   for (let i = 0; i < Math.min(rows.length, 120); i++) {
@@ -750,7 +840,8 @@ function findHeader(rows) {
       col.symbol = symbolAt;
       return { row: i, kind: "positions", col };
     }
-    if (at(COLS.type) >= 0 && at(COLS.amount) >= 0) return { row: i, kind: "cash", col: { type: at(COLS.type), amount: at(COLS.amount) } };
+    if (at(COLS.type) >= 0 && at(COLS.amount) >= 0) return { row: i, kind: "cash", col: { type: at(COLS.type), amount: at(COLS.amount),
+      symbol: at(COLS.symbol), time: at(COLS.time), id: at(COLS.id) } };
   }
   return null;
 }
@@ -777,7 +868,7 @@ function titleRow(rows) {  // the row with most text cells and no numbers: the c
   return best;
 }
 function parseXtb(wb) {
-  const out = { rows: [], cash: null, cashFrom: "", currency: null, notes: [], open: 0, closed: 0, shorts: 0, sheets: [] };
+  const out = { rows: [], cash: null, cashFrom: "", currency: null, notes: [], open: 0, closed: 0, shorts: 0, sheets: [], dividends: [] };
   let cashSum = null;
   for (const name of wb.SheetNames) {
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null });
@@ -791,6 +882,13 @@ function parseXtb(wb) {
     out.sheets[out.sheets.length - 1].found = h.kind;
     if (h.kind === "cash") {
       cashSum = (cashSum || 0) + rows.slice(h.row + 1).reduce((sum, r) => sum + (isFinite(num(r?.[h.col.amount])) ? num(r[h.col.amount]) : 0), 0);
+      for (const r of rows.slice(h.row + 1)) {  // dividends: proof that a fund distributes, and income
+        if (!r || !/dividend|dividendo/.test(plain(r[h.col.type])) || h.col.symbol < 0) continue;
+        const symbol = xtbSymbol(r[h.col.symbol]), amount = num(r[h.col.amount]), date = h.col.time >= 0 ? toDay(r[h.col.time]) : null;
+        if (!symbol || !isFinite(amount) || !date) continue;
+        const id = h.col.id >= 0 && r[h.col.id] != null ? String(r[h.col.id]) : symbol + "-" + date + "-" + amount;
+        out.dividends.push({ symbol, date, amount, ext: "xtb-div-" + id });
+      }
       continue;
     }
     const c = h.col;
@@ -889,7 +987,7 @@ $("import-form").file.addEventListener("change", async (e) => {
       for (const [i, x] of PARSED.entries()) {
         const val = (cls) => document.querySelector("." + cls + '[data-i="' + i + '"]').value.trim();
         const out = await post({ action: "import", account: val("imp-acc"), currency: val("imp-cur").toUpperCase(),
-                                 cash: val("imp-cash") === "" ? null : +val("imp-cash"), rows: x.parsed.rows, number: x.parsed.number || "" });
+                                 cash: val("imp-cash") === "" ? null : +val("imp-cash"), rows: x.parsed.rows, number: x.parsed.number || "", dividends: x.parsed.dividends });
         SNAP = out; results.push(out.imported);
       }
       render(); drawHistory();
@@ -1012,6 +1110,8 @@ function render() {
   const cashEur = accounts.reduce((sum, [, a]) => sum + a.cash * (s.fx[a.currency] ?? (a.currency === "EUR" ? 1 : 0)), 0);
   $("totals").innerHTML = (accounts.length ? tile("Património total", eur(value + cashEur), "posições + dinheiro") +
     tile("Dinheiro disponível", eur(cashEur), accounts.length + (accounts.length === 1 ? " conta" : " contas")) : "") +
+    ((s.dividends || []).length ? tile("Dividendos (12 meses)", eur(s.dividends.filter((d) => Date.parse(d.date) > Date.now() - 365 * 864e5)
+      .reduce((t, d) => t + d.amount * (s.fx[d.currency] ?? 1), 0)), s.dividends.length + " pagamentos importados") : "") +
     tile("Valor atual", eur(value), open.length + " posições abertas") +
     tile("Ganho não realizado", eur(total), pct(cost ? total / cost : null), cls(total)) +
     tile("Hoje", eur(day), pct(value - day ? day / (value - day) : null), cls(day)) +
@@ -1035,6 +1135,7 @@ function render() {
   renderMine();
   renderFollows();
   renderAccounts();
+  renderProfile();
   $("closed").innerHTML = table(["Ativo", "Comprado", "Vendido", "Resultado", "Resultado %", "Comissões", "De", "Até"],
     closed.map((p) => ['<b>' + esc(p.symbol) + '</b>', nf(p.bought) + " " + esc(p.currency), nf(p.sold) + " " + esc(p.currency),
       '<span class="' + cls(p.realized) + '">' + nf(p.realized) + " " + esc(p.currency) + '</span>', '<span class="' + cls(p.realized) + '">' + pct(p.bought ? p.realized / p.bought : null) + '</span>',

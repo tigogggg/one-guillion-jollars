@@ -1843,6 +1843,12 @@ def main() -> int:
         embeds, _ = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}")
         print(f"Portal atualizado: {embeds[0].get('url', 'sem credenciais da Cloudflare')}")
         publish_calendar(config, state, mkt)
+        holders: dict[str, list[str]] = {}
+        for cfg in active_agents(config):
+            for sym in (state["agents"].get(cfg["id"]) or {}).get("positions", {}):
+                holders.setdefault(sym, []).append(f"{cfg['emoji']} {cfg['name']}")
+        interactive.publish_section("market", {**opportunities.build(mkt, holders, earnings.next_earnings_many),
+                                               "context": dict(mkt.context)})
         return 0
     try:
         if a.mode == "daily":
