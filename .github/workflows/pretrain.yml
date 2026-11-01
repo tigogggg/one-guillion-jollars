@@ -48,6 +48,14 @@ on:
         description: "No fim, o Claude revê os resultados e propõe parâmetros para o próximo treino"
         type: boolean
         default: true
+      repetir:
+        description: "Execuções a encadear depois desta, cada uma com nova semente; para antes se 2 seguidas não mudarem nenhum parâmetro"
+        required: false
+        default: "0"
+      sem_mudancas:
+        description: "(interno) execuções seguidas sem mudanças até aqui"
+        required: false
+        default: "0"
 
 permissions:
   contents: read  # results are pushed to the private data repo with its deploy key
@@ -162,6 +170,9 @@ jobs:
     if: ${{ !cancelled() && !inputs.so_relatorio }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: write  # juntar_de reads artifacts; repetir dispatches the next run
     steps:
       - uses: actions/checkout@v4
       - name: Dados dos agentes (repositório privado)
@@ -195,6 +206,8 @@ jobs:
             openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_KEY -in "$f" | tar xzf - -C "$(dirname "$f")" --strip-components=1
             rm "$f"
           done
+      - name: Parâmetros escolhidos antes desta execução
+        run: jq -c '.strategies | map_values(.chosen)' agents/pretrain.json > "$RUNNER_TEMP/antes.json" || echo '{}' > "$RUNNER_TEMP/antes.json"
       - name: Juntar, aplicar e publicar
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -233,3 +246,19 @@ jobs:
           git commit -m "Agentes: revisão do Claude $(date -u +%F)"
           git pull --rebase origin main
           git push origin HEAD:main
+      - name: Encadear a próxima execução
+        if: ${{ success() && inputs.repetir != '' && inputs.repetir != '0' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REPETIR: ${{ inputs.repetir }}
+          SEM_MUDANCAS: ${{ inputs.sem_mudancas || '0' }}
+        run: |
+          jq -c '.strategies | map_values(.chosen)' agents/pretrain.json > "$RUNNER_TEMP/depois.json"
+          changed=$(jq -rn --slurpfile a "$RUNNER_TEMP/antes.json" --slurpfile b "$RUNNER_TEMP/depois.json" \
+            '[$b[0] | to_entries[] | select($a[0][.key] != .value) | .key] | join(", ")')
+          echo "Estratégias com parâmetros novos: ${changed:-nenhuma}"
+          if [ -n "$changed" ]; then quiet=0; else quiet=$((SEM_MUDANCAS + 1)); fi
+          if [ "$quiet" -ge 2 ]; then echo "Convergiu: 2 execuções seguidas sem mudanças."; exit 0; fi
+          gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f repetir=$((REPETIR - 1)) -f sem_mudancas=$quiet
+          echo "Pedi a próxima execução (depois dela ainda faltam $((REPETIR - 1)))."
