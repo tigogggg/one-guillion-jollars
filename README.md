@@ -230,7 +230,15 @@ rules on the page: trend against the 50- and 200-day averages, a 15% loss,
 agents with 25%+ of the league's weight selling, bad news, concentration,
 overextension) and a suggested stop; the "Propostas para ti" tab sizes the day's
 proposals for the member's saved capital and risk and can fill the buy form.
-Operations can be edited or duplicated (same operation, another date).
+Operations can be edited or duplicated (same operation, another date). The "📥 Importar" tab reads an XTB
+account-history export (xlsx) in the browser with SheetJS: closed positions
+become a buy and a sell, open positions a buy, short positions are left out,
+XTB symbols are mapped to Yahoo's (`AAPL.US` → `AAPL`, `ASML.NL` → `ASML.AS`,
+`BRK.B.US` → `BRK-B`), and the account's cash comes from the file's balance
+(or the sum of its cash operations). Only the rows the member confirms are
+sent; each keeps its XTB position number, so importing again adds nothing
+twice. Each import belongs to an account (one per XTB currency account) whose
+available cash shows in the totals and can be corrected by hand.
 
 `/carteira` works only inside the server, so only its members get one: each
 member gets one private link (`/c/<token>`, KV `portfolio-user:<discord id>`

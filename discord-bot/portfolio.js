@@ -11,7 +11,10 @@
 
 import { esc, html, page, safeJson } from "./chart_page.js";
 
-const MAX_TX = 1000;
+const MAX_TX = 3000;
+const MAX_IMPORT = 2000;
+const ACCOUNT = /^[\p{L}\p{N} ._\-]{1,40}$/u;
+const CURRENCY = /^[A-Z]{3}$/;
 const SYMBOL = /^[A-Z0-9][A-Z0-9.\-^=]{0,14}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const UA = { "User-Agent": "Mozilla/5.0 (compatible; CoutoTradingBot/1.0)" };
@@ -59,6 +62,18 @@ export async function portfolioRoute(request, env, tok, rest) {
     if (body.action === "follow_add" || body.action === "follow_remove") {
       const error = await follow(env, data, body);
       if (error) return json({ error }, 400);
+      return json(await snapshot(env, data));
+    }
+    if (body.action === "import") {
+      const out = await importRows(data, body);
+      if (out.error) return json({ error: out.error }, 400);
+      await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
+      return json({ ...(await snapshot(env, data)), imported: out });
+    }
+    if (body.action === "account") {
+      const error = setAccount(data, body);
+      if (error) return json({ error }, 400);
+      await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
       return json(await snapshot(env, data));
     }
     const error = await change(data, body);
@@ -116,6 +131,65 @@ function heldOn(tx, symbol, day, skipId) {
     qty += t.side === "buy" ? t.qty : -t.qty;
   }
   return qty;
+}
+
+// Brokerage accounts with their available cash, e.g. one per XTB currency account.
+function setAccount(data, body) {
+  const name = String(body.name || "").trim();
+  if (!ACCOUNT.test(name)) return "Nome de conta inválido.";
+  data.accounts ||= {};
+  if (body.remove) { delete data.accounts[name]; return null; }
+  const currency = String(body.currency || data.accounts[name]?.currency || "EUR").toUpperCase();
+  const cash = Number(body.cash);
+  if (!CURRENCY.test(currency)) return "Moeda inválida (ex.: EUR, USD).";
+  if (!isFinite(cash) || Math.abs(cash) > 1e10) return "Valor do dinheiro inválido.";
+  data.accounts[name] = { currency, cash, updated: new Date().toISOString().slice(0, 10), source: body.source || "manual" };
+  return null;
+}
+
+// A broker export already read in the browser: {account, currency, cash?, rows: [{side, symbol, date, qty, price, fee, note, ext}]}.
+// Rows already imported (same account and ext) are skipped; unknown tickers and sales without the shares are reported.
+async function importRows(data, body) {
+  const account = String(body.account || "").trim();
+  if (!ACCOUNT.test(account)) return { error: "Indica o nome da conta (ex.: XTB EUR)." };
+  const rows = Array.isArray(body.rows) ? body.rows.slice(0, MAX_IMPORT) : [];
+  const have = new Set(data.tx.filter((t) => t.account === account && t.ext).map((t) => t.ext));
+  const skipped = [], quotes = {};
+  let seq = data.tx.reduce((m, x) => Math.max(m, x.seq || 0), 0);
+  const fresh = [];
+  for (const r of rows) {
+    const symbol = String(r.symbol || "").trim().toUpperCase();
+    const side = r.side === "sell" ? "sell" : r.side === "buy" ? "buy" : null;
+    const qty = Number(r.qty), price = Number(r.price), fee = Number(r.fee || 0), date = String(r.date || "");
+    const ext = String(r.ext || "").slice(0, 60);
+    if (ext && have.has(ext)) { skipped.push({ symbol, date, reason: "já importada" }); continue; }
+    if (!side || !SYMBOL.test(symbol) || !DAY.test(date) || !(qty > 0) || !(price > 0) || !(fee >= 0)) {
+      skipped.push({ symbol, date, reason: "linha incompleta" }); continue;
+    }
+    if (!(symbol in quotes)) quotes[symbol] = await yahooQuote(symbol);
+    const q = quotes[symbol];
+    if (!q) { skipped.push({ symbol, date, reason: "ticker desconhecido no Yahoo Finance" }); continue; }
+    fresh.push({ id: token().slice(0, 12), seq: ++seq, side, symbol, date, qty, price, fee, currency: q.currency, name: q.name,
+                 note: String(r.note || "").slice(0, 120), account, ext });
+    if (ext) have.add(ext);
+  }
+  if (data.tx.length + fresh.length > MAX_TX) return { error: `Limite de ${MAX_TX} operações na carteira.` };
+  // a sale needs the shares on its date: drop the ones the file cannot back (e.g. history cut short)
+  let next = data.tx.concat(fresh);
+  for (const t of fresh.filter((x) => x.side === "sell").sort((a, b) => a.date.localeCompare(b.date))) {
+    if (heldOn(next, t.symbol, t.date, t.id) < t.qty - 1e-6) {
+      next = next.filter((x) => x.id !== t.id);
+      skipped.push({ symbol: t.symbol, date: t.date, reason: "venda sem compra correspondente no ficheiro" });
+    }
+  }
+  const added = next.length - data.tx.length;
+  data.tx = next;
+  if (body.cash != null && body.cash !== "") {
+    setAccount(data, { name: account, currency: body.currency, cash: body.cash, source: "importado" });
+  } else if (!data.accounts?.[account]) {
+    setAccount(data, { name: account, currency: body.currency || "EUR", cash: 0, source: "importado sem saldo" });
+  }
+  return { added, skipped: skipped.slice(0, 200), skippedCount: skipped.length };
 }
 
 async function change(data, body) {
@@ -212,7 +286,7 @@ async function snapshot(env, data) {
     env.CONFIG.get("portal:news", "json"),
   ]);
   const currencies = [...new Set(data.tx.map((t) => t.currency).concat(Object.values(quotes).filter(Boolean).map((q) => q.currency))
-    .concat((proposals?.buys || []).map((b) => b.plan.currency)))];
+    .concat((proposals?.buys || []).map((b) => b.plan.currency)).concat(Object.values(data.accounts || {}).map((a) => a.currency)))];
   const fx = Object.fromEntries(await Promise.all(currencies.map(async (c) => [c, await fxToEur(c)])));
   const verdicts = await judge(data, quotes, fx, proposals, news);
   const followList = data.owner ? ((await env.CONFIG.get(`follows:${data.owner}`, "json")) || []) : [];
@@ -221,7 +295,7 @@ async function snapshot(env, data) {
     return { symbol: t, name: q?.name || "", price: q?.price ?? null, currency: q?.currency || "", change: q?.prev ? q.price / q.prev - 1 : null,
              news: news?.scores?.[t] ?? null, proposed: (proposals?.buys || []).some((b) => b.symbol === t) };
   }));
-  return { name: data.name, tx: data.tx, quotes, fx, verdicts, follows, settings: data.settings || { capital: 10000, risk: 1 },
+  return { name: data.name, tx: data.tx, quotes, fx, verdicts, follows, accounts: data.accounts || {}, settings: data.settings || { capital: 10000, risk: 1 },
            proposals: proposals ? { as_of: proposals.as_of, zone: proposals.zone, buys: proposals.buys.slice(0, 12) } : null, at: Date.now() };
 }
 
@@ -325,14 +399,30 @@ function portfolioPage(data, tok) {
   <button class="tab" data-tab="adicionar">➕ Adicionar</button>
   <button class="tab" data-tab="propostas">🧠 Propostas para ti</button>
   <button class="tab" data-tab="seguir">👀 Seguir</button>
+  <button class="tab" data-tab="importar">📥 Importar</button>
 </nav>
 <section data-tab="resumo">
   <div id="totals" class="grid"></div>
+  <div id="accounts"></div>
   <h2>📈 Evolução</h2>
   <div id="chart" class="chart"></div>
   <p class="muted small" id="chart-note">Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.</p>
 </section>
 <section data-tab="posicoes" hidden><div id="positions"></div><div id="verdict-rules"></div><h2>✅ Posições fechadas</h2><div id="closed"></div></section>
+<section data-tab="importar" hidden>
+  <h2>📥 Importar da XTB</h2>
+  <div class="panel prose small">
+    <p><b>1.</b> No xStation 5 (computador): <b>Histórico</b> (ou o teu nome no canto → Histórico da conta) → escolhe o período <b>desde a abertura da conta</b> → <b>Exportar</b> → Excel (.xlsx).</p>
+    <p><b>2.</b> A XTB tem uma conta por moeda: exporta cada uma e importa-a com o seu nome (ex.: <i>XTB EUR</i>, <i>XTB USD</i>).</p>
+    <p><b>3.</b> Escolhe o ficheiro aqui. É lido <b>no teu navegador</b>: o ficheiro não é enviado; só as compras, vendas e o saldo que confirmares.</p>
+    <p class="muted">As posições fechadas entram como compra + venda; as abertas como compra; o saldo da conta como dinheiro disponível. Importar o mesmo ficheiro outra vez não duplica nada. Posições a descoberto (venda) e CFDs ficam de fora.</p>
+  </div>
+  <form id="import-form" class="panel form">
+    <label>Nome da conta <input name="account" value="XTB EUR" maxlength="40" required></label>
+    <label>Ficheiro da XTB <input name="file" type="file" accept=".xlsx,.xls,.csv" required></label>
+  </form>
+  <div id="import-preview"></div>
+</section>
 <section data-tab="seguir" hidden>
   <h2>👀 Ações que segues</h2>
   <p class="muted small">A mesma lista do <code>/seguir</code> no Discord: recebes uma mensagem privada quando uma destas ações rompe com volume ou mexe 5% ou mais no dia.</p>
@@ -403,6 +493,158 @@ function openTab(name) {
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
 
 let SNAP = null;
+
+function renderAccounts() {
+  const acc = Object.entries(SNAP.accounts || {});
+  $("accounts").innerHTML = acc.length ? '<h2>🏦 Contas</h2>' + table(["Conta", "Dinheiro disponível", "Em euros", "Atualizado", ""], acc.map(([name, a]) =>
+    ['<b>' + esc(name) + '</b>', '<input class="cash" data-acc="' + esc(name) + '" data-cur="' + esc(a.currency) + '" type="number" step="0.01" value="' + a.cash + '" style="width:120px"> ' + esc(a.currency),
+     eur(a.cash * (SNAP.fx[a.currency] ?? (a.currency === "EUR" ? 1 : 0))), esc(a.updated + " · " + (a.source || "")),
+     '<button class="del" data-delacc="' + esc(name) + '">remover</button>']), [2]) + '<p class="muted small">Corrige o dinheiro de uma conta escrevendo o valor e saindo da caixa.</p>' : "";
+}
+async function post(body) {
+  const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const out = await r.json();
+  if (!r.ok) throw new Error(out.error || "erro");
+  return out;
+}
+$("accounts").addEventListener("change", async (e) => {
+  const i = e.target.closest(".cash"); if (!i) return;
+  try { SNAP = await post({ action: "account", name: i.dataset.acc, currency: i.dataset.cur, cash: +i.value }); render(); } catch (err) { alert(err.message); }
+});
+$("accounts").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-delacc]"); if (!b || !confirm("Remover a conta " + b.dataset.delacc + "? As operações ficam.")) return;
+  try { SNAP = await post({ action: "account", name: b.dataset.delacc, remove: true }); render(); } catch (err) { alert(err.message); }
+});
+
+// ---- XTB import: read the export in the browser, show what was understood, send only the rows ----
+const XTB_SUFFIX = { US: "", DE: ".DE", NL: ".AS", FR: ".PA", IT: ".MI", UK: ".L", ES: ".MC", PT: ".LS", BE: ".BR", CH: ".SW", DK: ".CO",
+                     SE: ".ST", NO: ".OL", FI: ".HE", PL: ".WA", CZ: ".PR", AT: ".VI", IE: ".IR" };
+function xtbSymbol(raw) {
+  const s = String(raw || "").trim().toUpperCase().replace(/_\d+$/, "");
+  const m = s.match(/^([A-Z0-9.\-]+?)\.([A-Z]{2})$/);
+  if (!m) return s;
+  const base = m[1].replace(/\./g, "-");
+  return m[2] in XTB_SUFFIX ? base + XTB_SUFFIX[m[2]] : s;
+}
+function toDay(v) {
+  if (v instanceof Date && !isNaN(v)) return new Date(v.getTime() - v.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  if (typeof v === "number" && v > 20000 && v < 80000) return new Date(Math.round((v - 25569) * 864e5)).toISOString().slice(0, 10);
+  const t = String(v || "").trim();
+  let m = t.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/);
+  if (m) return m[3] + "-" + m[2].padStart(2, "0") + "-" + m[1].padStart(2, "0");
+  m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? m[0] : null;
+}
+const num = (v) => typeof v === "number" ? v : v == null ? NaN : parseFloat(String(v).replace(/\s/g, "").replace(/,(?=\d{1,8}$)/, "."));
+const COLS = {
+  id: /^(position|posição|posicao|order|ordem|id)$/i, symbol: /^(symbol|símbolo|simbolo|instrument|instrumento)$/i, type: /^(type|tipo)$/i,
+  volume: /^(volume|quantidade|quantity)$/i, openTime: /open.?time|hora de abertura|data de abertura|abertura$/i,
+  openPrice: /open.?price|preço de abertura|preco de abertura/i, closeTime: /close.?time|hora de fecho|data de fecho|fecho$/i,
+  closePrice: /close.?price|preço de fecho|preco de fecho/i, amount: /^(amount|montante|valor|quantia)$/i,
+};
+function findHeader(rows) {
+  for (let i = 0; i < Math.min(rows.length, 40); i++) {
+    const cells = (rows[i] || []).map((c) => String(c ?? "").trim());
+    const at = (re) => cells.findIndex((c) => re.test(c));
+    if (at(COLS.symbol) >= 0 && (at(COLS.openTime) >= 0 || at(COLS.openPrice) >= 0)) {
+      return { row: i, kind: "positions", col: Object.fromEntries(Object.entries(COLS).map(([k, re]) => [k, at(re)])) };
+    }
+    if (at(COLS.type) >= 0 && at(COLS.amount) >= 0) return { row: i, kind: "cash", col: { type: at(COLS.type), amount: at(COLS.amount) } };
+  }
+  return null;
+}
+function labelled(rows, re) {  // a value next to (or under) a label like "Balance" or "Saldo"
+  for (let i = 0; i < Math.min(rows.length, 30); i++) {
+    const r = rows[i] || [];
+    for (let j = 0; j < r.length; j++) {
+      if (!re.test(String(r[j] ?? "").trim())) continue;
+      const right = r.slice(j + 1).find((x) => x != null && String(x).trim() !== "");
+      if (right != null) return right;
+      const below = (rows[i + 1] || [])[j];
+      if (below != null) return below;
+    }
+  }
+  return null;
+}
+function parseXtb(wb) {
+  const out = { rows: [], cash: null, cashFrom: "", currency: null, notes: [], open: 0, closed: 0, shorts: 0 };
+  let cashSum = null;
+  for (const name of wb.SheetNames) {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null });
+    const cur = labelled(rows, /^(currency|moeda)$/i);
+    if (cur && /^[A-Z]{3}$/.test(String(cur).trim())) out.currency ||= String(cur).trim();
+    const bal = num(labelled(rows, /^(balance|saldo)$/i));
+    if (out.cash == null && isFinite(bal)) { out.cash = bal; out.cashFrom = "saldo do ficheiro (" + name + ")"; }
+    const h = findHeader(rows);
+    if (!h) continue;
+    if (h.kind === "cash") {
+      cashSum = (cashSum || 0) + rows.slice(h.row + 1).reduce((sum, r) => sum + (isFinite(num(r?.[h.col.amount])) ? num(r[h.col.amount]) : 0), 0);
+      continue;
+    }
+    const c = h.col;
+    for (const r of rows.slice(h.row + 1)) {
+      if (!r || r[c.symbol] == null) continue;
+      const type = String(c.type >= 0 ? r[c.type] ?? "BUY" : "BUY");
+      const symbol = xtbSymbol(r[c.symbol]), qty = num(r[c.volume]), openDay = toDay(r[c.openTime]), openPrice = num(r[c.openPrice]);
+      if (!symbol || !(qty > 0) || !openDay || !(openPrice > 0)) continue;
+      if (/sell|venda/i.test(type)) { out.shorts++; continue; }
+      const id = c.id >= 0 && r[c.id] != null ? String(r[c.id]) : symbol + "-" + openDay + "-" + qty + "-" + openPrice;
+      out.rows.push({ side: "buy", symbol, date: openDay, qty, price: openPrice, fee: 0, note: "XTB " + id, ext: "xtb-" + id + "-b" });
+      const closeDay = c.closeTime >= 0 ? toDay(r[c.closeTime]) : null, closePrice = c.closePrice >= 0 ? num(r[c.closePrice]) : NaN;
+      if (closeDay && closePrice > 0) {
+        out.rows.push({ side: "sell", symbol, date: closeDay, qty, price: closePrice, fee: 0, note: "XTB " + id, ext: "xtb-" + id + "-s" });
+        out.closed++;
+      } else out.open++;
+    }
+  }
+  if (out.cash == null && cashSum != null) { out.cash = Math.round(cashSum * 100) / 100; out.cashFrom = "soma das operações de dinheiro"; }
+  // the same position can be listed in two sheets: keep each ext once
+  const seen = new Set();
+  out.rows = out.rows.filter((r) => !seen.has(r.ext) && seen.add(r.ext)).sort((a, b) => a.date.localeCompare(b.date));
+  return out;
+}
+function loadSheetJs() {
+  return window.XLSX ? Promise.resolve() : new Promise((ok, fail) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"; s.onload = ok; s.onerror = () => fail(new Error("não consegui carregar o leitor de Excel"));
+    document.head.appendChild(s);
+  });
+}
+let PARSED = null;
+$("import-form").file.addEventListener("change", async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  $("import-preview").innerHTML = '<p class="muted">A ler o ficheiro…</p>';
+  try {
+    await loadSheetJs();
+    const wb = XLSX.read(await f.arrayBuffer(), { cellDates: true });
+    PARSED = parseXtb(wb);
+  } catch (err) { $("import-preview").innerHTML = '<p class="down">⚠️ ' + esc(err.message) + '</p>'; return; }
+  const P = PARSED;
+  if (!P.rows.length && P.cash == null) {
+    $("import-preview").innerHTML = '<p class="down">⚠️ Não encontrei posições nem saldo neste ficheiro. É a exportação do histórico da conta da XTB (xlsx)? Se for, envia-me um print das primeiras linhas de cada folha (sem dados pessoais) para eu ajustar a leitura.</p>';
+    return;
+  }
+  $("import-preview").innerHTML = '<div class="grid">' + tile("Posições fechadas", P.closed, "compra + venda") + tile("Posições abertas", P.open, "compra") +
+    tile("Operações", P.rows.length) + tile("Dinheiro disponível", P.cash == null ? "não encontrado" : nf(P.cash) + " " + esc(P.currency || ""), esc(P.cashFrom)) + '</div>' +
+    (P.shorts ? '<p class="small muted">' + P.shorts + ' posições a descoberto ficam de fora.</p>' : '') +
+    '<div class="panel filters"><label class="small">Moeda da conta <input id="imp-cur" value="' + esc(P.currency || "EUR") + '" maxlength="3" style="width:70px"></label>' +
+    '<label class="small">Dinheiro disponível <input id="imp-cash" type="number" step="0.01" value="' + (P.cash ?? "") + '" style="width:130px"></label>' +
+    '<button class="btn" id="imp-go">IMPORTAR ' + P.rows.length + ' OPERAÇÕES</button></div>' +
+    '<details><summary>Ver as operações lidas</summary>' + table(["Data", "Tipo", "Ativo", "Qtd.", "Preço", "Ref."], P.rows.slice(0, 500).map((r) =>
+      [esc(r.date), r.side === "buy" ? "🟢 compra" : "🔴 venda", '<b>' + esc(r.symbol) + '</b>', nf(r.qty, 4), nf(r.price), esc(r.note)]), [3, 4]) + '</details>';
+  $("imp-go").addEventListener("click", async () => {
+    const btn = $("imp-go"); btn.disabled = true; btn.textContent = "A IMPORTAR…";
+    try {
+      const out = await post({ action: "import", account: $("import-form").account.value.trim(), currency: $("imp-cur").value.trim().toUpperCase(),
+                               cash: $("imp-cash").value === "" ? null : +$("imp-cash").value, rows: PARSED.rows });
+      SNAP = out; render(); drawHistory();
+      $("import-form").file.value = "";  // so the same file can be chosen again
+      const im = out.imported;
+      $("import-preview").innerHTML = '<p class="up">✅ ' + im.added + ' operações importadas.' + (im.skippedCount ? ' ' + im.skippedCount + ' ficaram de fora:' : '') + '</p>' +
+        (im.skippedCount ? table(["Ativo", "Data", "Porquê"], im.skipped.map((x) => [esc(x.symbol), esc(x.date), esc(x.reason)])) : '');
+    } catch (err) { btn.disabled = false; btn.textContent = "TENTAR DE NOVO"; $("import-preview").insertAdjacentHTML("beforeend", '<p class="down">⚠️ ' + esc(err.message) + '</p>'); }
+  });
+});
 try { localStorage.setItem("carteira", JSON.stringify(location.pathname.replace(/\/$/, ""))); } catch (e) {}  // the portal's "Hoje" shows it
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 
@@ -511,7 +753,10 @@ function render() {
   });
   for (const p of all) realized += p.realized * (s.fx[p.currency] ?? 0);
   const total = value - cost;
-  $("totals").innerHTML =
+  const accounts = Object.entries(s.accounts || {});
+  const cashEur = accounts.reduce((sum, [, a]) => sum + a.cash * (s.fx[a.currency] ?? (a.currency === "EUR" ? 1 : 0)), 0);
+  $("totals").innerHTML = (accounts.length ? tile("Património total", eur(value + cashEur), "posições + dinheiro") +
+    tile("Dinheiro disponível", eur(cashEur), accounts.length + (accounts.length === 1 ? " conta" : " contas")) : "") +
     tile("Valor atual", eur(value), open.length + " posições abertas") +
     tile("Ganho não realizado", eur(total), pct(cost ? total / cost : null), cls(total)) +
     tile("Hoje", eur(day), pct(value - day ? day / (value - day) : null), cls(day)) +
@@ -534,6 +779,7 @@ function render() {
     s.verdicts.rules.map((x) => '<li>' + esc(x) + '</li>').join("") + '</ul><p class="muted small">Sinais técnicos para te ajudar a pensar, não ordens: a decisão é tua.</p></details>' : "";
   renderMine();
   renderFollows();
+  renderAccounts();
   $("closed").innerHTML = table(["Ativo", "Comprado", "Vendido", "Resultado", "Resultado %", "Comissões", "De", "Até"],
     closed.map((p) => ['<b>' + esc(p.symbol) + '</b>', nf(p.bought) + " " + esc(p.currency), nf(p.sold) + " " + esc(p.currency),
       '<span class="' + cls(p.realized) + '">' + nf(p.realized) + " " + esc(p.currency) + '</span>', '<span class="' + cls(p.realized) + '">' + pct(p.bought ? p.realized / p.bought : null) + '</span>',
