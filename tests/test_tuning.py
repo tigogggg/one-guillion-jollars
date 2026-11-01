@@ -92,6 +92,15 @@ def test_train_strategy_runs_end_to_end_on_synthetic_markets(monkeypatch):
     assert r["greedy"] and all({"param", "value", "train_gain", "kept"} <= set(t) for t in r["greedy"])
 
 
+def test_the_live_parameters_change_only_for_a_clear_gain(monkeypatch):
+    _synthetic_training(monkeypatch)
+    monkeypatch.setattr(pretrain, "previous_choices", lambda s: [{"chosen": {"n": 3, "stop_pct": 0.2}, "until": None}])
+    monkeypatch.setattr(pretrain, "claude_candidates", lambda s, base: [])
+    monkeypatch.setattr(pretrain, "CHANGE_MARGIN", 100.0)  # nothing can be that much better
+    _, r = pretrain.train_strategy("foguetao")
+    assert r["chosen"]["n"] == 3 and r["chosen"]["stop_pct"] == 0.2
+
+
 @pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="worker processes need fork (Linux)")
 def test_training_on_worker_processes_gives_the_same_result(monkeypatch):
     _synthetic_training(monkeypatch)

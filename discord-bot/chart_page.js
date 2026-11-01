@@ -92,7 +92,7 @@ export function nextRuns(schedule, now) {
       let times = [];
       if (job.weekdays && weekday) times = [].concat(schedule[job.key] || []);
       if (job.key === "semanal" && DAYS[dow] === schedule.semanal?.dia) times = [schedule.semanal.hora];
-      if (job.key === "treino" && weekday && (d === 1 || (dow === 1 && d <= 3))) times = [schedule.treino];
+      if (job.key === "treino" && DAYS[dow] === "dom") times = [schedule.treino];
       for (const t of times.slice().sort()) {
         const [h, mi] = String(t).split(":").map(Number);
         const at = lisbonToEpoch(y, m, d, h, mi);
@@ -1329,7 +1329,7 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
     ["🎯 Oportunidades e contexto", when(MARKET), 30 + weekendSlack, "com a liga"],
     ["🧠 Propostas", when(PROPOSALS), 30 + weekendSlack, "com a liga"],
     ["📅 Agenda", when(CALENDAR), 30 + weekendSlack, "com a liga"],
-    ["⏪ Pré-treino", PRETRAIN && PRETRAIN.updated, 24 * 35, "no 1.º dia útil de cada mês"],
+    ["⏪ Pré-treino", PRETRAIN && PRETRAIN.updated, 24 * 8, "ao domingo"],
   ];
   const dot = (h, max) => h == null ? '<span class="dot bad"></span>sem dados' : h <= max ? '<span class="dot ok"></span>em dia' : h <= max * 2 ? '<span class="dot old"></span>atrasado' : '<span class="dot bad"></span>parado';
   const ago = (h) => h == null ? "—" : h < 1 ? Math.max(1, Math.round(h * 60)) + " min" : h < 48 ? Math.round(h) + " h" : Math.round(h / 24) + " dias";

@@ -39,7 +39,7 @@ Run on this PC (free, uses all cores the memory allows):
 
 It repeats runs until no strategy improves for 2 runs (max 12), merges, applies and pushes `agents/`.
 A run only replaces a strategy's parameters if the exam (last year, out of sample) does not get worse and
-training + exam together improve; the last 3 choices always stay candidates. If a merge failed:
+training + exam together improve by at least 5% (`CHANGE_MARGIN`, weekly runs on Sundays must not swap for noise); the last 3 choices always stay candidates. If a merge failed:
 `--retomar out/local/<run folder>`. Logs: `out/local/<run>/<strategy>.log`.
 
 After a run is pushed, the portal shows it once GitHub Actions republishes: dispatch

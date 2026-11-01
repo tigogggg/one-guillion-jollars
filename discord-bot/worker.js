@@ -46,7 +46,7 @@ const DEFAULT_SCHEDULE = {
   estado: "23:00", // health check, after every other weekday job
   noticias: ["12:00", "16:00", "20:30"],
   semanal: { dia: "sab", hora: "10:00" },
-  treino: "07:30", // first weekday of each month: re-train the agents on the last 20 years
+  treino: "06:00", // Sundays, after the weekly market data (context-data.yml): re-train the agents on the last 20 years
 };
 const DAYS = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
 const DAY_NAMES = { dom: "domingo", seg: "segunda", ter: "terça", qua: "quarta", qui: "quinta", sex: "sexta", sab: "sábado" };
@@ -295,8 +295,7 @@ async function runSchedule(env, ctx, now) {
       for (const t of schedule.noticias) jobs.push(["noticias", t]);
     }
     if (now.day === schedule.semanal.dia) jobs.push(["semanal", schedule.semanal.hora]);
-    const dayOfMonth = Number(now.date.slice(8));
-    if (weekday && (dayOfMonth === 1 || (now.day === "seg" && dayOfMonth <= 3))) jobs.push(["treino", schedule.treino]);
+    if (now.day === "dom") jobs.push(["treino", schedule.treino]);
 
     for (const [job, time] of jobs) {
       const late = now.minutes - toMinutes(time);
@@ -378,7 +377,7 @@ async function scheduleCommand(env, sub) {
     `📰 Notícias: **${schedule.noticias.join(" · ")}** (dias úteis)`,
     `🗓️ Resumo semanal: **${DAY_NAMES[schedule.semanal.dia]} às ${schedule.semanal.hora}**`,
     `🔧 Verificação do estado do bot: **${schedule.estado}** (dias úteis, no canal 🔧-estado)`,
-    `🧠 Re-treino dos agentes (últimos 20 anos): **1.º dia útil de cada mês às ${schedule.treino}**`,
+    `🧠 Re-treino dos agentes (últimos 20 anos): **ao domingo às ${schedule.treino}**`,
     "-# As análises arrancam até 5 minutos depois da hora marcada e demoram alguns minutos a chegar.",
   ].join("\n");
 }

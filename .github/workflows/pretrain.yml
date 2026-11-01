@@ -3,8 +3,8 @@ name: Pré-treino dos agentes
 # Walk-forward backtest of every strategy on the last 20 years (the last one is
 # the exam), with crash tests and Monte Carlo. Each strategy trains on its own
 # machine in parallel; a final job merges the results, applies them (with
-# "aplicar") and posts the report. Started by the Worker on the first weekday
-# of each month, or by hand.
+# "aplicar") and posts the report. Started by the Worker every Sunday at 06:00
+# Lisbon (after the weekly market data), or by hand.
 # This repo is public: agents/ is a checkout of the private repo
 # one-guillion-jollars-dados (deploy key DADOS_DEPLOY_KEY), and each strategy's
 # results travel between jobs encrypted with BACKUP_KEY (artifacts are public too).

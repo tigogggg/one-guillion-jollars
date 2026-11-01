@@ -85,7 +85,7 @@ EARNINGS_AVOID_DAYS_DEFAULT = EARNINGS_AVOID_DAYS
 NEWS_VETO = 3  # no agent buys a stock whose 36 h news score is at or below -NEWS_VETO (peso_noticias tunes it)
 NEWS_VETO_DEFAULT = NEWS_VETO
 # Strategies that cannot be replayed on past data (no history of fundamentals, news or other agents):
-# they learn by monthly mutation; the rest are re-trained each month by pretrain.py.
+# they learn by monthly mutation; the rest are re-trained every Sunday by pretrain.py.
 LIVE_ONLY = {"joalheiro", "jornalista", "catalisador", "cetico", "conselho", "maestro"}
 META = {"conselho", "maestro"}  # decide after the others, from their portfolios
 TRADES_KEPT = 200
@@ -630,7 +630,7 @@ def mutate(params: dict, rng: random.Random, strategy: str | None = None) -> lis
 def train(cfg: dict, port: dict, mkt: Market) -> str | None:
     """First run of a month: a live-only agent that lost money last month mutates its parameters.
 
-    The other strategies are re-trained on the last year by pretrain.py at the start of each month.
+    The other strategies are re-trained by pretrain.py every Sunday.
     """
     hist = port["history"]
     if len(hist) < 2 or hist[-1]["date"][:7] == hist[-2]["date"][:7]:

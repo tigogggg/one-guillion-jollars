@@ -451,6 +451,7 @@ def variants(strategy: str, n: int) -> list[dict]:
 
 REVIEW_PATH = agents.REPO_AGENTS / "claude_review.json"
 HISTORY_KEEP = 3  # earlier choices kept per strategy, each one a candidate in the next pre-training
+CHANGE_MARGIN = 0.05  # a new choice replaces the one the agent trades with only if it is this much better overall
 
 
 def previous_choices(strategy: str) -> list[dict]:
@@ -843,22 +844,35 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
     # runs can only keep or improve each strategy.
     kept_previous = None
     new_obj = overall(run_years(chosen)[0], chosen_valid["points"]) if history and strategy != "indexador" else None
-    for h in history if new_obj is not None else []:  # the last choices (up to HISTORY_KEEP): the best one stays
+    live = None  # the last choice, which the agent trades with: (parameters, exam result, overall)
+
+    def keep(previous: dict, prev_exam: dict, prev_obj: float) -> None:
+        nonlocal kept_previous, new_obj, chosen, chosen_valid, adopt, full, mc, greedy_log, zones_tried
+        kept_previous = {"previous": round(prev_obj, 1), "new": round((kept_previous or {}).get("new", new_obj), 1),
+                         "exam_previous": prev_exam["points"], "exam_new": chosen_valid["points"]}
+        new_obj = prev_obj
+        chosen, chosen_valid, adopt = previous, prev_exam, True
+        full = simulate(strategy, chosen, markets)
+        mc = monte_carlo(full["daily"])
+        greedy_log = [dict(t, kept=False) for t in greedy_log]
+        zones_tried = {z: dict(v, kept=False) for z, v in zones_tried.items()}
+        crashes["kept_previous"] = crash_test(strategy, chosen, windows)
+
+    for j, h in enumerate(history if new_obj is not None else []):  # the last choices (up to HISTORY_KEEP): the best one stays
         previous = {**pool[0], **h["chosen"]}
         if previous != chosen:
             prev_exam = simulate(strategy, previous, valid)
             prev_obj = overall(run_years(previous)[0], prev_exam["points"])
+            if j == 0:
+                live = (previous, prev_exam, prev_obj)
             # the new choice must not be worse on the exam, nor overall (training and exam together)
             if prev_exam["points"] > chosen_valid["points"] or prev_obj > new_obj:
-                kept_previous = {"previous": round(prev_obj, 1), "new": round((kept_previous or {}).get("new", new_obj), 1),
-                                 "exam_previous": prev_exam["points"], "exam_new": chosen_valid["points"]}
-                new_obj = prev_obj
-                chosen, chosen_valid, adopt = previous, prev_exam, True
-                full = simulate(strategy, chosen, markets)
-                mc = monte_carlo(full["daily"])
-                greedy_log = [dict(t, kept=False) for t in greedy_log]
-                zones_tried = {z: dict(v, kept=False) for z, v in zones_tried.items()}
-                crashes["kept_previous"] = crash_test(strategy, chosen, windows)
+                keep(previous, prev_exam, prev_obj)
+    # Changing what the agent trades with must be clearly worth it (CHANGE_MARGIN of the overall score), so the weekly
+    # re-training does not swap parameters for noise.
+    if live and chosen != live[0] and new_obj < live[2] + abs(live[2]) * CHANGE_MARGIN:
+        keep(*live)
+        kept_previous["margin"] = CHANGE_MARGIN
 
     importance = parameter_importance(strategy, chosen, train_mk, valid, chosen_valid["points"])
     claude_log = []

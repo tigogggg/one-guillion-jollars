@@ -1,7 +1,7 @@
 """Train the agents on your own computer (no GitHub Actions minutes), several runs in a row, then push.
 
 The heavy search for each strategy's best parameters (many candidates, several runs with different seeds)
-only has to be done once; the monthly re-training in GitHub Actions then refines it. This script does what
+only has to be done once; the weekly re-training in GitHub Actions (Sundays) then refines it. This script does what
 pretrain.yml does, on this machine:
 
 1. downloads the market context once (the same for every strategy);
