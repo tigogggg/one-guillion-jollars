@@ -303,6 +303,15 @@ and the member's own position when their portfolio was opened on that device;
 first visit (📖 Guia reopens it). Scripts and styles are served once from
 `/static/<name>-<hash>` and cached for a year, so pages are small.
 
+**Platform updates.** The 📢 UPDATES category has a read-only
+📢-novidades channel (`discord_setup.py --canal-updates`). After each push that
+changes the platform (`discord-bot/`, `scripts/`, workflows), `updates.yml`
+waits five minutes so a burst of pushes becomes one post, then
+`scripts/updates.py` gives Claude the commits since the last note (KV
+`updates:last`) and posts what is new, what was fixed and what members need to
+do. Bot data commits are ignored, and nothing is posted when only internal
+things changed.
+
 **Music.** Every page plays a YouTube track in a hidden player, muted by
 default; the 🔇/🔊 button turns it on and the choice is remembered per device.
 

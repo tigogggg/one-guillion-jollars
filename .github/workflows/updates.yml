@@ -1,0 +1,55 @@
+name: Novidades da plataforma
+run-name: "Novidades da plataforma"
+
+# After a push that changes the platform, waits a few minutes (a burst of pushes becomes one post),
+# then scripts/updates.py asks Claude to summarise the new commits for members and posts the note in
+# 📢-novidades. The bot's own data commits (agents/, data/) do not trigger it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "discord-bot/**"
+      - "scripts/**"
+      - ".github/workflows/**"
+      - "!.github/workflows/updates.yml"
+  workflow_dispatch:
+    inputs:
+      desde:
+        description: 'Resumir desde esta data (ex.: "2 days ago"); vazio = desde a última nota'
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: updates
+  cancel-in-progress: true  # a newer push restarts the wait, so one post covers the whole burst
+
+jobs:
+  note:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Esperar por mais pushes
+        if: ${{ github.event_name == 'push' }}
+        run: sleep 300
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 300
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Instalar o Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Publicar a nota
+        env:
+          DESDE: ${{ inputs.desde }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$DESDE" ]; then uv run python scripts/updates.py --desde "$DESDE"; else uv run python scripts/updates.py; fi

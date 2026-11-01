@@ -314,6 +314,11 @@ TEST_CHANNEL = ("testes", "🧪-testes", "Testes de funcionalidades novas antes 
 STATUS_CHANNEL = ("estado", "🔧-estado", "Verificação diária do bot: as tarefas do dia correram e os dados estão em dia? Só o bot publica.")
 
 
+UPDATES_CATEGORY = "📢 UPDATES"
+UPDATES_CHANNEL = ("updates", "📢-novidades", "Novidades e correções da plataforma One Guillion Jollars (portal, carteira, agentes e bot), "
+                   "resumidas sempre que há uma atualização. Só o bot publica; comenta em tópicos.")
+
+
 PORTAL_CHANNEL = ("portal", "🏟️-portal", "A entrada: abre o portal, pede a tua carteira e vê onde aparece cada coisa. Só o bot publica.")
 BANNER = REPO / "discord" / "portal-banner.png"  # drawn from discord/banner/portal-banner.html
 PINK = 0xFF2E88
@@ -395,7 +400,7 @@ def create_portal() -> int:
     return 0
 
 
-def create_test_channel(spec: tuple[str, str, str] = TEST_CHANNEL) -> int:
+def create_test_channel(spec: tuple[str, str, str] = TEST_CHANNEL, category_name: str | None = None) -> int:
     """Create (or reuse) one extra read-only channel (🧪-testes by default) in the category and add it to discord/channels.json.
 
     Leaves the other channels alone; needs the category from --canais first.
@@ -407,6 +412,9 @@ def create_test_channel(spec: tuple[str, str, str] = TEST_CHANNEL) -> int:
     guild, category = saved["guild_id"], saved["category_id"]
     key, name, topic = spec
     bot = discord_api("GET", "/users/@me")["id"]
+    if category_name:  # a category of its own (📢 UPDATES), created if missing
+        found = next((c for c in discord_api("GET", f"/guilds/{guild}/channels") if c["type"] == 4 and c["name"].lower() == category_name.lower()), None)
+        category = (found or discord_api("POST", f"/guilds/{guild}/channels", json={"name": category_name, "type": 4}))["id"]
     channel = next((c for c in discord_api("GET", f"/guilds/{guild}/channels") if c["type"] == 0 and c["name"] == name), None)
     if channel is None:
         channel = discord_api("POST", f"/guilds/{guild}/channels", json={
@@ -568,6 +576,7 @@ def main() -> int:
     parser.add_argument("--canais", action="store_true", help="Create the 📈 FINANÇAS category and channels")
     parser.add_argument("--canal-testes", action="store_true", help="Create the 🧪-testes channel (for DISCORD_TESTES)")
     parser.add_argument("--canal-estado", action="store_true", help="Create the 🔧-estado channel (health check)")
+    parser.add_argument("--canal-updates", action="store_true", help="Create the 📢 UPDATES category and its 📢-novidades channel")
     parser.add_argument("--portal", action="store_true", help="Create 🏟️-portal and pin the portal message with its banner")
     parser.add_argument("--apagar-canais", metavar="IDS", help="Delete these channels (comma-separated ids)")
     parser.add_argument("--espelho", metavar="GUILD_ID", help="Create the channels in a second server and copy posts there")
@@ -606,6 +615,12 @@ def main() -> int:
             status = status or create_test_channel(STATUS_CHANNEL)
         except (RuntimeError, KeyError, requests.RequestException) as e:
             print(f"::error title=Canal de estado::{e}")
+            status = 1
+    if args.canal_updates:
+        try:
+            status = status or create_test_channel(UPDATES_CHANNEL, UPDATES_CATEGORY)
+        except (RuntimeError, KeyError, requests.RequestException) as e:
+            print(f"::error title=Canal de updates::{e}")
             status = 1
     if args.apagar_canais:
         try:

@@ -31,6 +31,10 @@ on:
         description: "Criar o canal 🔧-estado (verificação diária do bot)"
         type: boolean
         default: false
+      canal_updates:
+        description: "Criar a categoria 📢 UPDATES e o canal 📢-novidades (novidades da plataforma)"
+        type: boolean
+        default: false
       apagar_canais:
         description: "IDs de canais a apagar, separados por vírgulas (nunca do servidor atual)"
         required: false
@@ -119,6 +123,20 @@ jobs:
           git add discord/channels.json
           git diff --cached --quiet && exit 0
           git commit -m "Discord: canal de estado"
+          git pull --rebase origin "$BRANCH"
+          git push origin "HEAD:$BRANCH"
+      - name: Criar o canal de updates
+        if: ${{ inputs.canal_updates }}
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          uv run python scripts/discord_setup.py --canal-updates
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add discord/channels.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Discord: canal de updates"
           git pull --rebase origin "$BRANCH"
           git push origin "HEAD:$BRANCH"
       - name: Apagar canais
