@@ -57,7 +57,7 @@ SESSIONS_PER_YEAR = 252
 # best of the earlier runs stays a candidate (incumbent_candidates), so each run can only keep or improve it.
 SEED = os.environ.get("PRETRAIN_SEED", "")
 YEARS = 20
-VARIANTS_LONG = 16  # fewer variants above LONG_YEARS, which also run in one process (memory)
+VARIANTS_LONG = 32  # fewer variants above LONG_YEARS, which also run in one process (memory)
 LONG_YEARS = 10
 # Crash tests: a candidate must not do clearly worse than the original parameters in any of these.
 CRISES = [
@@ -80,7 +80,7 @@ ETF_PROXIES = {
     "VHYL.DE": ["DVY"], "TDIV.AS": ["DVY"], "VAGF.DE": ["AGG"], "EUNH.DE": ["IEF"], "4GLD.DE": ["GLD"],
 }
 EXAM_SESSIONS = SESSIONS_PER_YEAR  # the last year is the exam; the years before it are for training
-VARIANTS = 24
+VARIANTS = 40
 WARMUP = 220
 SKIP = {
     "joalheiro": "precisa dos fundamentais do passado, que o Yahoo não tem",
@@ -428,7 +428,7 @@ def nudge(params: dict, rng: random.Random, size: float = 0.10) -> dict:
 
 
 RECENCY = 0.85  # each older training year counts 15% less
-GEN2_PARENTS, GEN2_CHILDREN = 4, 2
+GEN2_PARENTS, GEN2_CHILDREN = 6, 3
 NEIGHBOURS, PLATEAU = 3, 0.7
 MIN_TRADES = 20
 ZONE_TRIES, ZONE_MIN_SHARE = 3, 0.10

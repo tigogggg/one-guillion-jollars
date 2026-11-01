@@ -145,6 +145,14 @@ PARAM_BOUNDS = {
     "peso_qualidade": (0.2, 2.0, float),
     "peso_valor": (0.2, 2.0, float),
     "peso_tendencia": (0.2, 2.0, float),
+    # Quant: weights of each factor (0 = ignored) and whether it only buys stocks in an uptrend
+    "peso_momentum": (0.0, 2.0, float),
+    "peso_baixa_vol": (0.0, 2.0, float),
+    "so_tendencia": (0, 1, int),
+    # Abutre: how far below the 52-week high a quality stock must be
+    "queda_min": (0.10, 0.45, float),
+    # Pêndulo: minimum momentum of the best equity ETF to stay in equities
+    "limiar_mom": (0.0, 0.08, float),
 }
 # Variables every strategy (but the Indexador) has, on top of its own. The defaults keep the original
 # behaviour; the training (pre-training, monthly mutation and the shadow copies) switches them on and tunes them.
@@ -757,6 +765,89 @@ def s_analista(cfg, port, mkt, p):
     return rebalance(port, mkt, ranked[:n], exposure(mkt) / n, set(ranked[: 2 * n]), p["stop_pct"], "qualidade, valor e tendência")
 
 
+def ranks(values: dict[str, float]) -> dict[str, float]:
+    """Percentile rank 0-1 of each value within the group (ties share the order they come in)."""
+    order = sorted(values, key=values.get)
+    n = max(len(order) - 1, 1)
+    return {k: i / n for i, k in enumerate(order)}
+
+
+def s_quant(cfg, port, mkt, p):
+    """Multi-factor: momentum, trend, quality, value and low volatility, each ranked within the S&P 500 and weighted
+    by trainable weights; the pre-training searches for the mix that worked best."""
+    if not due(port, mkt, p["cada"]):
+        return []
+    pool = {s: m for s, m in mkt.stocks.items() if not p.get("so_tendencia") or m["stage2"]}
+    if not pool:
+        return rebalance(port, mkt, [], 0, set(), p["stop_pct"], "multi-fator")
+    mom = ranks({s: 0.6 * m["ret_6m"] + 0.4 * m["ret_3m"] for s, m in pool.items()})
+    low_vol = ranks({s: -(m.get("vol20") or 0.03) for s, m in pool.items()})
+    q = {s: (m["fund_q"] / 100 if m.get("fund_q") is not None else 0.5) for s, m in pool.items()}
+    v = {s: (m["fund_v"] / 100 if m.get("fund_v") is not None else 0.5) for s, m in pool.items()}
+    score = {s: p.get("peso_momentum", 1) * mom[s] + p.get("peso_tendencia", 1) * pool[s]["trend_score"] / 100
+             + p.get("peso_qualidade", 1) * q[s] + p.get("peso_valor", 1) * v[s] + p.get("peso_baixa_vol", 1) * low_vol[s]
+             for s in pool}
+    ranked = sorted(score, key=score.get, reverse=True)
+    n = p["n"]
+    return rebalance(port, mkt, ranked[:n], exposure(mkt) / n, set(ranked[: 2 * n]), p["stop_pct"], "multi-fator")
+
+
+def s_monge(cfg, port, mkt, p):
+    """Low volatility: the calmest stocks above their 200-day average, with solid fundamentals when known."""
+    if not due(port, mkt, p["cada"]):
+        return []
+    pool = [s for s, m in mkt.stocks.items() if m["price"] > m["sma200"] and m.get("vol20")
+            and (m.get("fund_q") is None or m["fund_q"] >= p["qualidade_min"])]
+    ranked = sorted(pool, key=lambda s: mkt.stocks[s]["vol20"])
+    n = p["n"]
+    return rebalance(port, mkt, ranked[:n], exposure(mkt) / n, set(ranked[: 3 * n]), p["stop_pct"], "baixa volatilidade")
+
+
+def s_abutre(cfg, port, mkt, p):
+    """Fallen quality: solid, cheap companies well below their high that start turning up (above the 21-day EMA).
+    Sells near the old high, at the stop or after max_dias sessions."""
+    orders = []
+    for s, pos in port["positions"].items():
+        m = mkt.stocks.get(s)
+        if sessions_since(mkt, pos["entry_date"]) >= p["max_dias"]:
+            orders.append(order_sell(s, f"{p['max_dias']} sessões"))
+        elif m and m["pct_from_high"] <= 0.05:
+            orders.append(order_sell(s, "alvo: voltou perto do máximo"))
+    if mkt.zone == "Queda":
+        return orders
+    picks = [s for s, m in mkt.stocks.items()
+             if s not in port["positions"] and m["pct_from_high"] >= p["queda_min"] and m.get("ema21") and m["price"] > m["ema21"]
+             and m.get("fund_q") is not None and m["fund_q"] >= p["qualidade_min"]
+             and m.get("fund_v") is not None and m["fund_v"] >= p["valor_min"]]
+    eq = equity(port, mkt)
+    picks.sort(key=lambda s: mkt.stocks[s]["fund_q"] + mkt.stocks[s]["fund_v"], reverse=True)
+    for s in picks[: max(free_slots(port, p["n"]), 0)]:
+        price = mkt.stocks[s]["price"]
+        orders.append(order_buy(s, eq / p["n"], f"{mkt.stocks[s]['pct_from_high'] * 100:.0f}% abaixo do máximo, qualidade e valor altos",
+                                stop=round(price * (1 - p["stop_pct"]), 4)))
+    return orders
+
+
+DEFENSIVE_ETFS = ("EUNH.DE", "VAGF.DE", "4GLD.DE")  # euro government bonds, global bonds, gold
+
+
+def s_pendulo(cfg, port, mkt, p):
+    """Dual momentum: the strongest equity ETFs while they keep rising, otherwise the strongest of bonds and gold."""
+    if not due(port, mkt, p["cada"]):
+        return []
+    mom = {s: 0.5 * m["ret_6m"] + 0.5 * m["ret_3m"] for s, m in mkt.etfs.items()}
+    equity_etfs = sorted((s for s in mom if s not in DEFENSIVE_ETFS), key=mom.get, reverse=True)
+    defensive = sorted((s for s in mom if s in DEFENSIVE_ETFS), key=mom.get, reverse=True)
+    n = p["n"]
+    if equity_etfs and mom[equity_etfs[0]] > p["limiar_mom"]:
+        targets, why = equity_etfs[:n], "momentum: ações"
+    elif defensive:
+        targets, why = defensive[:1], "momentum: refúgio (obrigações ou ouro)"
+    else:
+        targets, why = [], "momentum: dinheiro"
+    return rebalance(port, mkt, targets, 1.0 / max(len(targets), 1), set(), None, why)
+
+
 def s_cacador(cfg, port, mkt, p):
     if mkt.zone == "Queda":
         return []
@@ -1009,6 +1100,15 @@ STRATEGIES = {
     "analista": (s_analista, "Empresas sólidas e baratas em tendência de alta (fundamentos da SEC)",
                  {"n": 6, "qualidade_min": 60, "valor_min": 40, "stop_pct": 0.15, "cada": 10,
                   "peso_qualidade": 1.0, "peso_valor": 1.0, "peso_tendencia": 1.0}),
+    "quant": (s_quant, "Multi-fator: momentum, tendência, qualidade, valor e baixa volatilidade com pesos treinados",
+              {"n": 8, "cada": 10, "stop_pct": 0.15, "so_tendencia": 1, "peso_momentum": 1.0, "peso_tendencia": 1.0,
+               "peso_qualidade": 1.0, "peso_valor": 1.0, "peso_baixa_vol": 1.0}),
+    "monge": (s_monge, "Baixa volatilidade: as ações mais calmas acima da média de 200 dias, com bons fundamentos",
+              {"n": 10, "cada": 20, "stop_pct": 0.12, "qualidade_min": 50}),
+    "abutre": (s_abutre, "Quedas em empresas sólidas e baratas que começam a recuperar",
+               {"n": 5, "queda_min": 0.25, "qualidade_min": 60, "valor_min": 50, "stop_pct": 0.12, "max_dias": 60}),
+    "pendulo": (s_pendulo, "Momentum duplo em ETFs: ações enquanto sobem, obrigações ou ouro quando não",
+                {"n": 2, "cada": 20, "limiar_mom": 0.0}),
     "cacador": (s_cacador, "Rompimentos com volume", {"n": 5, "risco_pct": 0.02, "alvo_r": 3.0, "max_pos": 0.30}),
     "sniper": (s_sniper, "Contração de volatilidade (VCP)", {"n": 4, "risco_pct": 0.01, "aperto_pct": 0.06, "max_pos": 0.30}),
     "campeao": (s_campeao, "Melhores ações dos setores mais fortes", {"setores": 2, "por_setor": 2, "stop_pct": 0.12, "cada": 5}),

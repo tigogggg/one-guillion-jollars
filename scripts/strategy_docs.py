@@ -58,10 +58,15 @@ PARAMS = {
     "peso_qualidade": "peso da qualidade dos fundamentos na ordenação das ações",
     "peso_valor": "peso do valor (preço face aos lucros, cash flow e valor intrínseco) na ordenação",
     "peso_tendencia": "peso da tendência do preço na ordenação",
+    "peso_momentum": "peso do momentum (subida a 3 e 6 meses face às outras ações)",
+    "peso_baixa_vol": "peso da baixa volatilidade (ações calmas sobem a ordenação)",
+    "so_tendencia": "só considera ações em tendência de alta (Stage 2) (1 = sim)",
+    "queda_min": "queda mínima face ao máximo de 52 semanas para considerar a compra",
+    "limiar_mom": "momentum mínimo do melhor ETF de ações para ficar investido em ações",
 }
 
 PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext",
-              "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max"}
+              "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max", "queda_min", "limiar_mom"}
 
 # strategy: (idea, buys when, sells when, position size)
 DOCS = {
@@ -100,6 +105,30 @@ DOCS = {
         "A cada {cada} sessões compra as {n} ações em Stage 2 com qualidade ≥ {qualidade_min} e valor ≥ {valor_min} (relatórios da SEC já publicados nesse dia), ordenadas por {peso_qualidade}×qualidade + {peso_valor}×valor + {peso_tendencia}×tendência.",
         "Vende as que saem do top {n}×2, ou no stop de {stop_pct}.",
         "Partes iguais, ajustadas à zona do mercado.",
+    ),
+    "quant": (
+        "Multi-fator: junta cinco fatores conhecidos (momentum, tendência, qualidade, valor e baixa volatilidade) e o treino descobre quanto vale cada um.",
+        "A cada {cada} sessões ordena as ações do S&P 500 por {peso_momentum}×momentum + {peso_tendencia}×tendência + {peso_qualidade}×qualidade + {peso_valor}×valor + {peso_baixa_vol}×baixa volatilidade (cada fator em percentil) e compra as {n} primeiras.",
+        "Vende as que saem do top {n}×2, ou no stop de {stop_pct}.",
+        "Partes iguais, ajustadas à zona do mercado.",
+    ),
+    "monge": (
+        "Calma: as ações menos voláteis do índice tendem a dar retornos parecidos com menos sustos (anomalia da baixa volatilidade).",
+        "A cada {cada} sessões compra as {n} ações com menor volatilidade acima da média de 200 dias, com qualidade dos fundamentos ≥ {qualidade_min} quando conhecida.",
+        "Vende as que deixam de estar entre as {n}×3 mais calmas, ou no stop de {stop_pct}.",
+        "Partes iguais, ajustadas à zona do mercado.",
+    ),
+    "abutre": (
+        "Contrário com rede: compra empresas sólidas e baratas que caíram muito e começam a recuperar.",
+        "Compra ações pelo menos {queda_min} abaixo do máximo de 52 semanas, já acima da média exponencial de 21 dias, com qualidade ≥ {qualidade_min} e valor ≥ {valor_min}.",
+        "Vende quando volta a 5% do máximo, no stop de {stop_pct} ou ao fim de {max_dias} sessões.",
+        "Partes iguais, até {n} posições.",
+    ),
+    "pendulo": (
+        "Momentum duplo: está em ações enquanto sobem e muda para obrigações ou ouro quando deixam de subir.",
+        "A cada {cada} sessões, se o melhor ETF de ações tiver momentum acima de {limiar_mom}, compra os {n} ETFs de ações mais fortes; senão o mais forte entre obrigações e ouro.",
+        "Vende o que deixa de ser escolhido na revisão.",
+        "Todo o dinheiro, em partes iguais.",
     ),
     "cacador": (
         "Rompimentos: ações que passam o máximo das últimas 20 sessões com volume forte.",

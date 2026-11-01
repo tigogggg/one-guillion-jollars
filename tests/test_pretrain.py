@@ -140,3 +140,27 @@ def test_new_rules_and_analista_run_in_the_backtest():
     assert "points" in r
     blocked = pretrain.simulate("foguetao", {**pretrain.STRATEGIES["foguetao"][2], "filtro_setor": 1}, markets)
     assert blocked["trades"] == 0  # the sector is below its 200-day average every day
+
+
+def test_new_strategies_trade_in_the_backtest():
+    hist = {s: synthetic(600, seed=i) for i, s in enumerate(["AAA", "BBB", "CCC", "DDD", "EUNH.DE", "SXR8.DE"])}
+    idx = hist["AAA"].index
+    days = [d.date() for d in idx[pretrain.WARMUP:]]
+    stocks = pretrain.snapshots({k: v for k, v in hist.items() if "." not in k}, days, {s: {"sector": "Energy"} for s in hist})
+    etfs = pretrain.snapshots({k: v for k, v in hist.items() if "." in k}, days, {s: {"name": s} for s in hist})
+    for d in days:  # fundamentals known for every stock
+        for i, m in enumerate(stocks[d].values()):
+            m.update(fund_q=60.0 + 10 * i, fund_v=55.0)
+    from agents import Market, zone_for
+    fx = pd.Series(1.1, index=idx)
+    markets = [Market(hist=hist, fx=fx, stocks=stocks[d], etfs=etfs[d], as_of=d, sessions=[x for x in days if x <= d],
+                      zone=zone_for(0.5), stage2_share=0.5, closes={s: float(h["Close"].asof(pd.Timestamp(d))) for s, h in hist.items()},
+                      context={}) for d in days]
+    for strategy in ("quant", "monge", "abutre", "pendulo"):
+        params = dict(pretrain.STRATEGIES[strategy][2])
+        if strategy == "quant":
+            params["so_tendencia"] = 0
+        if strategy == "abutre":
+            params.update(queda_min=0.05, qualidade_min=0, valor_min=0)
+        r = pretrain.simulate(strategy, params, markets)
+        assert r["trades"] > 0, strategy

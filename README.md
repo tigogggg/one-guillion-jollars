@@ -334,7 +334,15 @@ DCF). New shared parameters: `gpr_max`, `petroleo_max`, `ouro_max`,
 `valor_fund_min`; and `evita_geo` live only (Claude reads the day's war,
 sanctions, energy and macro headlines and rates the market risk 0-5, shown on
 the portal). The 🧐 Analista buys solid, reasonably priced companies in an
-uptrend. `context-data.yml` refreshes the data weekly.
+uptrend, with trainable weights for quality, value and trend. Four more
+strategies search other ways to invest: 🧮 Quant (momentum, trend, quality,
+value and low volatility, each ranked within the index, with trainable
+weights), 🧘 Monge (the calmest stocks above their 200-day average), 🦅 Abutre
+(solid, cheap companies far below their high that start turning up) and ⚖️
+Pêndulo (dual momentum: equity ETFs while they rise, bonds or gold otherwise).
+Each pre-training run uses a new seed (`--semente`, the run number by default),
+so consecutive runs explore different candidates while the best of the earlier
+runs stays in the race. `context-data.yml` refreshes the data weekly.
 
 **Platform updates.** The read-only 📢-novidades channel in 📈 FINANÇAS
 (`discord_setup.py --canal-updates`). After each push that
