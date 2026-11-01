@@ -47,7 +47,9 @@ export async function portalResponse(env, token, schedule, wantManifest = false)
   const data = (latest && (await env.CONFIG.get(`chart:${latest}`, "json"))) ||
     { title: "Liga dos agentes", subtitle: "ainda sem dados", updated: new Date().toISOString(), series: [], agents: [] };
   const [news, market, proposals, calendar] = await Promise.all(["news", "market", "proposals", "calendar"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar,
+  const ptId = await env.CONFIG.get("chart-latest:pretreino", "json");
+  const pretrain = ptId && ptId !== latest ? await env.CONFIG.get(`chart:${ptId}`, "json") : null;
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain,
                                                                        manifest: `/p/${token}/manifest.webmanifest` }));
 }
 
@@ -137,7 +139,8 @@ export function chartPage(data, upcoming, newer, extras = {}) {
     ? `<a class="banner" href="/g/${esc(newer)}">🔄 Há uma versão mais recente deste gráfico · abrir</a>`
     : "";
   const portal = !!extras.portal;
-  const tabs = (portal ? [["hoje", "🏠 Hoje"]] : []).concat([["corrida", "🏁 Corrida"], ["agentes", "🧾 Agentes"]])
+  const tabs = (portal ? [["hoje", "🏠 Hoje"]] : []).concat([["corrida", "🏁 Corrida"]])
+    .concat(portal && extras.pretrain ? [["pretreino", "⏪ Pré-treino"]] : []).concat([["agentes", "🧾 Agentes"]])
     .concat(portal ? [["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
     .concat([["agenda", "⏱️ Agenda"]])
     .concat(portal ? [["carteira", "💼 Carteira"], ["ajuda", "❓ Glossário"]] : []);
@@ -166,6 +169,24 @@ ${portal ? `<section data-tab="hoje"><div id="today"></div></section>` : ""}
   <div id="chart" class="chart"></div>
   <p class="muted small">Toca numa linha da legenda para a esconder ou mostrar, toca duas vezes para ver só essa. Arrasta para fazer zoom; duplo toque volta ao início.</p>
 </section>
+${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pretreino" hidden>
+  <div class="marquee"><span>⏪ Pré-treino · 20 anos com os parâmetros escolhidos · custos e impostos incluídos ⏪</span></div>
+  <p class="muted small">${esc(extras.pretrain.subtitle || "")}. É uma simulação do passado: mostra como cada estratégia se teria portado, não o que vai fazer.</p>
+  <div class="hud">
+    <div>Dia <b id="pt-race-date">—</b></div>
+    <div>Líder <b id="pt-race-leader">—</b></div>
+    <div class="controls"><button id="pt-race-play" class="btn">▶ VER A CORRIDA</button><button id="pt-race-speed" class="btn alt">1×</button></div>
+  </div>
+  <div id="pt-track" class="track"></div>
+  <input type="range" id="pt-race-scrub" min="0" value="0" aria-label="Dia da corrida do pré-treino">
+  <h2>🏆 Placar</h2>
+  <ol id="pt-board" class="board"></ol>
+  <h2>📈 Gráfico</h2>
+  <div id="pt-chart" class="chart"></div>
+  <h2>🔎 Resultados do treino por agente</h2>
+  <div id="pt-chips" class="chips"></div>
+  <div id="pt-detail"></div>
+</section>` : ""}
 <section id="agents-section" data-tab="agentes" hidden>
   <h2>🧾 Todos os agentes</h2>
   <div id="overview"></div>
@@ -200,6 +221,7 @@ const NEWS = ${safeJson(extras.news || null)};
 const MARKET = ${safeJson(extras.market || null)};
 const PROPOSALS = ${safeJson(extras.proposals || null)};
 const CALENDAR = ${safeJson(extras.calendar || null)};
+const PRETRAIN = ${safeJson(extras.pretrain || null)};
 ${CLIENT}
 </script>`;
   return page(portal ? "One Guillion Jollars" : data.title, body, `${extras.manifest ? `<link rel="manifest" href="${esc(extras.manifest)}"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png">` : ""}
@@ -238,7 +260,7 @@ h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem
 .running .racer .avatar { animation:bob .28s ease-in-out infinite alternate; }
 .running .racer::before { content:"💨"; position:absolute; left:-22px; font-size:14px; opacity:.8; }
 @keyframes bob { to { transform:translateY(-4px) rotate(-6deg); } }
-#race-scrub { width:100%; margin:10px 0 0; accent-color:var(--accent); }
+#race-scrub, #pt-race-scrub { width:100%; margin:10px 0 0; accent-color:var(--accent); }
 .board { list-style:none; padding:0; margin:0; display:grid; gap:6px; counter-reset:pos; }
 .board li { display:flex; align-items:center; gap:10px; background:var(--card); border:2px solid var(--line); border-radius:6px; padding:8px 10px; cursor:pointer; }
 .board li .pos { font-family:var(--pixel); font-size:.65rem; width:34px; color:var(--gold); }
@@ -328,6 +350,7 @@ drawCountdowns();
 setInterval(drawCountdowns, 1000);
 
 // ---- chart ----
+function lineChart(elId, DATA) {
 const palette = ["#4cc0a8", "#e2b84a", "#5865f2", "#ed4245", "#57f287", "#eb459e", "#f0b232", "#9b84ee", "#3ba5d8", "#dbdee1"];
 const highlight = new Set(DATA.highlight || []);
 let colour = 0;
@@ -342,8 +365,8 @@ const traces = (DATA.series || []).map((s) => {
 const xs = traces.flatMap((t) => [t.x[0], t.x[t.x.length - 1]]).filter(Boolean).sort();
 const spanYears = xs.length ? (Date.parse(xs[xs.length - 1]) - Date.parse(xs[0])) / 3.15e10 : 0;
 const narrow = window.innerWidth < 640;
-if (!window.Plotly) $("chart").innerHTML = '<p class="muted" style="padding:16px">Não consegui carregar o gráfico (Plotly). As fichas dos agentes estão em baixo.</p>';
-else Plotly.newPlot("chart", traces, {
+if (!window.Plotly) $(elId).innerHTML = '<p class="muted" style="padding:16px">Não consegui carregar o gráfico (Plotly). As fichas dos agentes estão em baixo.</p>';
+else Plotly.newPlot(elId, traces, {
   paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 12 },
   margin: { l: 52, r: 12, t: 12, b: narrow ? 10 : 40 }, hovermode: "x unified",
   hoverlabel: { bgcolor: "#0b0820", bordercolor: "#2e2763" },
@@ -354,6 +377,8 @@ else Plotly.newPlot("chart", traces, {
   yaxis: { gridcolor: "#2e2763", zerolinecolor: "#80848e", ticksuffix: "%" },
   legend: narrow ? { orientation: "h", y: -0.12, font: { size: 11 } } : { bgcolor: "rgba(0,0,0,0)" },
 }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] });
+}
+lineChart("chart", DATA);
 
 // ---- agents ----
 const agents = DATA.agents || [];
@@ -504,6 +529,7 @@ function openTab(name) {
   document.querySelectorAll("#tabs .tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
   document.querySelectorAll("section[data-tab]").forEach((sec) => { sec.hidden = sec.dataset.tab !== name; });
   if (name === "corrida" && window.Plotly) Plotly.Plots.resize("chart");
+  if (name === "pretreino" && window.Plotly && $("pt-chart")) Plotly.Plots.resize("pt-chart");
   try { history.replaceState(null, "", "#" + name); } catch (e) {}
 }
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
@@ -820,9 +846,10 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 })();
 
 // ---- race ----
-(function race() {
+function race(P, DATA, people, pick) {
+  const id = (x) => $(P + x);
   const runners = (DATA.series || []).filter((s) => s.x.length);
-  if (!runners.length) { $("race").style.display = "none"; return; }
+  if (!runners.length) { id("race").style.display = "none"; return; }
   const dates = [...new Set(runners.flatMap((s) => s.x))].sort();
   const step = Math.max(1, Math.ceil(dates.length / 240));  // at most ~240 frames
   const frames = dates.filter((_, i) => i % step === 0 || i === dates.length - 1);
@@ -835,22 +862,23 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
   const lo = Math.min(0, ...all), hi = Math.max(...all), span = hi - lo || 1;
   const colours = ["#00e5ff", "#ffe14d", "#ff2e88", "#39ff88", "#b388ff", "#ff9f43", "#4dd0e1", "#f06292", "#aed581", "#ffd54f",
                    "#64b5f6", "#e57373", "#81c784", "#ba68c8", "#4db6ac", "#fff176"];
-  const agentOf = (name) => byName[name];
-  $("track").innerHTML = runners.map((s, i) => {
+  const byPerson = Object.fromEntries(people.map((a) => [a.name, a]));
+  const agentOf = (name) => byPerson[name];
+  id("track").innerHTML = runners.map((s, i) => {
     const a = agentOf(s.name);
-    return '<div class="lane"><div class="no">' + (i + 1) + '</div><div class="run"><div class="racer" id="racer-' + i + '" style="--c:' +
+    return '<div class="lane"><div class="no">' + (i + 1) + '</div><div class="run"><div class="racer" id="' + P + 'racer-' + i + '" style="--c:' +
       colours[i % colours.length] + '" title="' + esc(s.name) + '"><span class="avatar">' + esc(a ? a.emoji : "🏇") + '</span><span class="bib">' +
       (i + 1) + '</span><span class="tag"></span></div></div><div class="finish"></div></div>';
   }).join("");
-  runners.forEach((s, i) => $("racer-" + i).addEventListener("click", () => { const a = agentOf(s.name); if (a) show(agents.indexOf(a), true); }));
-  const scrub = $("race-scrub");
+  runners.forEach((s, i) => id("racer-" + i).addEventListener("click", () => { const a = agentOf(s.name); if (a) show(agents.indexOf(a), true); }));
+  const scrub = id("race-scrub");
   scrub.max = frames.length - 1;
   const fmtDay = (d) => d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(0, 4);
 
   function draw(f) {
     const now = runners.map((s, i) => ({ s, i, v: values[i][f] })).filter((r) => r.v != null).sort((a, b) => b.v - a.v);
     runners.forEach((s, i) => {
-      const v = values[i][f], el = $("racer-" + i), x = v == null ? 0 : (v - lo) / span;
+      const v = values[i][f], el = id("racer-" + i), x = v == null ? 0 : (v - lo) / span;
       el.style.left = (3 + 92 * x) + "%";
       el.classList.toggle("left-tag", x > 0.7);
       el.classList.toggle("dead", v == null);
@@ -860,9 +888,9 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
       if (place === 0 && !crown) el.insertAdjacentHTML("afterbegin", '<span class="crown">👑</span>');
       if (place !== 0 && crown) crown.remove();
     });
-    $("race-date").textContent = fmtDay(frames[f]);
-    $("race-leader").textContent = now.length ? (agentOf(now[0].s.name)?.emoji || "") + " " + now[0].s.name : "—";
-    $("board").innerHTML = now.map((r, k) => {
+    id("race-date").textContent = fmtDay(frames[f]);
+    id("race-leader").textContent = now.length ? (agentOf(now[0].s.name)?.emoji || "") + " " + now[0].s.name : "—";
+    id("board").innerHTML = now.map((r, k) => {
       const a = agentOf(r.s.name);
       return '<li data-name="' + esc(r.s.name) + '"><span class="pos">' + (k + 1) + 'º</span><span>' + esc(a ? a.emoji : "🏇") + '</span><span class="nm">' +
         esc(r.s.name) + '</span>' + (a && a.points != null ? '<span class="muted small">⭐ ' + fmtNum(a.points, 0) + '</span>' : "") +
@@ -870,25 +898,42 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
     }).join("");
     scrub.value = f;
   }
-  $("board").addEventListener("click", (e) => { const li = e.target.closest("li"); const a = li && agentOf(li.dataset.name); if (a) show(agents.indexOf(a), true); });
+  id("board").addEventListener("click", (e) => { const li = e.target.closest("li"); const a = li && agentOf(li.dataset.name); if (a) pick(a); });
 
   let timer = null, speed = 1, frame = frames.length - 1;
-  const stop = () => { clearInterval(timer); timer = null; $("track").classList.remove("running"); $("race-play").textContent = "▶ VER A CORRIDA"; };
+  const stop = () => { clearInterval(timer); timer = null; id("track").classList.remove("running"); id("race-play").textContent = "▶ VER A CORRIDA"; };
   const tick = () => { if (frame >= frames.length - 1) return stop(); frame++; draw(frame); };
-  $("race-play").addEventListener("click", () => {
+  id("race-play").addEventListener("click", () => {
     if (timer) return stop();
     if (frame >= frames.length - 1) frame = 0;
     draw(frame);
-    $("track").classList.add("running");
-    $("race-play").textContent = "⏸ PAUSA";
+    id("track").classList.add("running");
+    id("race-play").textContent = "⏸ PAUSA";
     timer = setInterval(tick, Math.max(40, 12000 / frames.length) / speed);
   });
-  $("race-speed").addEventListener("click", () => {
+  id("race-speed").addEventListener("click", () => {
     speed = speed >= 4 ? 1 : speed * 2;
-    $("race-speed").textContent = speed + "×";
+    id("race-speed").textContent = speed + "×";
     if (timer) { clearInterval(timer); timer = setInterval(tick, Math.max(40, 12000 / frames.length) / speed); }
   });
   scrub.addEventListener("input", () => { stop(); frame = +scrub.value; draw(frame); });
   draw(frame);
-})();
+}
+race("", DATA, agents, (a) => show(agents.indexOf(a), true));
+
+// ---- pre-training race ----
+if (PRETRAIN && $("pt-race")) {
+  const ptAgents = PRETRAIN.agents || [];
+  const showPt = (a, scroll) => {
+    document.querySelectorAll("#pt-chips .chip").forEach((c) => c.classList.toggle("on", c.dataset.n === a.name));
+    $("pt-detail").innerHTML = '<div class="panel"><h2>' + esc(a.emoji + " " + a.name) + '</h2>' + (a.backtest ? backtestHtml(a) : "") + strategyHtml(a.strategy) + '</div>';
+    if (scroll) $("pt-detail").scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  $("pt-chips").innerHTML = ptAgents.slice().sort((x, y) => (y.backtest?.return_pct ?? 0) - (x.backtest?.return_pct ?? 0)).map((a) =>
+    '<button class="chip" data-n="' + esc(a.name) + '">' + esc(a.emoji + " " + a.name) + ' <span class="' + cls(a.backtest?.return_pct) + '">' + fmtPct(a.backtest?.return_pct, 0) + '</span></button>').join("");
+  $("pt-chips").addEventListener("click", (e) => { const b = e.target.closest(".chip"); const a = b && ptAgents.find((x) => x.name === b.dataset.n); if (a) showPt(a, true); });
+  race("pt-", PRETRAIN, ptAgents, (a) => showPt(a, true));
+  lineChart("pt-chart", PRETRAIN);
+  if (ptAgents.length) showPt(ptAgents.slice().sort((x, y) => (y.backtest?.return_pct ?? 0) - (x.backtest?.return_pct ?? 0))[0], false);
+}
 `;
