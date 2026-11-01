@@ -96,7 +96,8 @@ async function exchange(tokenUrl, params) {
 
 async function discordCallback(env, request) {
   const url = new URL(request.url);
-  if (!(await checkState(env, request, "discord"))) return message("Pedido expirado", "<p>Volta a carregar em <b>Entrar com o Discord</b>.</p>", 400);
+  const saved = await checkState(env, request, "discord");
+  if (!saved) return message("Pedido expirado", "<p>Volta a carregar em <b>Entrar com o Discord</b>.</p>", 400);
   const code = url.searchParams.get("code");
   if (!code) return message("Entrada cancelada", "<p>O Discord não deu autorização.</p>", 400);
   const { app, guild } = await discordIds(env);
@@ -113,8 +114,32 @@ async function discordCallback(env, request) {
   if (!Array.isArray(guilds) || !guilds.some((g) => g.id === guild)) {
     return message("Só para membros", "<p>Esta conta Discord não está no servidor <b>One Guillion Jollars</b>. As carteiras são só para os membros.</p>", 403);
   }
-  await ensurePortfolio(env, user);
+  const tok = await ensurePortfolio(env, user);
+  if (saved.google_pending) {  // "Entrar com o Discord e associar esta conta Google"
+    const pending = await env.CONFIG.get(`google-pending:${saved.google_pending}`, "json");
+    await env.CONFIG.delete(`google-pending:${saved.google_pending}`);
+    if (pending?.sub) {
+      const error = await linkGoogle(env, tok, pending);
+      if (error) return message("Conta Google não associada", `<p>${esc(error)}</p><p><a href="/c/${tok}">Abrir a minha carteira →</a></p>`, 409);
+    }
+  }
   return signIn(env, user.id);
+}
+
+// Link a Google account ({sub, email}) to the portfolio behind tok; an error message, or null.
+async function linkGoogle(env, tok, info) {
+  const key = `login-google:${info.sub}`;
+  const cur = await loadPortfolio(env, tok);
+  const data = cur?.data;
+  if (!data?.owner) return "Carteira não encontrada.";
+  const linked = await env.CONFIG.get(key);
+  if (linked && linked !== data.owner) return "Esta conta Google já abre outra carteira. Desassocia-a lá primeiro.";
+  const old = data.google?.sub;
+  data.google = { sub: info.sub, email: info.email || "", linked: new Date().toISOString().slice(0, 10) };
+  if ((await savePortfolio(env, tok, data, cur.version, "google_link")) == null) return "A carteira mudou ao mesmo tempo noutro sítio. Tenta outra vez.";
+  if (old && old !== info.sub) await env.CONFIG.delete(`login-google:${old}`);
+  await env.CONFIG.put(key, data.owner);
+  return null;
 }
 
 async function googleCallback(env, request) {
@@ -133,23 +158,22 @@ async function googleCallback(env, request) {
   const linked = await env.CONFIG.get(key);
 
   if (saved.link) {  // linking from the portfolio page
-    const cur = await loadPortfolio(env, saved.link);
-    const data = cur?.data;
-    if (!data?.owner) return message("Link inválido", "<p>Abre a tua carteira outra vez e repete.</p>", 400);
-    if (linked && linked !== data.owner) return message("Conta já associada", "<p>Esta conta Google já abre outra carteira. Desassocia-a lá primeiro.</p>", 409);
-    if (data.google?.sub && data.google.sub !== info.sub) await env.CONFIG.delete(`login-google:${data.google.sub}`);
-    data.google = { sub: info.sub, email: info.email || "", linked: new Date().toISOString().slice(0, 10) };
-    if ((await savePortfolio(env, saved.link, data, cur.version, "google_link")) == null) {
-      return message("Tenta outra vez", "<p>A carteira mudou ao mesmo tempo noutro sítio.</p>", 409);
-    }
-    await env.CONFIG.put(key, data.owner);
+    const error = await linkGoogle(env, saved.link, info);
+    if (error) return message("Conta Google não associada", `<p>${esc(error)}</p>`, 409);
+    const data = (await loadPortfolio(env, saved.link)).data;
     return signIn(env, data.owner);
   }
   if (!linked || !(await currentToken(env, linked))) {
-    return message("Conta Google não associada",
+    const on = await loginActive(env);
+    const pending = rand();  // kept 10 minutes, tied to this browser by a cookie
+    await env.CONFIG.put(`google-pending:${pending}`, JSON.stringify({ sub: info.sub, email: info.email || "" }), { expirationTtl: STATE_SECONDS });
+    const resp = message("Conta Google não associada",
       `<p>A conta <b>${esc(info.email || "Google")}</b> ainda não está associada a nenhuma carteira.</p>
-       <p>Entra primeiro com o <b>Discord</b> (ou com <code>/carteira</code>) e, na tua carteira, carrega em <b>Associar conta Google</b>.
-       A partir daí podes entrar só com o Google.</p>`, 403);
+       <p>As carteiras são dos membros do servidor, por isso a primeira vez confirmas com o Discord:</p>
+       ${on.discord ? `<p><a class="btn" style="display:inline-block;text-decoration:none;font-size:.75rem;padding:12px 16px" href="/entrar/discord?associar=1">🎮 ENTRAR COM O DISCORD E ASSOCIAR ESTA CONTA GOOGLE</a></p>` : ""}
+       <p class="muted small">Depois disso, entras só com o Google. Também podes associar na carteira, em 🔒 Conta → Associar conta Google.</p>`, 403);
+    resp.headers.append("Set-Cookie", cookie("ogj_gp", pending, STATE_SECONDS));
+    return resp;
   }
   return signIn(env, linked);
 }
@@ -192,7 +216,11 @@ export async function loginRoute(request, env) {
     return loginPage(env, request, url.searchParams.get("motivo"));
   }
   const on = await loginActive(env);
-  if (path === "/entrar/discord") return on.discord ? startOAuth(env, request, "discord") : loginPage(env, request);
+  if (path === "/entrar/discord") {
+    if (!on.discord) return loginPage(env, request);
+    const gp = url.searchParams.get("associar") != null ? cookies(request).ogj_gp : null;
+    return startOAuth(env, request, "discord", gp && HEX24.test(gp) ? { google_pending: gp } : {});
+  }
   if (path === "/entrar/google") {
     if (!on.google) return loginPage(env, request);
     const link = url.searchParams.get("ligar");
