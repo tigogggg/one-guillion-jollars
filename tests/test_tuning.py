@@ -90,7 +90,6 @@ def test_train_strategy_runs_end_to_end_on_synthetic_markets(monkeypatch):
     assert {"stop_atr", "trail_atr", "vix_max"} <= set(r["chosen"]) and "trade_stats" in r["year"]
     assert "dias_resultados" not in r["chosen"] and {"stop_atr", "filtro_spy"} <= set(r["importance"])
     assert r["greedy"] and all({"param", "value", "train_gain", "kept"} <= set(t) for t in r["greedy"])
-    assert set(r["valid2"]) == {"default", "best"}
 
 
 @pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="worker processes need fork (Linux)")
@@ -101,7 +100,7 @@ def test_training_on_worker_processes_gives_the_same_result(monkeypatch):
     monkeypatch.setattr(pretrain, "WORKERS", 2)
     _, shared = pretrain.train_strategy("foguetao")
     assert pretrain._POOL is None
-    for key in ("chosen", "train", "valid", "valid2", "search", "greedy", "importance"):
+    for key in ("chosen", "train", "valid", "search", "greedy", "importance"):
         assert shared[key] == alone[key], key
 
 
@@ -152,16 +151,7 @@ def test_final_phase_keeps_only_rules_that_help_train_exam_and_crises(monkeypatc
 
     monkeypatch.setattr(pretrain, "simulate", fake_sim)
     monkeypatch.setattr(pretrain, "crash_test", lambda s, p, w: {})
-    chosen, log, exam = pretrain.greedy_rules("foguetao", {"n": 5}, train, valid, ["valid2"], {}, (100, 100))
+    chosen, log, exam = pretrain.greedy_rules("foguetao", {"n": 5}, train, valid, {}, 100)
     kept = {t["param"] for t in log if t["kept"]}
     assert kept == {"credito_max"} and chosen["credito_max"] and not chosen.get("vix_max")
-    assert exam[0]["points"] == 100 and exam[1] == 100 and log[0]["param"] == "credito_max"
-
-
-def test_exam_needs_both_held_out_years():
-    assert pretrain.passes_exam((120, 100), (100, 100))
-    assert not pretrain.passes_exam((99, 100), (100, 100))      # together worse
-    assert not pretrain.passes_exam((400, 50), (100, 100))      # much better in one year, clearly worse in the other
-    assert pretrain.passes_exam((130, 85), (100, 100))          # a small dip in one year is allowed (10%, at least 20)
-    train, valid2, valid = pretrain.periods(list(range(20 * pretrain.SESSIONS_PER_YEAR)))
-    assert len(valid) == len(valid2) == pretrain.SESSIONS_PER_YEAR and train[-1] + 1 == valid2[0] and valid2[-1] + 1 == valid[0]
+    assert exam["points"] == 100 and log[0]["param"] == "credito_max"

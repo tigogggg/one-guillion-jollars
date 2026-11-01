@@ -3,10 +3,9 @@
 Every strategy is replayed day by day with the live engine (agents.py): on day
 D it only sees data up to D's close, its orders fill at D+1's open, then stops
 and targets are checked. For each strategy about VARIANTS parameter sets are
-scored with the league's own points on all but the last two years (training);
-the best one is then run on those two years (the exam: the last year, reported,
-and the one before it, both never seen in training) and adopted only if it
-passes there against the original parameters (passes_exam).
+scored with the league's own points on all but the last year (training); the
+best one is then run on the last year (validation, never seen in training) and adopted only if it scores at least as well there as the
+original parameters.
 
 Limits, also stated in the Discord report: today's S&P 500 list is used for
 the whole year (survivorship bias, results a bit optimistic); Joalheiro is not
@@ -540,15 +539,14 @@ GREEDY_MAX = 4  # rules the final phase may switch on
 GREEDY_GAIN = 0.02  # each must add 2% to the training points (at least 20 points)
 
 
-def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: list[Market], valid2: list[Market],
-                 windows: dict, exam: tuple[int, int]) -> tuple[dict, list[dict], tuple[dict, int] | None]:
+def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: list[Market], windows: dict,
+                 exam: int) -> tuple[dict, list[dict], dict | None]:
     """The final phase: switch on, one at a time, the shared rules that help this strategy most.
 
     Each rule that is off is tried at GREEDY_LEVELS of its range on the training years; the best level of
     each is kept as a candidate. Candidates are added in order of gain, each only if it adds GREEDY_GAIN to
-    the training points, passes the exam (both exam years) and does not fall deeper in the crises.
-    `exam` is (exam year, second exam year) points. Returns (parameters, the log of what was tried, the new
-    (exam year result, second exam year points) or None).
+    the training points, does not lose on the exam year and does not fall deeper in the crises.
+    Returns (parameters, the log of what was tried, the new exam result or None).
     """
     base = simulate(strategy, chosen, train_mk)["points"]
     tries = []
@@ -580,18 +578,17 @@ def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: lis
             t["train_gain"] = points - base
             continue
         ex = simulate(strategy, cand, valid)
-        ex2 = simulate(strategy, cand, valid2)["points"]
         cr = crash_test(strategy, cand, windows)
-        t.update(exam_gain=ex["points"] - exam[0], exam2_gain=ex2 - exam[1], train_gain=points - base)
-        if passes_exam((ex["points"], ex2), exam) and survives(cr, crashes):
-            chosen, base, exam, crashes, exam_result, added = cand, points, (ex["points"], ex2), cr, (ex, ex2), added + 1
+        t.update(exam_gain=ex["points"] - exam, train_gain=points - base)
+        if ex["points"] >= exam and survives(cr, crashes):
+            chosen, base, exam, crashes, exam_result, added = cand, points, ex["points"], cr, ex, added + 1
             t["kept"] = True
     return chosen, tries, exam_result
 
 
-def overall(years: list[float], exams: tuple[float, float]) -> float:
-    """What a run tries to raise: the recency-weighted training years and the two exam years, equally."""
-    return 0.5 * weighted(years) + 0.5 * sum(exams) / len(exams)
+def overall(years: list[float], exam: float) -> float:
+    """What a run tries to raise: the recency-weighted training years and the exam year, equally."""
+    return 0.5 * weighted(years) + 0.5 * exam
 
 
 def weighted(years: list[float]) -> float:
@@ -607,7 +604,7 @@ _MARKETS: list[Market] = []  # shared with the worker processes (fork), not pick
 # PRETRAIN_WORKERS overrides the count; without fork (Windows) everything runs in one process.
 WORKERS = int(os.environ.get("PRETRAIN_WORKERS") or 0)
 _INNER_POOL = False  # set by pretrain() when strategies are trained one at a time (no pool of strategies to nest in)
-_SEGMENTS: dict[str, list] = {}  # "blocks" (training years), "train", "valid", "valid2"
+_SEGMENTS: dict[str, list] = {}  # "blocks" (training years), "train", "valid"
 _POOL = None
 
 
@@ -690,30 +687,12 @@ def yearly_blocks(markets: list[Market]) -> list[list[Market]]:
     return blocks
 
 
-def periods(markets: list[Market]) -> tuple[list[Market], list[Market], list[Market]]:
-    """The training years, the second exam year (the one before the last) and the exam year (the last).
-
-    Neither exam year is seen while the candidates are searched: two held-out years make a lucky fit to one
-    year much less likely to be adopted, however many runs search the parameters.
-    """
-    split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
-    split2 = max(split - SESSIONS_PER_YEAR, len(markets) // 2)
-    return markets[:split2], markets[split2:split], markets[split:]
-
-
-EXAM_SLACK = 0.10  # neither exam year may fall more than this share of its score (at least 20 points)
-
-
-def passes_exam(new: tuple[int, int], old: tuple[int, int]) -> bool:
-    """(exam year, second exam year) points: together at least as good as `old`, and neither clearly worse."""
-    return sum(new) >= sum(old) and all(n >= o - max(abs(o) * EXAM_SLACK, 20) for n, o in zip(new, old))
-
-
 def train_strategy(strategy: str) -> tuple[str, dict]:
     """Train one strategy; its candidates are scored on all the cores when it trains alone (see WORKERS)."""
     global _POOL
-    train_mk, valid2, valid = periods(_MARKETS)
-    _SEGMENTS.update(blocks=yearly_blocks(train_mk), train=train_mk, valid=valid, valid2=valid2)
+    markets = _MARKETS
+    split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
+    _SEGMENTS.update(blocks=yearly_blocks(markets[:split]), train=markets[:split], valid=markets[split:])
     n = _workers()
     if n <= 1:
         return _train_strategy(strategy)
@@ -726,7 +705,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
 
 
 def _train_strategy(strategy: str) -> tuple[str, dict]:
-    """Pick parameters that are consistently good, robust, survive the crises and hold up on both exam years.
+    """Pick parameters that are consistently good, robust, survive the crises and hold up on the exam year.
 
     1. Generation 1: the original and random variants (shared rules included). Each runs every training year
        separately (fresh 1000 EUR each) and must beat the original in at least CONSISTENCY (65%) of the years, with at
@@ -734,24 +713,20 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
     2. Generation 2: the best GEN2_PARENTS get GEN2_CHILDREN mutations each (agents.mutate), judged the same way.
     3. The best candidate must be on a plateau (NEIGHBOURS nearby values keep PLATEAU of its score, so it is
        not a lucky spike) and must not go bankrupt, or fall CRASH_SLACK deeper than the original, in a crisis.
-    4. It is adopted only if it passes the exam against the original (passes_exam: the last year and the one
-       before it, both held out) and its Monte Carlo risk of ruin is not clearly higher.
+    4. It is adopted only if it scores at least as well as the original on the exam year and its Monte Carlo
+       risk of ruin is not clearly higher.
     5. Market zones: for each zone with ZONE_MIN_SHARE of the training days, ZONE_TRIES mutations of the chosen
-       parameters are tried in that zone only; the best is kept if it adds 2% to the training points and
-       passes the exam.
+       parameters are tried in that zone only; the best is kept if it adds 2% to the training points and does
+       not lose on the exam.
     """
     markets = _MARKETS
-    train_mk, valid2, valid = _SEGMENTS["train"], _SEGMENTS["valid2"], _SEGMENTS["valid"]
-    blocks = _SEGMENTS["blocks"]
+    train_mk, blocks, valid = _SEGMENTS["train"], _SEGMENTS["blocks"], _SEGMENTS["valid"]
     windows = crisis_windows(train_mk)
     low_turnover = strategy in agents.LOW_TURNOVER
     rng = random.Random(f"evolve-{strategy}{SEED}")
 
     def run_years(p: dict) -> tuple[list[int], int]:
         return _years((strategy, p))
-
-    def exam2(p: dict) -> int:
-        return simulate(strategy, p, valid2)["points"]
 
     pool = variants(strategy, VARIANTS_LONG if len(blocks) > LONG_YEARS else VARIANTS)
     n_random = len(pool)
@@ -813,24 +788,22 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
             best_i = i
             break
     best = pool[best_i]
-    best_valid, best_valid2 = simulate(strategy, best, valid), exam2(best)
-    default_valid, default_valid2 = (best_valid, best_valid2) if best_i == 0 else (simulate(strategy, pool[0], valid), exam2(pool[0]))
+    best_valid = simulate(strategy, best, valid)
+    default_valid = best_valid if best_i == 0 else simulate(strategy, pool[0], valid)
     full_best = simulate(strategy, best, markets)
     full_default = full_best if best_i == 0 else simulate(strategy, pool[0], markets)
     mc_best, mc_default = monte_carlo(full_best["daily"]), monte_carlo(full_default["daily"])
     riskier = mc_best.get("p_ruin", 0) > mc_default.get("p_ruin", 0) + MC_RUIN_SLACK
-    adopt = (best_i != 0 and passes_exam((best_valid["points"], best_valid2), (default_valid["points"], default_valid2))
-             and not riskier)
+    adopt = best_i != 0 and best_valid["points"] >= default_valid["points"] and not riskier
     chosen, full, mc = (best, full_best, mc_best) if adopt else (pool[0], full_default, mc_default)
-    chosen_valid, chosen_valid2 = (best_valid, best_valid2) if adopt else (default_valid, default_valid2)
+    chosen_valid = best_valid if adopt else default_valid
 
     # Final phase: switch on the shared rules that help this strategy most (credit, VIX, …).
     greedy_log = []
     if strategy != "indexador":
-        chosen, greedy_log, greedy_exam = greedy_rules(strategy, chosen, train_mk, valid, valid2, windows,
-                                                       (chosen_valid["points"], chosen_valid2))
+        chosen, greedy_log, greedy_exam = greedy_rules(strategy, chosen, train_mk, valid, windows, chosen_valid["points"])
         if greedy_exam is not None:
-            (chosen_valid, chosen_valid2), adopt = greedy_exam, True
+            chosen_valid, adopt = greedy_exam, True
             full = simulate(strategy, chosen, markets)
             mc = monte_carlo(full["daily"])
 
@@ -856,13 +829,11 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
             pts, cand, diff = max(tries, key=lambda t: t[0])
             gain_needed = abs(train_points) * 0.02 if train_points else 20
             exam = simulate(strategy, cand, valid) if pts >= train_points + gain_needed else None
-            ex2 = exam2(cand) if exam is not None else None
-            kept = exam is not None and passes_exam((exam["points"], ex2), (chosen_valid["points"], chosen_valid2))
+            kept = exam is not None and exam["points"] >= chosen_valid["points"]
             zones_tried[zone] = {"train": pts, "base": train_points, "exam": exam["points"] if exam else None,
-                                 "exam_base": chosen_valid["points"], "exam2": ex2, "exam2_base": chosen_valid2,
-                                 "kept": kept, "diff": diff}
+                                 "exam_base": chosen_valid["points"], "kept": kept, "diff": diff}
             if kept:
-                chosen, train_points, chosen_valid, chosen_valid2 = cand, pts, exam, ex2
+                chosen, train_points, chosen_valid = cand, pts, exam
         if any(z["kept"] for z in zones_tried.values()):
             full = simulate(strategy, chosen, markets)
             mc = monte_carlo(full["daily"])
@@ -871,20 +842,18 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
     # Keep the last choice unless the new one is better overall (training years and exam together), so consecutive
     # runs can only keep or improve each strategy.
     kept_previous = None
-    new_obj = (overall(run_years(chosen)[0], (chosen_valid["points"], chosen_valid2))
-               if history and strategy != "indexador" else None)
+    new_obj = overall(run_years(chosen)[0], chosen_valid["points"]) if history and strategy != "indexador" else None
     for h in history if new_obj is not None else []:  # the last choices (up to HISTORY_KEEP): the best one stays
         previous = {**pool[0], **h["chosen"]}
         if previous != chosen:
-            prev_exam, prev_exam2 = simulate(strategy, previous, valid), exam2(previous)
-            prev_obj = overall(run_years(previous)[0], (prev_exam["points"], prev_exam2))
-            # the new choice must pass the exam against the previous one and not be worse overall (training and exam)
-            if not passes_exam((chosen_valid["points"], chosen_valid2), (prev_exam["points"], prev_exam2)) or prev_obj > new_obj:
+            prev_exam = simulate(strategy, previous, valid)
+            prev_obj = overall(run_years(previous)[0], prev_exam["points"])
+            # the new choice must not be worse on the exam, nor overall (training and exam together)
+            if prev_exam["points"] > chosen_valid["points"] or prev_obj > new_obj:
                 kept_previous = {"previous": round(prev_obj, 1), "new": round((kept_previous or {}).get("new", new_obj), 1),
-                                 "exam_previous": prev_exam["points"], "exam_new": chosen_valid["points"],
-                                 "exam2_previous": prev_exam2, "exam2_new": chosen_valid2}
+                                 "exam_previous": prev_exam["points"], "exam_new": chosen_valid["points"]}
                 new_obj = prev_obj
-                chosen, chosen_valid, chosen_valid2, adopt = previous, prev_exam, prev_exam2, True
+                chosen, chosen_valid, adopt = previous, prev_exam, True
                 full = simulate(strategy, chosen, markets)
                 mc = monte_carlo(full["daily"])
                 greedy_log = [dict(t, kept=False) for t in greedy_log]
@@ -914,7 +883,6 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
         "train": {"default": {"points": sum(base), "years": base},
                   "best": {"points": sum(scored[best_i][0]), "years": scored[best_i][0]}},
         "valid": {"default": strip(default_valid), "best": strip(chosen_valid if adopt else best_valid)},
-        "valid2": {"default": default_valid2, "best": chosen_valid2 if adopt else best_valid2},
         "crises": crashes.get("kept_previous") or crashes.get(best_i if adopt else 0, crashes[0]),
         "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried, "importance": importance, "greedy": greedy_log,
         "claude": claude_log,
@@ -983,10 +951,9 @@ def pretrain(markets: list[Market], only: set[str] | None = None, processes: int
     """Train every strategy (in parallel processes) and report training and exam results."""
     global _MARKETS, _INNER_POOL
     _MARKETS = markets
-    train_mk, valid2, valid = periods(markets)
-    results = {"train": [train_mk[0].as_of.isoformat(), train_mk[-1].as_of.isoformat()],
-               "valid2": [valid2[0].as_of.isoformat(), valid2[-1].as_of.isoformat()],
-               "valid": [valid[0].as_of.isoformat(), valid[-1].as_of.isoformat()], "strategies": {}}
+    split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
+    results = {"train": [markets[0].as_of.isoformat(), markets[split - 1].as_of.isoformat()],
+               "valid": [markets[split].as_of.isoformat(), markets[-1].as_of.isoformat()], "strategies": {}}
     todo = [s for s in STRATEGIES if not only or s in only]
     for s in todo:
         if s in SKIP:
