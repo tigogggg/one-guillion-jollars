@@ -208,6 +208,9 @@ def build(config: dict, state: dict, mkt: Market) -> dict:
         support = sum(v["weight"] for v, _ in votes)
         m = mkt.stocks.get(sym) or mkt.etfs.get(sym) or {}
         score, level, parts = safety_of(sym)
+        d = mkt.earnings.get(sym)
+        sell_sig, watch_sig = opportunities.flags(m, (d - mkt.as_of).days if isinstance(d, date) and d >= mkt.as_of else None,
+                                                  (mkt.news.get(sym) or {}).get("score")) if m else ([], [])
         out_buys.append({
             "symbol": sym, "name": m.get("name", ""), "sector": m.get("sector", ""), "etf": sym in mkt.etfs,
             "support": round(support, 2), "confidence": round(support / total * 100, 1) if total else 0.0,
@@ -215,8 +218,10 @@ def build(config: dict, state: dict, mkt: Market) -> dict:
             "plan": p, "record": record(votes), "safety": score, "level": level, "parts": parts,
             "earnings": mkt.earnings[sym].isoformat() if isinstance(mkt.earnings.get(sym), date) else None,
             "news": ((mkt.news.get(sym) or {}).get("items") or [{}])[0].get("resumo", ""),
+            # the same signals as the Oportunidades tab: a proposal against them is shown with the warning, at the end
+            "alerts": sell_sig + watch_sig, "conflict": "venda" if sell_sig else "atencao" if watch_sig else None,
         })
-    out_buys.sort(key=lambda r: (r["support"], r["safety"] or 0), reverse=True)
+    out_buys.sort(key=lambda r: (r["conflict"] is None, r["support"], r["safety"] or 0), reverse=True)
 
     out_sells = []
     for sym, votes in sells.items():

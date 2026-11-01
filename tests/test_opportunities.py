@@ -30,14 +30,57 @@ def test_a_broken_volatile_stock_scores_low():
     assert opportunities.level(score) == "Muito baixa"
 
 
-def test_build_splits_buy_ideas_and_warnings():
-    mkt = SimpleNamespace(
-        as_of=date(2026, 10, 30), zone="Neutra", stage2_share=0.4, vcp={"BBB"}, news={}, earnings={},
-        rankings=[{"symbol": "AAA", "quality_score": 70}, {"symbol": "CCC", "quality_score": 50}],
-        stocks={"AAA": metrics(), "BBB": metrics(), "CCC": metrics(price=85.0, stage2=False), "DDD": metrics()},
-        etfs={},
-    )
-    out = opportunities.build(mkt, {"CCC": ["🚀 Foguetão"]}, fetch_earnings=lambda syms: {s: None for s in syms})
-    assert {r["symbol"] for r in out["buy"]} == {"AAA", "BBB"}  # DDD has no reason, CCC is not Stage 2
-    assert [r["symbol"] for r in out["sell"]] == ["CCC"]
-    assert out["sell"][0]["held_by"] == ["🚀 Foguetão"] and "📉 abaixo da média de 50 dias" in out["sell"][0]["warnings"]
+def market(stocks, rankings=(), vcp=(), news=None, earnings=None, zone="Neutra", etfs=None):
+    return SimpleNamespace(as_of=date(2026, 10, 30), zone=zone, stage2_share=0.4, vcp=set(vcp), news=news or {},
+                           earnings=earnings or {}, rankings=[{"symbol": s, "quality_score": 70} for s in rankings],
+                           stocks=stocks, etfs=etfs or {})
+
+
+def build(mkt, holders=None):
+    return opportunities.build(mkt, holders or {}, fetch_earnings=lambda syms: {s: None for s in syms})
+
+
+def lists(out):
+    return {k: [r["symbol"] for r in out[k]] for k in ("buy", "watch", "sell")}
+
+
+def test_only_real_setups_are_buys():
+    mkt = market({
+        "VCP": metrics(),                                   # VCP setup, 10% above the 50-day: buy
+        "PULL": metrics(price=102.0),                       # ranking leader back at the 50-day average: buy
+        "RANK": metrics(),                                  # ranking leader but 10% up, no entry signal: nothing
+        "LATE": metrics(price=130.0, high20_prev=120.0, vol_ratio=2.0),  # breakout 8% above the pivot: too late
+        "BRK": metrics(price=111.0, high20_prev=108.0, vol_ratio=2.0),   # fresh breakout on volume: buy
+    }, rankings=["PULL", "RANK"], vcp=["VCP"])
+    out = lists(build(mkt))
+    assert sorted(out["buy"]) == ["BRK", "PULL", "VCP"]
+    b = build(mkt)["buy"][0]
+    assert b["checks"] and all(c.startswith("✅") for c in b["checks"])
+
+
+def test_a_stock_is_never_both_a_buy_and_a_warning():
+    mkt = market({
+        "MSFT": metrics(),                                   # VCP but important negative news
+        "AAPL": metrics(),                                   # VCP but results in 3 days
+        "HOT": metrics(price=125.0, high20_prev=126.0),     # ranking leader stretched 25% above the 50-day
+    }, rankings=["HOT"], vcp=["MSFT", "AAPL"], news={"MSFT": {"score": -4, "items": []}},
+        earnings={"AAPL": date(2026, 11, 2)})
+    out = lists(build(mkt))
+    assert out["buy"] == []
+    assert sorted(out["watch"]) == ["AAPL", "HOT", "MSFT"]
+    assert not set(out["buy"]) & set(out["watch"]) and not set(out["watch"]) & set(out["sell"])
+
+
+def test_sell_only_when_the_trend_breaks():
+    mkt = market({
+        "BRK": metrics(price=85.0, stage2=False),            # below the 200-day average: sell
+        "DIP": metrics(price=97.0, pct_from_high=0.06),      # lost the 50-day in an intact uptrend: watch, not sell
+        "OK": metrics(),                                     # held, healthy: in no list
+    })
+    out = lists(build(mkt, {"BRK": ["🚀 Foguetão"], "DIP": ["🛡️ Guardião"], "OK": ["🛡️ Guardião"]}))
+    assert out["sell"] == ["BRK"] and out["watch"] == ["DIP"] and "OK" not in out["buy"] + out["watch"] + out["sell"]
+
+
+def test_no_stock_buys_in_a_falling_market():
+    mkt = market({"VCP": metrics()}, vcp=["VCP"], zone="Queda")
+    assert build(mkt)["buy"] == []

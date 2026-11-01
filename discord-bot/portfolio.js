@@ -598,7 +598,7 @@ async function requestAnalysis(env, data, dispatch) {
     fund_facts: Object.fromEntries(h.open.filter((x) => ETF_FACTS[x.symbol]).map((x) => [x.symbol, { ...ETF_FACTS[x.symbol], source: "tabela interna: confirmar no KID do fundo" }])),
     verdicts: Object.fromEntries(Object.entries(snap.verdicts || {}).filter(([k]) => k !== "rules").map(([k, v]) => [k, { verdict: v.verdict, reasons: v.reasons, stop: v.stop }])),
     market: market ? { as_of: market.as_of, zone: market.zone, stage2_pct: market.stage2_pct, context: market.context } : null,
-    safety_of_holdings: pick((market?.buy || []).concat(market?.sell || [])),
+    safety_of_holdings: pick((market?.buy || []).concat(market?.sell || [], market?.watch || [])),
     news_of_holdings: Object.fromEntries([...held].map((s) => [s, (news?.timeline?.[s] || []).slice(0, 6).map((i) => ({ date: i.published?.slice(0, 10),
       sentiment: i.sentimento, importance: i.importancia, summary: i.resumo || i.title, reaction_next_day: i.r1 }))])),
     news_score_36h: Object.fromEntries([...held].map((s) => [s, news?.scores?.[s] ?? 0])),

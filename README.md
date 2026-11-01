@@ -308,6 +308,18 @@ and the member's own position when their portfolio was opened on that device;
 first visit (📖 Guia reopens it). Scripts and styles are served once from
 `/static/<name>-<hash>` and cached for a year, so pages are small.
 
+**Opportunities.** Every stock lands in at most one list: 🔴 Vender (the
+trend broke: below the 200-day average, below the 50-day with the 200-day
+falling or 15% off the high, or 25% off the 52-week high), 🟡 Atenção (strong
+but not now: results within 7 days, important negative news, lost the 50-day
+in an intact uptrend, or more than 20% above it) and 🟢 Comprar (all of: Stage 2,
+an entry signal (VCP, a fresh breakout on volume at most 5% above the pivot, or
+a ranking leader back at its 50-day average), at most 12% above the 50-day, no
+results within 10 days, no negative news, 100 M$/day, a stop within 8% and a
+safety score of 70+, 80+ in a cautious market, none in a falling one; the best
+10). The agents' buy proposals carry the same warnings and go to the end of the
+list when they conflict.
+
 **Platform updates.** The read-only 📢-novidades channel in 📈 FINANÇAS
 (`discord_setup.py --canal-updates`). After each push that
 changes the platform (`discord-bot/`, `scripts/`, workflows), `updates.yml`
