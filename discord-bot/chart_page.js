@@ -476,6 +476,10 @@ function backtestHtml(a) {
       tile("Ano mediano", fmtPct(mc.median * 100)) + tile("Pior 5%", fmtPct(mc.p5 * 100), "", "down") +
       tile("Probabilidade de perder", fmtNum(mc.p_loss * 100, 0) + "%") + tile("Queda de 30% ou mais", fmtNum((mc.p_dd30 || 0) * 100, 0) + "%") +
       tile("Falência", fmtNum(mc.p_ruin * 100, 0) + "%") + '</div>' : "") +
+    ((b.greedy || []).length ? '<h3>🎛️ Fase final: regras ligadas uma a uma</h3><p class="muted small">Cada regra desligada foi testada em três níveis; fica ligada só se acrescentar 2% aos pontos de treino sem piorar o exame nem as crises.</p>' +
+      table(["Regra", "Nível", "Treino", "Exame", "Ficou?"], b.greedy.map((t) => ['<code>' + esc(t.param) + '</code>', esc(t.value),
+        '<span class="' + cls(t.train_gain) + '">' + (t.train_gain > 0 ? "+" : "") + fmtNum(t.train_gain, 0) + '</span>',
+        t.exam_gain == null ? "—" : '<span class="' + cls(t.exam_gain) + '">' + (t.exam_gain > 0 ? "+" : "") + fmtNum(t.exam_gain, 0) + '</span>', t.kept ? "✅" : "—"]), [2, 3]) : "") +
     (Object.keys(b.importance || {}).length ? '<h3>🔬 O que cada parâmetro vale</h3><p class="muted small">Cada parâmetro ligado/desligado com o resto igual: pontos que acrescenta (ou acrescentaria, se estiver desligado) nos anos de treino e no exame.</p>' +
       table(["Parâmetro", "Estado", "Valor", "Treino", "Exame"], Object.entries(b.importance).sort((x, y) => y[1].train - x[1].train).map(([k, v]) =>
         ['<code>' + esc(k) + '</code>', v.used ? "em uso" : "testado (desligado)", esc(v.value), '<span class="' + cls(v.train) + '">' + (v.train > 0 ? "+" : "") + fmtNum(v.train, 0) + '</span>',

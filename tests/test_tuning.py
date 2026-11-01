@@ -83,6 +83,7 @@ def test_train_strategy_runs_end_to_end_on_synthetic_markets(monkeypatch):
     assert strategy == "foguetao" and "chosen" in r and r["search"]["candidates"] >= 4
     assert {"stop_atr", "trail_atr", "vix_max"} <= set(r["chosen"]) and "trade_stats" in r["year"]
     assert "dias_resultados" not in r["chosen"] and {"stop_atr", "filtro_spy"} <= set(r["importance"])
+    assert r["greedy"] and all({"param", "value", "train_gain", "kept"} <= set(t) for t in r["greedy"])
 
 
 def test_position_history_groups_trades_and_justifies_them():
@@ -115,3 +116,24 @@ def test_a_broken_bar_does_not_fill_the_order():
     mkt.as_of = idx[2].date()
     done = agents.fill_pending(port, mkt)
     assert done[0]["price"] > 0 and not port["pending"]
+
+
+def test_final_phase_keeps_only_rules_that_help_train_exam_and_crises(monkeypatch):
+    train, valid = ["train"], ["valid"]
+
+    def fake_sim(strategy, p, markets):
+        points = 1000
+        if markets is train:
+            points += 300 if p.get("credito_max") else 0      # helps training…
+            points += 200 if p.get("vix_max") else 0          # …this too, but…
+            points += 5 if p.get("epu_max") else 0            # too small to count
+        else:
+            points = 100 - (50 if p.get("vix_max") else 0)    # …it loses on the exam
+        return {"points": points}
+
+    monkeypatch.setattr(pretrain, "simulate", fake_sim)
+    monkeypatch.setattr(pretrain, "crash_test", lambda s, p, w: {})
+    chosen, log, exam = pretrain.greedy_rules("foguetao", {"n": 5}, train, valid, {}, 100)
+    kept = {t["param"] for t in log if t["kept"]}
+    assert kept == {"credito_max"} and chosen["credito_max"] and not chosen.get("vix_max")
+    assert exam["points"] == 100 and log[0]["param"] == "credito_max"

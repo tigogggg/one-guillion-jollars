@@ -365,6 +365,47 @@ GEN2_PARENTS, GEN2_CHILDREN = 4, 2
 NEIGHBOURS, PLATEAU = 3, 0.7
 MIN_TRADES = 20
 ZONE_TRIES, ZONE_MIN_SHARE = 3, 0.10
+GREEDY_LEVELS = (0.25, 0.5, 0.75)  # where in each rule's range the final phase tries it
+GREEDY_MAX = 4  # rules the final phase may switch on
+GREEDY_GAIN = 0.02  # each must add 2% to the training points (at least 20 points)
+
+
+def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: list[Market], windows: dict,
+                 exam: int) -> tuple[dict, list[dict], dict | None]:
+    """The final phase: switch on, one at a time, the shared rules that help this strategy most.
+
+    Each rule that is off is tried at GREEDY_LEVELS of its range on the training years; the best level of
+    each is kept as a candidate. Candidates are added in order of gain, each only if it adds GREEDY_GAIN to
+    the training points, does not lose on the exam year and does not fall deeper in the crises.
+    Returns (parameters, the log of what was tried, the new exam result or None).
+    """
+    base = simulate(strategy, chosen, train_mk)["points"]
+    tries = []
+    for k in [k for k in SHARED_IN_BACKTEST if k in agents.OFFABLE and not chosen.get(k)]:
+        lo, hi, kind = PARAM_BOUNDS[k]
+        levels = sorted({int(round(lo + f * (hi - lo))) if kind is int else round(lo + f * (hi - lo), 4) for f in GREEDY_LEVELS})
+        best = max(((simulate(strategy, {**chosen, k: v}, train_mk)["points"], v) for v in levels), key=lambda t: t[0])
+        tries.append({"param": k, "value": best[1], "train_gain": best[0] - base})
+    tries.sort(key=lambda t: t["train_gain"], reverse=True)
+    crashes = crash_test(strategy, chosen, windows)
+    exam_result, added = None, 0
+    for t in tries:
+        need = max(abs(base) * GREEDY_GAIN, 20)
+        t["kept"] = False
+        if added >= GREEDY_MAX or t["train_gain"] < need:
+            continue
+        cand = {**chosen, t["param"]: t["value"]}
+        points = simulate(strategy, cand, train_mk)["points"]  # on top of what was added before
+        if points < base + need:
+            t["train_gain"] = points - base
+            continue
+        ex = simulate(strategy, cand, valid)
+        cr = crash_test(strategy, cand, windows)
+        t.update(exam_gain=ex["points"] - exam, train_gain=points - base)
+        if ex["points"] >= exam and survives(cr, crashes):
+            chosen, base, exam, crashes, exam_result, added = cand, points, ex["points"], cr, ex, added + 1
+            t["kept"] = True
+    return chosen, tries, exam_result
 
 
 def weighted(years: list[float]) -> float:
@@ -503,6 +544,15 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     chosen, full, mc = (best, full_best, mc_best) if adopt else (pool[0], full_default, mc_default)
     chosen_valid = best_valid if adopt else default_valid
 
+    # Final phase: switch on the shared rules that help this strategy most (credit, VIX, …).
+    greedy_log = []
+    if strategy != "indexador":
+        chosen, greedy_log, greedy_exam = greedy_rules(strategy, chosen, train_mk, valid, windows, chosen_valid["points"])
+        if greedy_exam is not None:
+            chosen_valid, adopt = greedy_exam, True
+            full = simulate(strategy, chosen, markets)
+            mc = monte_carlo(full["daily"])
+
     # Market zones: parameters for one zone at a time, on top of the chosen ones.
     zones_tried = {}
     if strategy != "indexador" and any(k in PARAM_BOUNDS for k in chosen):
@@ -539,6 +589,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
 
     print(f"{strategy}: {len(pool)} candidatos; anos {scored[best_i][0]} vs {base}; vizinhos {plateau.get(best_i)}; "
           f"crises {crashes.get(best_i)}; exame {best_valid['points']} vs {default_valid['points']}; "
+          f"fase final {[t['param'] for t in greedy_log if t.get('kept')]}; "
           f"zonas {[(z, v['kept']) for z, v in zones_tried.items()]} → {'adotado' if adopt else 'mantém'}",
           file=sys.stderr, flush=True)
     return strategy, {
@@ -547,7 +598,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
                   "best": {"points": sum(scored[best_i][0]), "years": scored[best_i][0]}},
         "valid": {"default": strip(default_valid), "best": strip(chosen_valid if adopt else best_valid)},
         "crises": crashes.get(best_i if adopt else 0, crashes[0]),
-        "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried, "importance": importance,
+        "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried, "importance": importance, "greedy": greedy_log,
         "search": {"candidates": len(pool), "generation2": len(pool) - len(scored[:1]) - (VARIANTS_LONG if len(blocks) > LONG_YEARS else VARIANTS),
                    "plateau": plateau.get(best_i), "recency": RECENCY, "min_trades": MIN_TRADES},
         "year": strip(full), "curve": full["curve"][::5],  # weekly points are enough for the chart
@@ -711,6 +762,14 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
         fields.append(("💥 Teste de colisão: queda máxima em cada crise", ("\n".join(crash_lines) + note)[:1024]))
     if mc_lines:
         fields.append((f"🎲 Monte Carlo: {MC_PATHS} anos alternativos", "\n".join(mc_lines)[:1024]))
+    turned_on = []
+    for strategy, r in results["strategies"].items():
+        kept = [f"{t['param']} {t['value']}" for t in r.get("greedy") or [] if t.get("kept")]
+        if kept:
+            cfg = by_strategy.get(strategy, {"emoji": "🤖", "name": strategy})
+            turned_on.append(f"{cfg['emoji']} {cfg['name']}: {', '.join(kept)}")
+    fields.append(("🎛️ Fase final: regras ligadas (só se melhoram o treino sem piorar o exame nem as crises)",
+                   "\n".join(turned_on) or "nenhuma passou os três testes"))
     summary = importance_summary(results)
     if summary:
         import strategy_docs
@@ -758,6 +817,7 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
                 "monte_carlo": r.get("monte_carlo") or {},
                 "importance": r.get("importance") or {},
                 "zones": {z: {"kept": v["kept"], "diff": v["diff"]} for z, v in (r.get("zones") or {}).items()},
+                "greedy": r.get("greedy") or [],
             },
         })
     link = interactive.publish(f"🧠 Pré-treino dos agentes: {years:g} anos", series, refs, top, agents=details, kind="pretreino",

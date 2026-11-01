@@ -406,6 +406,14 @@ come from `data/context/`, refreshed monthly (and by hand) by the
 retries because full downloads time out from cloud machines; the latest days
 are added live when FRED answers.
 
+A final phase (`greedy_rules`) then switches on, one at a time, the shared
+rules that help each strategy most: every rule that is off is tried at 25%,
+50% and 75% of its range on the training years, the candidates are ranked by
+gain, and each is kept (at most 4) only if it adds 2% to the training points,
+does not lose on the exam year and does not fall deeper in the crises. The
+zone parameters are tuned on top. The report and the portal list what it
+switched on.
+
 Every pre-training measures what each parameter is worth to each strategy
 (`parameter_importance`): a parameter in use is reset to its default, a shared
 rule that is off is switched on at mid-range, everything else equal, on the
