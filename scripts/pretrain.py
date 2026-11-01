@@ -288,11 +288,12 @@ def load_membership() -> dict[str, list[tuple[date, date | None]]]:
     return out
 
 
-def build_markets(years: int = YEARS, context_path: str | None = None) -> list[Market]:
+def build_markets(years: int = YEARS, context_path: str | None = None, prices_only: bool = False) -> list[Market]:
     """Daily markets for the backtest, with the S&P 500 as it was on each day (survivorship bias reduced).
 
     Companies that left the index are included while they were members, when Yahoo still has their prices
-    (it often has none for acquired or bankrupt ones, so some bias remains).
+    (it often has none for acquired or bankrupt ones, so some bias remains). prices_only: only download the
+    prices into PRICE_CACHE_DIR (the plan job, once for every strategy's job) and return no markets.
     """
     constituents = load_constituents()
     sector_of = {c["symbol"]: c["sector"] for c in constituents}
@@ -315,6 +316,9 @@ def build_markets(years: int = YEARS, context_path: str | None = None) -> list[M
     etf_hist = download_history([t for t, _ in UCITS_ETFS], period=period)
     fx = download_history(["EURUSD=X"], period=period)["EURUSD=X"]["Close"]
     proxy_hist = download_history(sorted({p for ps in ETF_PROXIES.values() for p in ps}), period=period)
+    if prices_only:
+        print(f"::notice title=Preços::{len(stock_hist)} ações, {len(etf_hist)} ETFs", flush=True)
+        return []
     for etf, proxies in ETF_PROXIES.items():
         spliced = splice(etf_hist.get(etf), [proxy_hist[p] for p in proxies if p in proxy_hist], fx)
         if spliced is not None:
@@ -546,10 +550,19 @@ def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: lis
     """
     base = simulate(strategy, chosen, train_mk)["points"]
     tries = []
+    rules = []
     for k in [k for k in SHARED_IN_BACKTEST if k in agents.OFFABLE and not chosen.get(k)]:
         lo, hi, kind = PARAM_BOUNDS[k]
-        levels = sorted({int(round(lo + f * (hi - lo))) if kind is int else round(lo + f * (hi - lo), 4) for f in GREEDY_LEVELS})
-        best = max(((simulate(strategy, {**chosen, k: v}, train_mk)["points"], v) for v in levels), key=lambda t: t[0])
+        rules.append((k, sorted({int(round(lo + f * (hi - lo))) if kind is int else round(lo + f * (hi - lo), 4) for f in GREEDY_LEVELS})))
+    jobs = [(strategy, {**chosen, k: v}, "train") for k, levels in rules for v in levels]
+    if _SEGMENTS.get("train") is train_mk:  # on the worker processes
+        points = _map(_points, jobs)
+    else:
+        points = [simulate(strategy, p, train_mk)["points"] for _, p, _ in jobs]
+    i = 0
+    for k, levels in rules:
+        best = max(zip(points[i:i + len(levels)], levels), key=lambda t: t[0])
+        i += len(levels)
         tries.append({"param": k, "value": best[1], "train_gain": best[0] - base})
     tries.sort(key=lambda t: t["train_gain"], reverse=True)
     crashes = crash_test(strategy, chosen, windows)
@@ -586,6 +599,38 @@ def weighted(years: list[float]) -> float:
 
 COVERAGE: dict[str, float] = {}  # share of the index with prices at the start of each crisis
 _MARKETS: list[Market] = []  # shared with the worker processes (fork), not pickled
+# One strategy's candidates are scored on all the machine's cores (a GitHub runner has 4) when it trains alone in
+# its process: worker processes forked after _SEGMENTS is set share the snapshots instead of pickling them.
+# PRETRAIN_WORKERS overrides the count; without fork (Windows) everything runs in one process.
+WORKERS = int(os.environ.get("PRETRAIN_WORKERS") or 0)
+_INNER_POOL = False  # set by pretrain() when strategies are trained one at a time (no pool of strategies to nest in)
+_SEGMENTS: dict[str, list] = {}  # "blocks" (training years), "train", "valid"
+_POOL = None
+
+
+def _years(job: tuple[str, dict]) -> tuple[list[int], int]:
+    """Points in each training year (fresh 1000 EUR each) and the trades over all of them."""
+    strategy, params = job
+    runs = [simulate(strategy, params, b) for b in _SEGMENTS["blocks"]]
+    return [r["points"] for r in runs], sum(r["trades"] for r in runs)
+
+
+def _points(job: tuple[str, dict, str]) -> int:
+    strategy, params, segment = job
+    return simulate(strategy, params, _SEGMENTS[segment])["points"]
+
+
+def _map(fn, jobs: list) -> list:
+    """fn over jobs, in order: on the worker processes when there are any."""
+    if _POOL is not None and len(jobs) > 1:
+        return _POOL.map(fn, jobs, chunksize=1)
+    return [fn(j) for j in jobs]
+
+
+def _workers() -> int:
+    if not _INNER_POOL or "fork" not in multiprocessing.get_all_start_methods():
+        return 1
+    return WORKERS or os.cpu_count() or 1
 
 
 def monte_carlo(daily: list[float], paths: int = MC_PATHS, block: int = MC_BLOCK, seed: int = 0) -> dict:
@@ -643,6 +688,23 @@ def yearly_blocks(markets: list[Market]) -> list[list[Market]]:
 
 
 def train_strategy(strategy: str) -> tuple[str, dict]:
+    """Train one strategy; its candidates are scored on all the cores when it trains alone (see WORKERS)."""
+    global _POOL
+    markets = _MARKETS
+    split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
+    _SEGMENTS.update(blocks=yearly_blocks(markets[:split]), train=markets[:split], valid=markets[split:])
+    n = _workers()
+    if n <= 1:
+        return _train_strategy(strategy)
+    with multiprocessing.get_context("fork").Pool(n) as pool:  # forked now, so the workers share _SEGMENTS
+        _POOL = pool
+        try:
+            return _train_strategy(strategy)
+        finally:
+            _POOL = None
+
+
+def _train_strategy(strategy: str) -> tuple[str, dict]:
     """Pick parameters that are consistently good, robust, survive the crises and hold up on the exam year.
 
     1. Generation 1: the original and random variants (shared rules included). Each runs every training year
@@ -658,15 +720,13 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
        not lose on the exam.
     """
     markets = _MARKETS
-    split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
-    train_mk, blocks, valid = markets[:split], yearly_blocks(markets[:split]), markets[split:]
+    train_mk, blocks, valid = _SEGMENTS["train"], _SEGMENTS["blocks"], _SEGMENTS["valid"]
     windows = crisis_windows(train_mk)
     low_turnover = strategy in agents.LOW_TURNOVER
     rng = random.Random(f"evolve-{strategy}{SEED}")
 
     def run_years(p: dict) -> tuple[list[int], int]:
-        runs = [simulate(strategy, p, b) for b in blocks]
-        return [r["points"] for r in runs], sum(r["trades"] for r in runs)
+        return _years((strategy, p))
 
     pool = variants(strategy, VARIANTS_LONG if len(blocks) > LONG_YEARS else VARIANTS)
     n_random = len(pool)
@@ -676,7 +736,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     incumbents = incumbent_candidates(strategy, pool[0]) if strategy != "indexador" else []
     first_incumbent = len(pool)
     pool += incumbents
-    scored = [run_years(p) for p in pool]
+    scored = _map(_years, [(strategy, p) for p in pool])
     base = scored[0][0]
     need = math.ceil(CONSISTENCY * len(blocks))  # years a candidate must beat the original in
 
@@ -701,15 +761,17 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
 
     if len(pool) > 1:  # generations 2 and 3: mutations of the best so far
         for _generation in range(GENERATIONS):
+            children = []
             for i in parents():
                 for _ in range(GEN2_CHILDREN):
                     child = dict(pool[i])
                     agents.mutate(child, rng, strategy)
                     child = {k: v for k, v in child.items() if k in pool[0]}
-                    if child in pool:
+                    if child in pool or child in children:
                         continue
-                    pool.append(child)
-                    scored.append(run_years(child))
+                    children.append(child)
+            pool += children
+            scored += _map(_years, [(strategy, c) for c in children])
     crashes = {0: crash_test(strategy, pool[0], windows)}
     plateau = {}
     best_i = 0
@@ -717,7 +779,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
         if i == 0:
             break
         mine = weighted(scored[i][0])
-        near = [weighted(run_years(nudge(pool[i], rng))[0]) for _ in range(NEIGHBOURS)]
+        near = [weighted(y) for y, _ in _map(_years, [(strategy, nudge(pool[i], rng)) for _ in range(NEIGHBOURS)])]
         plateau[i] = near
         if mine > 0 and sum(n >= PLATEAU * mine for n in near) < NEIGHBOURS - 1:
             continue
@@ -845,19 +907,21 @@ def parameter_importance(strategy: str, chosen: dict, train_mk: list[Market], va
         return {}
     defaults = {**{k: agents.COMMON[k] for k in SHARED_IN_BACKTEST}, **STRATEGIES[strategy][2]}
     base = simulate(strategy, chosen, train_mk)["points"]
-    out = {}
+    alts = []
     for k in sorted(k for k in set(chosen) | set(SHARED_IN_BACKTEST) if k in PARAM_BOUNDS and k not in agents.LIVE_TUNED):
         value = chosen.get(k, 0)
         if value and value != defaults.get(k):
-            alt, used = {**chosen, k: defaults.get(k, 0)}, True
+            alts.append((k, value, {**chosen, k: defaults.get(k, 0)}, True))
         elif not value and k in agents.OFFABLE:
             lo, hi, kind = PARAM_BOUNDS[k]
             mid = int(round((lo + hi) / 2)) if kind is int else round((lo + hi) / 2, 4)
-            alt, used = {**chosen, k: mid}, False
-        else:
-            continue
-        t = simulate(strategy, alt, train_mk)["points"]
-        e = simulate(strategy, alt, valid)["points"]
+            alts.append((k, value, {**chosen, k: mid}, False))
+    if _SEGMENTS.get("train") is train_mk and _SEGMENTS.get("valid") is valid:  # on the worker processes
+        points = _map(_points, [(strategy, alt, seg) for _, _, alt, _ in alts for seg in ("train", "valid")])
+    else:
+        points = [simulate(strategy, alt, m)["points"] for _, _, alt, _ in alts for m in (train_mk, valid)]
+    out = {}
+    for (k, value, alt, used), t, e in zip(alts, points[0::2], points[1::2]):
         out[k] = {"used": used, "value": value if used else alt[k],
                   "train": (base - t) if used else (t - base), "exam": (exam - e) if used else (e - exam)}
     return out
@@ -885,7 +949,7 @@ def importance_summary(results: dict) -> list[dict]:
 
 def pretrain(markets: list[Market], only: set[str] | None = None, processes: int | None = None) -> dict:
     """Train every strategy (in parallel processes) and report training and exam results."""
-    global _MARKETS
+    global _MARKETS, _INNER_POOL
     _MARKETS = markets
     split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
     results = {"train": [markets[0].as_of.isoformat(), markets[split - 1].as_of.isoformat()],
@@ -897,6 +961,7 @@ def pretrain(markets: list[Market], only: set[str] | None = None, processes: int
     trainable = [s for s in todo if s not in SKIP]
     long_run = len(markets) > LONG_YEARS * SESSIONS_PER_YEAR  # forked copies of years of snapshots would not fit
     processes = processes or (1 if long_run else min(len(trainable), os.cpu_count() or 1))
+    _INNER_POOL = processes == 1  # one strategy at a time: its candidates can use the cores instead
     if processes > 1:
         with multiprocessing.get_context("fork").Pool(processes) as pool:
             done = pool.map(train_strategy, trainable, chunksize=1)
@@ -1132,6 +1197,8 @@ def main() -> int:
                                         "(one job of a parallel run)")
     parser.add_argument("--juntar", help="Merge the JSON results in this folder, then save, apply and report")
     parser.add_argument("--republicar", action="store_true", help="Only post the report of the saved results again")
+    parser.add_argument("--so-precos", action="store_true",
+                        help="Only download the prices into PRICE_CACHE_DIR, for the parallel jobs to share")
     parser.add_argument("--canal", default="agentes", choices=["agentes", "estado", "mercado"],
                         help="Channel for --republicar (default: agentes)")
     args = parser.parse_args()
@@ -1142,6 +1209,9 @@ def main() -> int:
 
     if args.republicar:
         return post_report(json.loads(REPORT_PATH.read_text()), None, args.dry_run, args.canal)
+    if args.so_precos:
+        build_markets(args.anos, prices_only=True)
+        return 0
 
     if args.juntar:
         parts = [json.loads(f.read_text()) for f in sorted(Path(args.juntar).rglob("*.json"))]

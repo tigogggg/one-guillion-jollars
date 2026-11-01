@@ -83,8 +83,9 @@ SECTORS_PT = {
 
 VCP_GOOD_RATINGS = ("Textbook VCP", "Strong VCP", "Good VCP")
 VCP_MAX_SHOWN = 5
-# FMP free tier: 250 calls/day and no batch quotes, so one history call per stock.
-VCP_FREE_TIER_ARGS = ("--history-quotes", "--max-universe", "240", "--api-budget", "246")
+# FMP free tier: 250 calls/day and no batch quotes, so one history call per stock. 230 leaves room for the
+# macro calendar, /limites and one re-run of the tips the same day.
+VCP_FREE_TIER_ARGS = ("--history-quotes", "--max-universe", "225", "--api-budget", "230")
 
 
 def run_skill(script: str, out_dir: Path, *args: str) -> dict | None:

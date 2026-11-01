@@ -46,7 +46,7 @@ const DEFAULT_SCHEDULE = {
   estado: "23:00", // health check, after every other weekday job
   noticias: ["12:00", "16:00", "20:30"],
   semanal: { dia: "sab", hora: "10:00" },
-  treino: "07:30", // first weekday of each month: re-train the agents on the last 5 years
+  treino: "07:30", // first weekday of each month: re-train the agents on the last 20 years
 };
 const DAYS = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
 const DAY_NAMES = { dom: "domingo", seg: "segunda", ter: "terça", qua: "quarta", qui: "quinta", sex: "sexta", sab: "sábado" };
@@ -303,8 +303,10 @@ async function runSchedule(env, ctx, now) {
       if (late < 0 || late >= LATE_LIMIT_MIN) continue;
       const key = `started:${job}:${now.date}:${time}`;
       if (await env.CONFIG.get(key)) continue;
-      await env.CONFIG.put(key, "1", { expirationTtl: 3 * 24 * 3600 });
-      ctx.waitUntil(dispatchWorkflow(env, WORKFLOWS[job], {}));
+      // Marked as started only once GitHub accepts it: a refused dispatch (GitHub down, token expired) is retried
+      // on the next ticks of the LATE_LIMIT_MIN window instead of skipping the job for the whole day.
+      const resp = await dispatchWorkflow(env, WORKFLOWS[job], {});
+      if (resp.ok) await env.CONFIG.put(key, "1", { expirationTtl: 3 * 24 * 3600 });
     }
   }
 }
@@ -376,7 +378,7 @@ async function scheduleCommand(env, sub) {
     `📰 Notícias: **${schedule.noticias.join(" · ")}** (dias úteis)`,
     `🗓️ Resumo semanal: **${DAY_NAMES[schedule.semanal.dia]} às ${schedule.semanal.hora}**`,
     `🔧 Verificação do estado do bot: **${schedule.estado}** (dias úteis, no canal 🔧-estado)`,
-    `🧠 Re-treino dos agentes (últimos 5 anos): **1.º dia útil de cada mês às ${schedule.treino}**`,
+    `🧠 Re-treino dos agentes (últimos 20 anos): **1.º dia útil de cada mês às ${schedule.treino}**`,
     "-# As análises arrancam até 5 minutos depois da hora marcada e demoram alguns minutos a chegar.",
   ].join("\n");
 }

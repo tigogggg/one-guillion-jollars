@@ -1,6 +1,8 @@
+import multiprocessing
 import random
 
 import pandas as pd
+import pytest
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,7 +62,7 @@ def test_recency_weighting_and_neighbours():
     assert n["trail_atr"] == 0 and 0.09 <= n["stop_pct"] <= 0.11
 
 
-def test_train_strategy_runs_end_to_end_on_synthetic_markets(monkeypatch):
+def _synthetic_training(monkeypatch):
     from test_pretrain import synthetic
 
     hist = {s: synthetic(900, seed=i) for i, s in enumerate(["AAA", "BBB", "CCC", "DDD", "SXR8.DE"])}
@@ -79,11 +81,27 @@ def test_train_strategy_runs_end_to_end_on_synthetic_markets(monkeypatch):
                         ("SESSIONS_PER_YEAR", 150), ("MIN_TRADES", 0)):
         monkeypatch.setattr(pretrain, name, value)
     monkeypatch.setattr(pretrain, "_MARKETS", markets)
+
+
+def test_train_strategy_runs_end_to_end_on_synthetic_markets(monkeypatch):
+    _synthetic_training(monkeypatch)
     strategy, r = pretrain.train_strategy("foguetao")
     assert strategy == "foguetao" and "chosen" in r and r["search"]["candidates"] >= 4
     assert {"stop_atr", "trail_atr", "vix_max"} <= set(r["chosen"]) and "trade_stats" in r["year"]
     assert "dias_resultados" not in r["chosen"] and {"stop_atr", "filtro_spy"} <= set(r["importance"])
     assert r["greedy"] and all({"param", "value", "train_gain", "kept"} <= set(t) for t in r["greedy"])
+
+
+@pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="worker processes need fork (Linux)")
+def test_training_on_worker_processes_gives_the_same_result(monkeypatch):
+    _synthetic_training(monkeypatch)
+    _, alone = pretrain.train_strategy("foguetao")
+    monkeypatch.setattr(pretrain, "_INNER_POOL", True)
+    monkeypatch.setattr(pretrain, "WORKERS", 2)
+    _, shared = pretrain.train_strategy("foguetao")
+    assert pretrain._POOL is None
+    for key in ("chosen", "train", "valid", "search", "greedy", "importance"):
+        assert shared[key] == alone[key], key
 
 
 def test_position_history_groups_trades_and_justifies_them():

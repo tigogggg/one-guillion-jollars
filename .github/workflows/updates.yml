@@ -29,7 +29,7 @@ concurrency:
 jobs:
   note:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15  # 5 min wait for more pushes, then about 1 min
     steps:
       - name: Esperar por mais pushes
         if: ${{ github.event_name == 'push' }}
