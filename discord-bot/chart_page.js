@@ -390,6 +390,7 @@ const GLOSS = {
   "VIX": "Índice do medo: a volatilidade que o mercado de opções espera para o S&P 500. Acima de 30 é stress.",
   "Incerteza política": "Índice de incerteza da política económica dos EUA (EPU), baseado nas notícias, em percentil dos últimos 3 anos.",
   "Spread de crédito": "Juro extra que as empresas de maior risco pagam: sobe em stress financeiro.",
+  "Crédito de alto risco": "Quanto as obrigações de empresas de maior risco caíram face às do Tesouro dos EUA desde o melhor nível do último ano. Sobe em stress financeiro.",
   "UCITS": "ETFs domiciliados na Europa, que um investidor em Portugal pode comprar.",
   "Rompimento": "Quando o preço ultrapassa um máximo recente com volume forte.",
   "Mais-valias": "Ganho realizado numa venda; em Portugal paga 28% de imposto.",
@@ -555,6 +556,7 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
   const zone = M.zone || P?.zone || "—", colour = { Alta: "var(--up)", Neutra: "var(--gold)", Cautelosa: "#ff9f43", Queda: "var(--down)" }[zone] || "var(--muted)";
   const ctx = [c.vix != null ? ["VIX", fmtNum(c.vix, 0), c.vix > 30 ? "down" : c.vix < 18 ? "up" : ""] : null,
     c.epu_pct != null ? ["Incerteza política", "percentil " + fmtNum(c.epu_pct * 100, 0), c.epu_pct > 0.8 ? "down" : ""] : null,
+    c.credit_dd != null ? ["Crédito de alto risco", fmtNum(c.credit_dd * 100, 1) + "% abaixo do melhor do ano", c.credit_dd > 0.05 ? "down" : c.credit_dd < 0.01 ? "up" : ""] : null,
     c.hy != null ? ["Spread de crédito", fmtNum(c.hy, 1) + "%", c.hy > 5 ? "down" : ""] : null,
     c.usd_chg != null ? ["Dólar vs euro (3 meses)", fmtPct(-c.usd_chg * 100), c.usd_chg > 0.03 ? "down" : ""] : null,
     c.spy_trend != null ? ["S&P 500 vs média 200d", fmtPct(c.spy_trend * 100), cls(c.spy_trend)] : null].filter(Boolean);

@@ -39,7 +39,7 @@ PARAMS = {
     "vix_max": "não compra quando o VIX (medo no mercado) está acima deste valor (0 = desligado)",
     "vix_meio": "compra metade do tamanho quando o VIX está acima deste valor (0 = desligado)",
     "epu_max": "não compra quando a incerteza política está acima deste percentil dos últimos 3 anos (0 = desligado)",
-    "credito_max": "não compra quando o spread do crédito de alto risco passa esta % (stress financeiro; 0 = desligado)",
+    "credito_max": "não compra quando o crédito de alto risco caiu mais do que isto face ao Tesouro dos EUA num ano (stress financeiro; 0 = desligado)",
     "juros_max": "não compra quando o juro a 10 anos subiu mais do que isto (p.p.) em 3 meses (0 = desligado)",
     "usd_max": "não compra ações dos EUA quando o dólar caiu mais do que isto face ao euro em 3 meses (0 = desligado)",
     "filtro_spy": "não compra quando o S&P 500 está abaixo da média de 200 dias (1 = ligado)",
@@ -48,7 +48,7 @@ PARAMS = {
 }
 
 PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext",
-              "epu_max", "usd_max"}
+              "epu_max", "usd_max", "credito_max"}
 
 # strategy: (idea, buys when, sells when, position size)
 DOCS = {
@@ -228,6 +228,8 @@ def context_text(ctx: dict | None) -> str:
         bits.append(f"VIX {ctx['vix']:.0f}")
     if ctx.get("epu_pct") is not None and "epu_pct" in ctx:
         bits.append(f"incerteza política no percentil {ctx['epu_pct'] * 100:.0f}")
+    if ctx.get("credit_dd"):
+        bits.append(f"crédito de alto risco {ctx['credit_dd'] * 100:.0f}% abaixo do melhor do ano")
     if ctx.get("usd_chg") is not None and "usd_chg" in ctx:
         bits.append(f"dólar {-ctx['usd_chg'] * 100:+.1f}% face ao euro em 3 meses")
     if ctx.get("stop") and "low" not in ctx:

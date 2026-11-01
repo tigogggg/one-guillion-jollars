@@ -123,7 +123,7 @@ PARAM_BOUNDS = {
     "vix_max": (18.0, 45.0, float),
     "vix_meio": (15.0, 35.0, float),
     "epu_max": (0.60, 0.98, float),
-    "credito_max": (3.0, 9.0, float),
+    "credito_max": (0.02, 0.15, float),
     "juros_max": (0.3, 1.5, float),
     "usd_max": (0.02, 0.10, float),
     "filtro_spy": (1, 1, int),
@@ -160,7 +160,7 @@ class Market:
     news: dict[str, dict] = field(default_factory=dict)  # news.py signals: {symbol: {score, importance, items}}
     league: dict[str, tuple[dict, dict]] = field(default_factory=dict)  # {agent id: (cfg, portfolio)}, for meta-agents
     priors: dict[str, dict] = field(default_factory=dict)  # pre-training: {strategy: {zone: avg daily excess return}}
-    context: dict = field(default_factory=dict)  # context.py: vix, epu_pct, hy, rate_chg, usd_chg, spy_trend; live: macro
+    context: dict = field(default_factory=dict)  # context.py: vix, epu_pct, credit_dd, hy, rate_chg, usd_chg, spy_trend; live: macro
 
 
 # --------------------------------------------------------------------------
@@ -1087,8 +1087,8 @@ def context_gate(mkt: Market, p: dict) -> str | None:
         return f"VIX {c['vix']:.0f} acima de {p['vix_max']:.0f}"
     if p.get("epu_max") and c.get("epu_pct", 0) > p["epu_max"]:
         return f"incerteza política no percentil {c['epu_pct']:.0%}"
-    if p.get("credito_max") and c.get("hy", 0) > p["credito_max"]:
-        return f"spread de crédito {c['hy']:.1f}% acima de {p['credito_max']:.1f}%"
+    if p.get("credito_max") and c.get("credit_dd", 0) > p["credito_max"]:
+        return f"crédito de alto risco {c['credit_dd']:.0%} abaixo do melhor do ano face ao Tesouro"
     if p.get("juros_max") and c.get("rate_chg", 0) > p["juros_max"]:
         return f"juro a 10 anos subiu {c['rate_chg']:.2f} p.p. em 3 meses"
     if p.get("filtro_spy") and c.get("spy_trend", 0) < 0:
@@ -1180,7 +1180,7 @@ def decision_context(order: dict, port: dict, mkt: Market) -> dict:
     s = order["symbol"]
     m = mkt.stocks.get(s) or mkt.etfs.get(s) or {}
     ctx = {"zone": mkt.zone, "date": mkt.as_of.isoformat(),
-           **{k: v for k, v in mkt.context.items() if k in ("vix", "epu_pct", "hy", "usd_chg", "spy_trend")}}
+           **{k: v for k, v in mkt.context.items() if k in ("vix", "epu_pct", "credit_dd", "usd_chg", "spy_trend")}}
     if m:
         ctx.update(trend=round(m.get("trend_score", 0)), ret_3m=round(m.get("ret_3m", 0) * 100, 1),
                    from_high=round(m.get("pct_from_high", 0) * 100, 1), vs_sma50=round((m["price"] / m["sma50"] - 1) * 100, 1),

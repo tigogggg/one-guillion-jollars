@@ -47,3 +47,23 @@ def test_saved_context_loads_back_the_same(tmp_path):
     context.save(frame, str(tmp_path / "c.csv"))
     back = context.load(str(tmp_path / "c.csv"))
     assert context.on(back, days[300].date()) == context.on(frame, days[300].date())
+
+
+def test_credit_stress_combines_the_long_and_short_pairs(monkeypatch):
+    import rankings
+
+    days = pd.bdate_range("2019-01-01", periods=400)
+    falling = pd.Series(np.r_[np.full(300, 100.0), np.linspace(100, 90, 100)], index=days)
+    flat = pd.Series(100.0, index=days)
+    hist = {"VWEHX": pd.DataFrame({"Close": falling}), "VFITX": pd.DataFrame({"Close": flat}),
+            "HYG": pd.DataFrame({"Close": flat[-50:]}), "IEF": pd.DataFrame({"Close": flat[-50:]})}
+    monkeypatch.setattr(rankings, "download_history", lambda tickers, period="1y": hist)
+    s = context.credit_stress("max")
+    assert abs(s.iloc[-1] - 0.10) < 1e-9 and s.iloc[200] == 0
+
+
+def test_cached_series_round_trip(monkeypatch, tmp_path):
+    monkeypatch.setattr(context, "CACHE_DIR", tmp_path)
+    days = pd.date_range("2020-01-01", periods=5)
+    pd.Series([1.0, 2, 3, 4, 5], index=days).rename("epu").to_csv(tmp_path / "epu.csv")
+    assert context.cached("epu").tolist() == [1, 2, 3, 4, 5] and context.cached("hy") is None

@@ -397,6 +397,15 @@ only), `filtro_spy`. Calendar rules without free history are tuned live only
 `evita_macro`, no buys before Fed, inflation or jobs data; `peso_noticias`).
 Live decisions record the context, so the justifications quote it.
 
+Credit stress (`credit_dd`, used by `credito_max`) is measured from Yahoo
+total-return prices, which always download: how far high-yield bonds have
+fallen against US Treasuries from their 1-year best (Vanguard VWEHX / VFITX,
+with HYG / IEF filling gaps). Policy uncertainty and the FRED high-yield spread
+come from `data/context/`, refreshed monthly (and by hand) by the
+`context-data.yml` workflow, which downloads FRED in small date ranges with
+retries because full downloads time out from cloud machines; the latest days
+are added live when FRED answers.
+
 Every pre-training measures what each parameter is worth to each strategy
 (`parameter_importance`): a parameter in use is reset to its default, a shared
 rule that is off is switched on at mid-range, everything else equal, on the
