@@ -88,6 +88,7 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    os.environ.setdefault("PYTHONWARNINGS", "ignore")  # yfinance's pandas deprecation warnings flood the terminal
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--execucoes", type=int, default=3, help="Runs in a row, each with a new seed (default 3)")
     parser.add_argument("--paralelo", type=int, default=2, help="Strategies trained at the same time (default 2; ~4 GB each)")
