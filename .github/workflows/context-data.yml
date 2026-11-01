@@ -20,7 +20,7 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45  # measured 16-24 min (FRED)
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

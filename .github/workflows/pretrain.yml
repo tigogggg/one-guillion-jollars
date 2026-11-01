@@ -69,8 +69,11 @@ permissions:
   contents: read  # results are pushed to the private data repo with its deploy key
   actions: read  # juntar_de: artifacts of an earlier run
 
-concurrency:  # a rehearsal saves nothing, so it does not wait for (or hold up) the runs that change the agents
-  group: ${{ inputs.ensaio && format('ensaio-{0}', github.run_id) || 'agents-state' }}
+# One pre-training at a time (each builds on the last one's choices); a rehearsal saves nothing, so it runs on
+# its own. Only the merge job, which writes agents/, waits for the agents' daily run (agents-state): the hours of
+# training no longer hold up the daily league or the /agentes commands.
+concurrency:
+  group: ${{ inputs.ensaio && format('ensaio-{0}', github.run_id) || 'pretrain' }}
   cancel-in-progress: false
 
 jobs:
@@ -196,6 +199,9 @@ jobs:
     if: ${{ !cancelled() && !inputs.so_relatorio }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: ${{ inputs.ensaio && format('ensaio-merge-{0}', github.run_id) || 'agents-state' }}
+      cancel-in-progress: false
     permissions:
       contents: read
       actions: write  # juntar_de reads artifacts; repetir dispatches the next run
