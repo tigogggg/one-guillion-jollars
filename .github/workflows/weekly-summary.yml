@@ -5,6 +5,9 @@ name: Resumo semanal (Discord)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read  # least privilege: these jobs never push
+
 jobs:
   post:
     runs-on: ubuntu-latest

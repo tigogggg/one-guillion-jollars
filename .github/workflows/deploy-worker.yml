@@ -10,6 +10,9 @@ concurrency:
   group: deploy-worker
   cancel-in-progress: false
 
+permissions:
+  contents: read  # least privilege: these jobs never push
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

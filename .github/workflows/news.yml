@@ -15,6 +15,9 @@ concurrency:
   group: news
   cancel-in-progress: false
 
+permissions:
+  contents: read  # least privilege: these jobs never push
+
 jobs:
   news:
     runs-on: ubuntu-latest
