@@ -1,0 +1,133 @@
+"""Train the agents on your own computer (no GitHub Actions minutes), several runs in a row, then push.
+
+The heavy search for each strategy's best parameters (many candidates, several runs with different seeds)
+only has to be done once; the monthly re-training in GitHub Actions then refines it. This script does what
+pretrain.yml does, on this machine:
+
+1. downloads the market context once (the same for every strategy);
+2. trains each strategy in its own process, PARALELO at a time (each 20-year run needs a few GB of memory);
+3. merges the results, applies the parameters to the agents (agents/pretrain.json and agents/state.json);
+4. repeats for RUNS runs, each with a new seed: the best of the earlier runs always stays a candidate and a run
+   only replaces a strategy's parameters with better ones (training and exam together);
+5. with --push, commits and pushes agents/ so the live agents use the new parameters.
+
+    uv run python scripts/train_local.py --execucoes 3 --paralelo 2 --push
+
+Needs: git, uv and internet (Yahoo Finance, FRED, the Geopolitical Risk index). Discord posting is skipped
+unless DISCORD_WEBHOOK_URL / DISCORD_BOT_TOKEN are set in the environment.
+To merge an Actions run whose last step did not run (e.g. no minutes left), download its artifacts first:
+    gh run download <run id> -p "pretrain-*" -D out/run   and   uv run python scripts/pretrain.py --juntar out/run --apply
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+PY = [sys.executable]
+STRATEGIES = ["guardiao", "rotador", "foguetao", "analista", "quant", "monge", "abutre", "pendulo", "cacador", "sniper",
+              "campeao", "pescador", "deriva", "kamikaze", "indexador"]
+
+
+def run(cmd: list[str], log: Path | None = None) -> int:
+    print("$", " ".join(cmd), flush=True)
+    if log:
+        with log.open("w", encoding="utf-8") as f:
+            return subprocess.call(cmd, cwd=REPO, stdout=f, stderr=subprocess.STDOUT)
+    return subprocess.call(cmd, cwd=REPO)
+
+
+def train_all(strategies: list[str], years: int, parallel: int, seed: str, ctx: Path, out: Path) -> list[str]:
+    """Each strategy in its own process, `parallel` at a time; returns the ones that failed."""
+    out.mkdir(parents=True, exist_ok=True)
+    pending, running, failed = list(strategies), {}, []
+    while pending or running:
+        while pending and len(running) < parallel:
+            s = pending.pop(0)
+            log = out / f"{s}.log"
+            cmd = PY + ["scripts/pretrain.py", "--estrategias", s, "--anos", str(years), "--contexto", str(ctx),
+                        "--saida", str(out / f"{s}.json"), "--semente", seed]
+            print(f"  ▶ {s} (registo em {log})", flush=True)
+            running[s] = (subprocess.Popen(cmd, cwd=REPO, stdout=log.open("w", encoding="utf-8"), stderr=subprocess.STDOUT),
+                          time.time())
+        time.sleep(10)
+        for s, (proc, start) in list(running.items()):
+            if proc.poll() is None:
+                continue
+            minutes = (time.time() - start) / 60
+            if proc.returncode == 0 and (out / f"{s}.json").exists():
+                print(f"  ✔ {s} em {minutes:.0f} min", flush=True)
+            else:
+                print(f"  ✘ {s} falhou ({proc.returncode}); ver {out / f'{s}.log'}", flush=True)
+                failed.append(s)
+            del running[s]
+    return failed
+
+
+def summary() -> None:
+    report = json.loads((REPO / "agents" / "pretrain.json").read_text())
+    rows = [(s, r) for s, r in report["strategies"].items() if "year" in r]
+    for s, r in sorted(rows, key=lambda kv: -kv[1]["year"]["return"]):
+        y, v = r["year"], r.get("valid", {})
+        kept = " (manteve a escolha anterior)" if r.get("kept_previous") else ""
+        print(f"  {s:10} 20 anos {y['return'] * 100:+7.0f}%  queda máx. {y['max_drawdown'] * 100:4.0f}%  "
+              f"exame {v.get('best', {}).get('points', 0):5} vs {v.get('default', {}).get('points', 0):5}{kept}")
+
+
+def main() -> int:
+    for stream in (sys.stdout, sys.stderr):  # Windows consoles are not UTF-8 by default
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--execucoes", type=int, default=3, help="Runs in a row, each with a new seed (default 3)")
+    parser.add_argument("--paralelo", type=int, default=2, help="Strategies trained at the same time (default 2; ~4 GB each)")
+    parser.add_argument("--anos", type=int, default=20)
+    parser.add_argument("--estrategias", default=",".join(STRATEGIES), help="Comma-separated (default: all trainable)")
+    parser.add_argument("--push", action="store_true", help="Commit and push agents/ after each run")
+    parser.add_argument("--revisao", action="store_true", help="Ask Claude for proposals between runs (needs the claude CLI)")
+    a = parser.parse_args()
+    strategies = [s.strip() for s in a.estrategias.split(",") if s.strip()]
+    if "indexador" not in strategies:
+        strategies.append("indexador")  # the benchmark the others are scored against
+    work = REPO / "out" / "local"
+    ctx = work / "context.csv"
+    work.mkdir(parents=True, exist_ok=True)
+    print("Contexto de mercado (uma vez)...", flush=True)
+    if run(PY + ["scripts/context.py", "--guardar", str(ctx)]) != 0:
+        return 1
+    dry = [] if os.environ.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_BOT_TOKEN") else ["--dry-run"]
+    for i in range(1, a.execucoes + 1):
+        seed = datetime.now().strftime("%Y%m%d%H%M%S")
+        out = work / f"run{i}-{seed}"
+        print(f"\n=== Execução {i} de {a.execucoes} (semente {seed}) ===", flush=True)
+        failed = train_all(strategies, a.anos, a.paralelo, seed, ctx, out)
+        if failed:
+            print(f"Falharam: {failed} (as restantes são juntas na mesma)", flush=True)
+        if run(PY + ["scripts/pretrain.py", "--juntar", str(out), "--apply"] + dry, out / "juntar.log") != 0:
+            print(f"Não consegui juntar; ver {out / 'juntar.log'}", flush=True)
+            return 1
+        summary()
+        if a.revisao:
+            run(PY + ["scripts/agent_review.py"] + (["--dry-run"] if dry else []))
+        if a.push:
+            run(["git", "add", "agents/"])
+            if subprocess.call(["git", "diff", "--cached", "--quiet"], cwd=REPO) != 0:
+                run(["git", "commit", "-m", f"Agentes: pré-treino local {datetime.now():%Y-%m-%d} (execução {i})"])
+                run(["git", "pull", "--rebase", "origin", "main"])
+                run(["git", "push", "origin", "HEAD:main"])
+    print("\nFeito." + ("" if a.push else " Para os agentes ao vivo usarem os parâmetros: git add agents/ && git commit -m pre-treino && git push"))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -344,6 +344,13 @@ Each pre-training run uses a new seed (`--semente`, the run number by default),
 so consecutive runs explore different candidates while the best of the earlier
 runs stays in the race. `context-data.yml` refreshes the data weekly.
 
+**Training on your own computer.** The heavy search (many candidates, several
+runs) costs about 1 000 GitHub Actions minutes per run; `scripts/train_local.py`
+does the same on any machine with git, uv and internet, for free:
+`uv run python scripts/train_local.py --execucoes 3 --paralelo 2 --push` downloads
+the context once, trains each strategy in its own process (`--paralelo` at a time,
+a few GB each), merges, applies and pushes `agents/` after each run.
+
 **Platform updates.** The read-only 📢-novidades channel in 📈 FINANÇAS
 (`discord_setup.py --canal-updates`). After each push that
 changes the platform (`discord-bot/`, `scripts/`, workflows), `updates.yml`
