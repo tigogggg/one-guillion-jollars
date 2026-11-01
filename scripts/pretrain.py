@@ -480,6 +480,11 @@ def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: lis
     return chosen, tries, exam_result
 
 
+def overall(years: list[float], exam: float) -> float:
+    """What a run tries to raise: the recency-weighted training years and the exam year, equally."""
+    return 0.5 * weighted(years) + 0.5 * exam
+
+
 def weighted(years: list[float]) -> float:
     """Recency-weighted mean of the yearly points: the latest year weighs 1, the one before 0.85, ..."""
     w = [RECENCY ** (len(years) - 1 - i) for i in range(len(years))]
@@ -679,6 +684,26 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
             mc = monte_carlo(full["daily"])
             adopt = True
 
+    # Keep the last choice unless the new one is better overall (training years and exam together), so consecutive
+    # runs can only keep or improve each strategy.
+    kept_previous = None
+    if history and strategy != "indexador":
+        previous = {**pool[0], **history[0]["chosen"]}
+        if previous != chosen:
+            prev_years = run_years(previous)[0]
+            prev_exam = simulate(strategy, previous, valid)
+            new_years = run_years(chosen)[0]
+            prev_obj = overall(prev_years, prev_exam["points"])
+            new_obj = overall(new_years, chosen_valid["points"])
+            if prev_obj > new_obj:
+                kept_previous = {"previous": round(prev_obj, 1), "new": round(new_obj, 1)}
+                chosen, chosen_valid, adopt = previous, prev_exam, True
+                full = simulate(strategy, chosen, markets)
+                mc = monte_carlo(full["daily"])
+                greedy_log = [dict(t, kept=False) for t in greedy_log]
+                zones_tried = {z: dict(v, kept=False) for z, v in zones_tried.items()}
+                crashes["kept_previous"] = crash_test(strategy, chosen, windows)
+
     importance = parameter_importance(strategy, chosen, train_mk, valid, chosen_valid["points"])
     claude_log = []
     for j, c in enumerate(claude):
@@ -701,10 +726,11 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
         "train": {"default": {"points": sum(base), "years": base},
                   "best": {"points": sum(scored[best_i][0]), "years": scored[best_i][0]}},
         "valid": {"default": strip(default_valid), "best": strip(chosen_valid if adopt else best_valid)},
-        "crises": crashes.get(best_i if adopt else 0, crashes[0]),
+        "crises": crashes.get("kept_previous") or crashes.get(best_i if adopt else 0, crashes[0]),
         "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried, "importance": importance, "greedy": greedy_log,
         "claude": claude_log,
         "history": history,
+        "kept_previous": kept_previous,
         "incumbents": [{"score": round(weighted(scored[first_incumbent + j][0]), 1), "picked": best_i == first_incumbent + j,
                         "adopted": adopt and best_i == first_incumbent + j} for j in range(len(incumbents))],
         "search": {"candidates": len(pool), "generation2": len(pool) - n_random - len(claude) - len(incumbents), "claude": len(claude), "incumbents": len(incumbents),
