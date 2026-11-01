@@ -536,15 +536,22 @@ function toDay(v) {
   return m ? m[0] : null;
 }
 const num = (v) => typeof v === "number" ? v : v == null ? NaN : parseFloat(String(v).replace(/\s/g, "").replace(/,(?=\d{1,8}$)/, "."));
+// Column titles in English or Portuguese (XTB's export language follows the account); accents and case ignored.
+const plain = (t) => String(t ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 const COLS = {
-  id: /^(position|posição|posicao|order|ordem|id)$/i, symbol: /^(symbol|símbolo|simbolo|instrument|instrumento)$/i, type: /^(type|tipo)$/i,
-  volume: /^(volume|quantidade|quantity)$/i, openTime: /open.?time|hora de abertura|data de abertura|abertura$/i,
-  openPrice: /open.?price|preço de abertura|preco de abertura/i, closeTime: /close.?time|hora de fecho|data de fecho|fecho$/i,
-  closePrice: /close.?price|preço de fecho|preco de fecho/i, amount: /^(amount|montante|valor|quantia)$/i,
+  id: /^(position|posicao|order|ordem|id|n\.? ?(da )?posicao|numero)$/,
+  symbol: /^(symbol|simbolo|instrument|instrumento|ticker|ativo|activo)( .*)?$/,
+  type: /^(type|tipo|direction|direcao|side|lado)$/,
+  volume: /^(volume|quantidade|quantity|qtd\.?|units|unidades|lotes?|nominal)( .*)?$/,
+  openTime: /(open|opening|abertura).*(time|date|hora|data)|(time|date|hora|data).*(open|abertura)/,
+  openPrice: /(open|opening|abertura).*(price|preco)|(price|preco).*(open|abertura|medio|average)/,
+  closeTime: /(close|closing|fecho|encerramento).*(time|date|hora|data)|(time|date|hora|data).*(close|fecho|encerramento)/,
+  closePrice: /(close|closing|fecho|encerramento).*(price|preco)|(price|preco).*(close|fecho|encerramento)/,
+  amount: /^(amount|montante|valor|quantia|importancia)( .*)?$/,
 };
 function findHeader(rows) {
-  for (let i = 0; i < Math.min(rows.length, 40); i++) {
-    const cells = (rows[i] || []).map((c) => String(c ?? "").trim());
+  for (let i = 0; i < Math.min(rows.length, 120); i++) {
+    const cells = (rows[i] || []).map(plain);
     const at = (re) => cells.findIndex((c) => re.test(c));
     if (at(COLS.symbol) >= 0 && (at(COLS.openTime) >= 0 || at(COLS.openPrice) >= 0)) {
       return { row: i, kind: "positions", col: Object.fromEntries(Object.entries(COLS).map(([k, re]) => [k, at(re)])) };
@@ -554,10 +561,10 @@ function findHeader(rows) {
   return null;
 }
 function labelled(rows, re) {  // a value next to (or under) a label like "Balance" or "Saldo"
-  for (let i = 0; i < Math.min(rows.length, 30); i++) {
+  for (let i = 0; i < Math.min(rows.length, 40); i++) {
     const r = rows[i] || [];
     for (let j = 0; j < r.length; j++) {
-      if (!re.test(String(r[j] ?? "").trim())) continue;
+      if (!re.test(plain(r[j]))) continue;
       const right = r.slice(j + 1).find((x) => x != null && String(x).trim() !== "");
       if (right != null) return right;
       const below = (rows[i + 1] || [])[j];
@@ -566,17 +573,28 @@ function labelled(rows, re) {  // a value next to (or under) a label like "Balan
   }
   return null;
 }
+function titleRow(rows) {  // the row with most text cells and no numbers: the column titles, never values
+  let best = [];
+  for (const r of rows.slice(0, 120)) {
+    const cells = (r || []).filter((c) => c != null && String(c).trim() !== "");
+    if (cells.some((c) => typeof c === "number" || c instanceof Date || /\d{3,}/.test(String(c)))) continue;
+    if (cells.length > best.length) best = cells.map((c) => String(c).trim().slice(0, 40));
+  }
+  return best;
+}
 function parseXtb(wb) {
-  const out = { rows: [], cash: null, cashFrom: "", currency: null, notes: [], open: 0, closed: 0, shorts: 0 };
+  const out = { rows: [], cash: null, cashFrom: "", currency: null, notes: [], open: 0, closed: 0, shorts: 0, sheets: [] };
   let cashSum = null;
   for (const name of wb.SheetNames) {
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: null });
-    const cur = labelled(rows, /^(currency|moeda)$/i);
+    out.sheets.push({ name, rows: rows.length, titles: titleRow(rows), found: null });
+    const cur = labelled(rows, /^(currency|moeda|divisa)$/);
     if (cur && /^[A-Z]{3}$/.test(String(cur).trim())) out.currency ||= String(cur).trim();
-    const bal = num(labelled(rows, /^(balance|saldo)$/i));
+    const bal = num(labelled(rows, /^(balance|saldo|saldo da conta|account balance)$/));
     if (out.cash == null && isFinite(bal)) { out.cash = bal; out.cashFrom = "saldo do ficheiro (" + name + ")"; }
     const h = findHeader(rows);
     if (!h) continue;
+    out.sheets[out.sheets.length - 1].found = h.kind;
     if (h.kind === "cash") {
       cashSum = (cashSum || 0) + rows.slice(h.row + 1).reduce((sum, r) => sum + (isFinite(num(r?.[h.col.amount])) ? num(r[h.col.amount]) : 0), 0);
       continue;
@@ -587,7 +605,7 @@ function parseXtb(wb) {
       const type = String(c.type >= 0 ? r[c.type] ?? "BUY" : "BUY");
       const symbol = xtbSymbol(r[c.symbol]), qty = num(r[c.volume]), openDay = toDay(r[c.openTime]), openPrice = num(r[c.openPrice]);
       if (!symbol || !(qty > 0) || !openDay || !(openPrice > 0)) continue;
-      if (/sell|venda/i.test(type)) { out.shorts++; continue; }
+      if (/sell|venda|short|curta/i.test(plain(type))) { out.shorts++; continue; }
       const id = c.id >= 0 && r[c.id] != null ? String(r[c.id]) : symbol + "-" + openDay + "-" + qty + "-" + openPrice;
       out.rows.push({ side: "buy", symbol, date: openDay, qty, price: openPrice, fee: 0, note: "XTB " + id, ext: "xtb-" + id + "-b" });
       const closeDay = c.closeTime >= 0 ? toDay(r[c.closeTime]) : null, closePrice = c.closePrice >= 0 ? num(r[c.closePrice]) : NaN;
@@ -620,8 +638,12 @@ $("import-form").file.addEventListener("change", async (e) => {
     PARSED = parseXtb(wb);
   } catch (err) { $("import-preview").innerHTML = '<p class="down">⚠️ ' + esc(err.message) + '</p>'; return; }
   const P = PARSED;
-  if (!P.rows.length && P.cash == null) {
-    $("import-preview").innerHTML = '<p class="down">⚠️ Não encontrei posições nem saldo neste ficheiro. É a exportação do histórico da conta da XTB (xlsx)? Se for, envia-me um print das primeiras linhas de cada folha (sem dados pessoais) para eu ajustar a leitura.</p>';
+  const diagnosis = '<details class="panel"' + (P.rows.length ? '' : ' open') + '><summary><b>🔎 Diagnóstico da leitura</b> (só os títulos das colunas, sem valores)</summary>' +
+    table(["Folha", "Linhas", "Títulos das colunas", "Reconhecida como"], P.sheets.map((x) => [esc(x.name), x.rows, esc(x.titles.join(" | ") || "—"),
+      x.found === "positions" ? "✅ posições" : x.found === "cash" ? "✅ dinheiro" : "—"])) + '</details>';
+  if (!P.rows.length) {
+    $("import-preview").innerHTML = '<p class="down">⚠️ Não reconheci as colunas das posições neste ficheiro' + (P.cash != null ? ' (encontrei o saldo: ' + nf(P.cash) + ')' : '') +
+      '. Envia um print deste diagnóstico no Discord para eu ajustar a leitura ao formato do teu ficheiro.</p>' + diagnosis;
     return;
   }
   $("import-preview").innerHTML = '<div class="grid">' + tile("Posições fechadas", P.closed, "compra + venda") + tile("Posições abertas", P.open, "compra") +
@@ -630,7 +652,7 @@ $("import-form").file.addEventListener("change", async (e) => {
     '<div class="panel filters"><label class="small">Moeda da conta <input id="imp-cur" value="' + esc(P.currency || "EUR") + '" maxlength="3" style="width:70px"></label>' +
     '<label class="small">Dinheiro disponível <input id="imp-cash" type="number" step="0.01" value="' + (P.cash ?? "") + '" style="width:130px"></label>' +
     '<button class="btn" id="imp-go">IMPORTAR ' + P.rows.length + ' OPERAÇÕES</button></div>' +
-    '<details><summary>Ver as operações lidas</summary>' + table(["Data", "Tipo", "Ativo", "Qtd.", "Preço", "Ref."], P.rows.slice(0, 500).map((r) =>
+    diagnosis + '<details><summary>Ver as operações lidas</summary>' + table(["Data", "Tipo", "Ativo", "Qtd.", "Preço", "Ref."], P.rows.slice(0, 500).map((r) =>
       [esc(r.date), r.side === "buy" ? "🟢 compra" : "🔴 venda", '<b>' + esc(r.symbol) + '</b>', nf(r.qty, 4), nf(r.price), esc(r.note)]), [3, 4]) + '</details>';
   $("imp-go").addEventListener("click", async () => {
     const btn = $("imp-go"); btn.disabled = true; btn.textContent = "A IMPORTAR…";
