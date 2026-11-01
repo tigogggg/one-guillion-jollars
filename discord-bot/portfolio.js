@@ -24,27 +24,34 @@ function token() {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// /carteira: the member's link (created on first use, replaced with novo_link).
-export async function portfolioCommand(env, interaction, origin) {
-  const member = interaction.member?.user;
-  if (!member) return "⚠️ Usa `/carteira` dentro do servidor: as carteiras são só para os membros.";
-  const fresh = (interaction.data.options || []).some((o) => o.name === "novo_link" && o.value);
-  const userKey = `portfolio-user:${member.id}`;
+// The member's portfolio token, creating the portfolio on first use; fresh replaces the link.
+export async function ensurePortfolio(env, user, fresh = false) {
+  const userKey = `portfolio-user:${user.id}`;
   let current = await env.CONFIG.get(userKey);
   let data = current ? await env.CONFIG.get(`portfolio:${current}`, "json") : null;
-  if (!data) data = { owner: member.id, name: member.global_name || member.username, created: new Date().toISOString(), tx: [] };
+  if (!data) data = { owner: user.id, name: user.global_name || user.username, created: new Date().toISOString(), tx: [] };
   if (!current || fresh) {
     if (current) await env.CONFIG.delete(`portfolio:${current}`);
     current = token();
     await env.CONFIG.put(userKey, current);
   }
-  data.name = member.global_name || member.username || data.name;
+  data.name = user.global_name || user.username || data.name;
   await env.CONFIG.put(`portfolio:${current}`, JSON.stringify(data));
+  return current;
+}
+
+// /carteira: the member's link (created on first use, replaced with novo_link).
+export async function portfolioCommand(env, interaction, origin) {
+  const member = interaction.member?.user;
+  if (!member) return "⚠️ Usa `/carteira` dentro do servidor: as carteiras são só para os membros.";
+  const fresh = (interaction.data.options || []).some((o) => o.name === "novo_link" && o.value);
+  const current = await ensurePortfolio(env, member, fresh);
   return [
     `💼 **A tua carteira** (só tu vês esta mensagem)`,
     `${origin}/c/${current}`,
     fresh ? "🔄 Link novo: o anterior deixou de funcionar." : "",
     "-# Quem tiver este link vê e edita a tua carteira: não o partilhes. `/carteira novo_link:True` troca-o.",
+    `-# Também podes entrar em ${origin}/entrar com o Discord ou com uma conta Google associada.`,
   ].filter(Boolean).join("\n");
 }
 
@@ -82,6 +89,12 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
       if (out.error) return json({ error: out.error }, 400);
       await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
       return json({ ...(await snapshot(env, data)), deduped: out.removed });
+    }
+    if (body.action === "google_unlink") {
+      if (data.google?.sub) await env.CONFIG.delete(`login-google:${data.google.sub}`);
+      delete data.google;
+      await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
+      return json({ ok: true });
     }
     if (body.action === "account") {
       const error = setAccount(data, body);
@@ -598,6 +611,13 @@ function portfolioPage(data, tok) {
   <h2>📈 Evolução</h2>
   <div id="chart" class="chart"></div>
   <p class="muted small" id="chart-note">Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.</p>
+  <details class="panel small" id="logins"><summary><b>🔑 Contas para entrar</b> <span class="muted">${data.google ? "Discord + Google" : "Discord"}</span></summary>
+    <p>Além deste link, entras em <a href="/entrar">/entrar</a> com o <b>Discord</b> (só membros do servidor)${data.google ? ` ou com a conta Google <b>${esc(data.google.email)}</b>.` : "."}</p>
+    <p>${data.google
+      ? '<button class="btn alt" id="g-unlink" type="button">DESASSOCIAR GOOGLE</button>'
+      : `<a class="btn" style="display:inline-block;text-decoration:none" href="/entrar/google?ligar=${tok}">ASSOCIAR CONTA GOOGLE</a>`}
+    <a class="muted" href="/sair" style="margin-left:12px">Terminar sessão neste aparelho</a></p>
+  </details>
 </section>
 <section data-tab="posicoes" hidden><div id="positions"></div><div id="verdict-rules"></div><h2>✅ Posições fechadas</h2><div id="closed"></div></section>
 <section data-tab="analise" hidden>
@@ -782,6 +802,10 @@ async function post(body) {
   if (!r.ok) throw new Error(out.error || "erro");
   return out;
 }
+if ($("g-unlink")) $("g-unlink").onclick = async () => {
+  if (!confirm("Desassociar a conta Google? Deixas de poder entrar com ela.")) return;
+  try { await post({ action: "google_unlink" }); location.reload(); } catch (err) { alert(err.message); }
+};
 $("accounts").addEventListener("change", async (e) => {
   const i = e.target.closest(".cash"); if (!i) return;
   try { SNAP = await post({ action: "account", name: i.dataset.acc, currency: i.dataset.cur, cash: +i.value }); render(); } catch (err) { alert(err.message); }

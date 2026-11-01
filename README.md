@@ -269,6 +269,19 @@ last chosen parameters; they are adopted only if they pass the same tests as
 any other candidate. The report and the portal show each proposal's outcome.
 Claude proposes; the backtest decides.
 
+**Signing in.** Besides the private link, `/entrar` (`discord-bot/login.js`)
+opens the portfolio with Discord (OAuth2 scopes `identify guilds`: only members
+of the server; the first sign-in creates the portfolio) or with a Google
+account the member linked on their portfolio page ("Contas para entrar").
+A session cookie keeps the device signed in for 30 days; `/sair` ends it. The
+Discord application and server ids are remembered from the interactions.
+Secrets (GitHub → Worker on deploy, each login stays off until set):
+`DISCORD_CLIENT_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`. Redirect
+URIs: `https://<worker>/entrar/discord/callback` and `/entrar/google/callback`.
+
+**Music.** Every page plays a YouTube track in a hidden player, muted by
+default; the 🔇/🔊 button turns it on and the choice is remembered per device.
+
 `/carteira` works only inside the server, so only its members get one: each
 member gets one private link (`/c/<token>`, KV `portfolio-user:<discord id>`
 and `portfolio:<token>`), `novo_link:True` replaces it.

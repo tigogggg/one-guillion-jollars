@@ -15,6 +15,7 @@
 //   GITHUB_REPO         tigogggg/one-guillion-jollars
 // Bindings: KV namespace as CONFIG. Triggers: cron "*/5 * * * *".
 
+import { loginRoute, rememberDiscord } from "./login.js";
 import { chartResponse, portalResponse } from "./chart_page.js";
 import { portfolioCommand, portfolioRoute } from "./portfolio.js";
 import { ICONS } from "./icons.js";
@@ -102,6 +103,10 @@ export default {
     if (request.method === "GET" && path === "/sw.js") {
       return new Response(SERVICE_WORKER, { headers: { "Content-Type": "text/javascript", "Cache-Control": "no-cache" } });
     }
+    if (path === "/entrar" || path.startsWith("/entrar/") || path === "/sair") {
+      const out = await loginRoute(request, env);
+      if (out) return out;
+    }
     const chart = request.method === "GET" && path.match(/^\/g\/([0-9a-f]{24})$/);
     if (chart && env.CONFIG) {
       return chartResponse(env, chart[1], await getSchedule(env));
@@ -126,6 +131,7 @@ export default {
     if (interaction.type === PING) {
       return json({ type: PONG });
     }
+    ctx.waitUntil(rememberDiscord(env, interaction).catch(() => {}));  // for "Entrar com o Discord"
     // Buttons of the pinned portal message: answered only to whoever pressed them.
     if (interaction.type === MESSAGE_COMPONENT) {
       const id = interaction.data?.custom_id;

@@ -119,6 +119,49 @@ export function safeJson(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
 
+// Background music on every page: a YouTube video, muted by default, with a 🔇/🔊 button.
+// The choice is remembered on this device; browsers only allow sound after a click, so a
+// remembered "on" starts at the first tap on the page.
+const MUSIC_VIDEO = "ypKD0MieAI4";
+const MUSIC_START = 7;
+const MUSIC = `<button id="music" type="button" aria-label="Ligar a música" title="Música">🔇</button>
+<div id="music-player" aria-hidden="true"></div>
+<style>
+#music { position:fixed; top:10px; right:10px; z-index:60; width:40px; height:40px; border-radius:50%; border:2px solid var(--accent, #ff2e88);
+  background:rgba(11,8,32,.85); color:#fff; font-size:18px; line-height:1; cursor:pointer; box-shadow:0 0 12px rgba(255,46,136,.45); }
+#music:hover { transform:scale(1.08); } #music.on { border-color:#38e8ff; box-shadow:0 0 14px rgba(56,232,255,.6); }
+#music-player { position:fixed; left:-10000px; top:0; width:200px; height:200px; pointer-events:none; opacity:0; }
+</style>
+<script>
+(function () {
+  var btn = document.getElementById("music"), player = null, ready = false, wantOn = false;
+  try { wantOn = localStorage.getItem("musica") === "on"; } catch (e) {}
+  function show(on) { btn.textContent = on ? "🔊" : "🔇"; btn.classList.toggle("on", on); btn.setAttribute("aria-label", on ? "Silenciar a música" : "Ligar a música"); }
+  function save(on) { try { localStorage.setItem("musica", on ? "on" : "off"); } catch (e) {} }
+  function apply(on) {
+    show(on);
+    if (!ready) return;
+    if (on) { player.unMute(); player.setVolume(35); player.playVideo(); } else { player.mute(); }
+  }
+  show(wantOn);
+  btn.addEventListener("click", function (e) { e.stopPropagation(); wantOn = !wantOn; save(wantOn); apply(wantOn); });
+  if (wantOn) document.addEventListener("pointerdown", function first() { document.removeEventListener("pointerdown", first, true); apply(wantOn); }, true);
+  var prev = window.onYouTubeIframeAPIReady;
+  window.onYouTubeIframeAPIReady = function () {
+    if (prev) prev();
+    player = new YT.Player("music-player", { width: 200, height: 200, videoId: "${MUSIC_VIDEO}",
+      playerVars: { autoplay: 1, mute: 1, start: ${MUSIC_START}, loop: 1, playlist: "${MUSIC_VIDEO}", controls: 0, playsinline: 1, disablekb: 1, rel: 0 },
+      events: {
+        onReady: function () { ready = true; player.mute(); player.playVideo(); },
+        onStateChange: function (e) { if (e.data === 0) { player.seekTo(${MUSIC_START}); player.playVideo(); } },
+        onError: function () { btn.hidden = true; },  // the video cannot be embedded or was removed
+      } });
+  };
+  var tag = document.createElement("script"); tag.src = "https://www.youtube.com/iframe_api"; tag.async = true;
+  document.head.appendChild(tag);
+})();
+</script>`;
+
 export function page(title, body, head = "") {
   return `<!doctype html>
 <html lang="pt-PT">
@@ -130,7 +173,7 @@ export function page(title, body, head = "") {
 <style>${CSS}</style>
 ${head}
 </head>
-<body><main>${body}</main></body>
+<body><main>${body}</main>${MUSIC}</body>
 </html>`;
 }
 
@@ -212,7 +255,9 @@ ${portal ? `<section data-tab="carteira" hidden>
   <h2>💼 A tua carteira</h2>
   <div class="panel prose">
     <p>Cada pessoa pode registar as suas compras e vendas reais e acompanhar o desempenho com preços quase em tempo real.</p>
-    <p>1. No Discord, escreve <code>/carteira</code>. O bot responde <b>só para ti</b> com o teu link privado.</p>
+    <p><a class="btn" style="display:inline-block;text-decoration:none;font-size:.75rem;padding:12px 16px" href="/entrar">💼 ABRIR A MINHA CARTEIRA</a></p>
+    <p class="muted small">Entra com o <b>Discord</b> (só membros do servidor) ou com uma conta <b>Google</b> que tenhas associado na carteira. Neste aparelho fica a sessão aberta 30 dias.</p>
+    <p>Ou: 1. No Discord, escreve <code>/carteira</code>. O bot responde <b>só para ti</b> com o teu link privado.</p>
     <p>2. Abre o link e adiciona as compras e vendas: ação ou ETF, data, quantidade, preço e comissão.</p>
     <p>3. A página mostra o valor atual, o ganho de cada posição e da carteira, o resultado das vendas e a evolução desde a primeira compra.</p>
     <p class="muted small">Quem tiver o teu link vê e edita a tua carteira: não o partilhes. Para trocar de link, usa <code>/carteira novo</code>.</p>
@@ -683,7 +728,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
       '</span><span class="muted">' + esc(b.name || "") + '</span>' + (b.safety != null ? '<span class="score ' + esc((b.level || "").split(" ")[0]) + '">🛡️ ' + b.safety + '</span>' : '') + '</div><p class="small">Confiança ' +
       fmtNum(b.confidence, 0) + '% · entrada até ' + fmtNum(b.plan.entry_max) + ' · stop ' + fmtNum(b.plan.stop) + ' · alvo ' + fmtNum(b.plan.target) + ' (' + fmtNum(b.plan.rr, 1) + 'R)</p></div>').join("") +
       '</div><p><a href="#propostas" class="go" data-t="propostas">Ver todas as propostas →</a></p>' : '<p class="muted">Sem propostas hoje.</p>') +
-    '<h2>💼 A tua carteira</h2><div id="today-wallet"><p class="muted">Abre a tua carteira uma vez neste aparelho (botão "A minha carteira" no Discord ou <code>/carteira</code>) e o resumo aparece aqui.</p></div>' +
+    '<h2>💼 A tua carteira</h2><div id="today-wallet"><p class="muted">Abre a tua carteira uma vez neste aparelho (<a href="/entrar">entrar com o Discord ou Google</a>, botão "A minha carteira" no Discord ou <code>/carteira</code>) e o resumo aparece aqui.</p></div>' +
     '<h2>📰 Notícias do dia</h2><div class="news">' + (news.map((i) => '<article class="' + (i.sentimento > 0 ? "pos" : i.sentimento < 0 ? "neg" : "") + '"><b>' + esc(i.symbol) + '</b> ' +
       esc(i.resumo || i.title) + '</article>').join("") || '<p class="muted">Sem notícias importantes.</p>') + '</div><p><a href="#noticias" class="go" data-t="noticias">Ver as notícias →</a></p>' +
     '<h2>🏁 Liga</h2><div class="grid">' + leaders.map((a, i) => tile(["🥇", "🥈", "🥉"][i] + " " + esc(a.emoji + " " + a.name), fmtPct(headline(a)), esc(a.strategy.label), cls(headline(a)))).join("") + '</div>' +

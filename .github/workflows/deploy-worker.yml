@@ -44,3 +44,15 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: discord-bot
           command: deploy
+      - name: Segredos do login (Discord e Google), se existirem
+        env:
+          DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+        working-directory: discord-bot
+        run: |
+          for n in DISCORD_CLIENT_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
+            v="${!n}"
+            if [ -z "$v" ]; then echo "$n por definir: esse login fica desligado"; continue; fi
+            printf '%s' "$v" | npx --yes wrangler@3 secret put "$n" >/dev/null && echo "$n atualizado"
+          done
