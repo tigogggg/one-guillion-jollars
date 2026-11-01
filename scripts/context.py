@@ -167,6 +167,11 @@ def credit_stress(period: str) -> pd.Series | None:
     return out.dropna()
 
 
+def step(message: str) -> None:
+    """Progress on stderr, so a slow source does not look like a hang."""
+    print(f"  · contexto: {message}...", file=sys.stderr, flush=True)
+
+
 def warn(message: str) -> None:
     """stderr, and an annotation on the run page when in GitHub Actions (job logs are not always reachable)."""
     print(f"WARN: {message}", file=sys.stderr)
@@ -192,13 +197,17 @@ def download(period: str, spy: pd.DataFrame | None, fx: pd.Series | None) -> pd.
     from rankings import download_history  # heavy import, only when needed
 
     raw: dict[str, pd.Series] = {}
+    step("Yahoo: VIX, juro a 10 anos, petróleo, ouro")
     hist = download_history(list(YAHOO_SERIES.values()), period=period)
     for name, ticker in YAHOO_SERIES.items():
         if ticker in hist:
             raw[name] = hist[ticker]["Close"]
+    step("FRED: incerteza política e spread de crédito (pode demorar)")
     for name, series in FRED_SERIES.items():  # the cached history, plus the latest days if FRED answers
         base = cached(name)
-        recent = fred(series, tries=2, start=(pd.Timestamp.today() - pd.Timedelta(days=400)).date().isoformat(), timeout=60)
+        fresh = base is not None and len(base) and base.index.max() >= pd.Timestamp.today() - pd.Timedelta(days=10)
+        recent = None if fresh else fred(series, tries=1, start=(pd.Timestamp.today() - pd.Timedelta(days=400)).date().isoformat(),
+                                         timeout=45)  # the cache is refreshed weekly: only ask FRED when it is stale
         s = base.combine_first(recent) if base is not None and recent is not None else (base if base is not None else recent)
         if s is not None and len(s):
             raw[name] = s
@@ -206,6 +215,7 @@ def download(period: str, spy: pd.DataFrame | None, fx: pd.Series | None) -> pd.
         s = epu_direct()
         if s is not None and len(s):
             raw["epu"] = s
+    step("crédito de alto risco vs Tesouro")
     credit = credit_stress(period)
     if credit is not None:
         raw["credit"] = credit
@@ -215,12 +225,14 @@ def download(period: str, spy: pd.DataFrame | None, fx: pd.Series | None) -> pd.
             raw["tnx"] = s
         else:
             warn("juro a 10 anos indisponível (Yahoo ^TNX e FRED DGS10)")
+    step("índice de risco geopolítico e Brent")
     for name in ("brent", "gpr"):  # cached history (data/context), the latest GPR days when the site answers
         base = cached(name)
         recent = gpr_daily() if name == "gpr" else None
         s = base.combine_first(recent) if base is not None and recent is not None else (base if base is not None else recent)
         if s is not None and len(s):
             raw[name] = s
+    step("ETFs de setor")
     sector_tickers = sorted({t for ts in SECTOR_ETFS.values() for t in ts})
     sectors = download_history(sector_tickers, period=period)
     for t, df in sectors.items():
