@@ -145,6 +145,7 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    os.environ["PYTHONUTF8"] = "1"  # Windows reads files as cp1252 by default; the repo's files are UTF-8
     os.environ.setdefault("PYTHONWARNINGS", "ignore")  # yfinance's pandas deprecation warnings flood the terminal
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--execucoes", type=int, default=3, help="Runs in a row, each with a new seed (default 3)")
@@ -156,6 +157,7 @@ def main() -> int:
     parser.add_argument("--estrategias", default=",".join(STRATEGIES), help="Comma-separated (default: all trainable)")
     parser.add_argument("--push", action="store_true", help="Commit and push agents/ after each run")
     parser.add_argument("--revisao", action="store_true", help="Ask Claude for proposals between runs (needs the claude CLI)")
+    parser.add_argument("--retomar", help="First merge and apply an earlier run's folder (e.g. out/local/run1-...) whose merge failed")
     a = parser.parse_args()
     strategies = [s.strip() for s in a.estrategias.split(",") if s.strip()]
     if "indexador" not in strategies:
@@ -169,6 +171,12 @@ def main() -> int:
     if run(PY + ["scripts/context.py", "--guardar", str(ctx)]) != 0:
         return 1
     dry = [] if os.environ.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_BOT_TOKEN") else ["--dry-run"]
+    if a.retomar:
+        print(f"Juntar a execução anterior em {a.retomar}...", flush=True)
+        if run(PY + ["scripts/pretrain.py", "--juntar", a.retomar, "--apply"] + dry) != 0:
+            return 1
+        summary()
+        push(a, 0)
     if a.ate_convergir and a.execucoes == 3:
         a.execucoes = 12  # a ceiling; it usually stops much earlier
     quiet = 0
