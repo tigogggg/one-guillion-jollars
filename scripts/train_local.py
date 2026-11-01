@@ -133,6 +133,8 @@ def main() -> int:
         a.execucoes = 12  # a ceiling; it usually stops much earlier
     quiet = 0
     for i in range(1, a.execucoes + 1):
+        if a.push and i > 1:  # picks up improvements to the training published meanwhile (scripts, data)
+            run(["git", "pull", "--rebase", "origin", "main"])
         before = chosen_params()
         seed = datetime.now().strftime("%Y%m%d%H%M%S")
         out = work / f"run{i}-{seed}"
