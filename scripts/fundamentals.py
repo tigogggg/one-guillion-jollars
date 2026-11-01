@@ -120,10 +120,13 @@ def ratios(rows: pd.DataFrame) -> pd.DataFrame:
     """Per filing: the price-independent ratios, the quality score and the intrinsic value per share."""
     r = pd.DataFrame(index=rows.index)
     rev, ocf, capex = rows["revenue"], rows["ocf"], rows["capex"].fillna(0)
+    # Banks and insurers report no current assets nor operating income, and their operating cash flow moves with
+    # loans and deposits: free cash flow means nothing there, so it is left out (earnings still count).
+    financial = rows["assets_cur"].isna() & rows["op_income"].isna()
     with np.errstate(invalid="ignore", divide="ignore"):
         r["op_margin"] = rows["op_income"] / rev.where(rev > 0)
         r["rev_growth"] = rows["rev_growth"]
-        r["fcf"] = ocf - capex
+        r["fcf"] = (ocf - capex).where(~financial)
         r["fcf_margin"] = r["fcf"] / rev.where(rev > 0)
         r["current_ratio"] = rows["assets_cur"] / rows["liab_cur"].where(rows["liab_cur"] > 0)
         net_debt = rows["debt"].fillna(0) + rows["debt_cur"].fillna(0) - rows["cash"].fillna(0)
@@ -131,6 +134,7 @@ def ratios(rows: pd.DataFrame) -> pd.DataFrame:
         lev = np.where(net_debt <= 0, -1.0, net_debt / ocf.where(ocf > 0))
         lev = np.where(has_debt_info, lev, np.nan)
         lev = np.where((net_debt > 0) & ~(ocf > 0) & has_debt_info, 99.0, lev)
+        lev = np.where(financial, np.nan, lev)  # deposits are not debt to be repaid from cash flow
     r["leverage"] = lev
     r["net_income"] = rows["net_income"]
     r["shares"] = rows["shares"]
@@ -162,7 +166,7 @@ def valuation(r: pd.DataFrame, price) -> dict[str, np.ndarray]:
         (np.where(np.isfinite(fcf_yield), lerp(fcf_yield, 0.06, 0.0, 35), np.nan), 35),
         (np.where(np.isfinite(mos), lerp(mos, 0.30, -0.50, 30), np.nan), 30),
     ]
-    return {"fund_v": _combine(v_parts, 60), "mos": mos, "earn_yield": earn_yield, "fcf_yield": fcf_yield, "pe": pe}
+    return {"fund_v": _combine(v_parts, 35), "mos": mos, "earn_yield": earn_yield, "fcf_yield": fcf_yield, "pe": pe}
 
 
 DAILY_COLS = ["fund_q", "fund_v", "mos", "rev_growth", "op_margin", "fcf_yield", "earn_yield", "current_ratio", "pe"]
