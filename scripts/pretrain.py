@@ -123,20 +123,25 @@ def features(df: pd.DataFrame) -> pd.DataFrame:
     f["gap_size"] = gap.where(event).ffill(limit=agents.GAP_LOOKBACK - 1).fillna(0.0)
     f["gap_low"] = low.where(event).ffill(limit=agents.GAP_LOOKBACK - 1).fillna(0.0)
     f["gap_age"] = (pos - last_pos).fillna(-1).astype(int)
+    f = f.join(agents.technical_lines(df))
     f["valid"] = pd.Series(range(len(df)), index=df.index) >= WARMUP - 1
     return f
 
 
 def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, dict] | None = None,
-              member=None) -> dict[date, dict]:
+              member=None, frames: dict[str, pd.DataFrame] | None = None) -> dict[date, dict]:
     """{day: {symbol: metrics}} with trend_score ranked within the group that day.
 
     `member(symbol, day)`, when given, keeps only the symbols in the index on that day.
     """
     # Plain numpy rows per symbol: pandas row lookups are too slow for years x hundreds of symbols.
     tables = {}
+    nullable = set()
     for s, df in hist.items():
         f = features(df)
+        if frames and s in frames:  # point-in-time fundamentals (fundamentals.daily)
+            f = f.join(frames[s])
+            nullable.update(frames[s].columns)
         valid = f["valid"].to_numpy() & f["sma200"].notna().to_numpy() & f["ret_6m"].notna().to_numpy()
         cols = [c for c in f.columns if c != "valid"]
         rows = {ts.date(): i for i, ts in enumerate(f.index)}
@@ -151,6 +156,9 @@ def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, 
             m = dict(zip(cols, values[i].tolist()))
             m["sma200_rising"] = bool(m["sma200_rising"])
             m["gap_age"] = int(m["gap_age"])
+            for k in nullable.intersection(m):
+                if m[k] != m[k]:  # NaN: unknown, never blocks a rule
+                    m[k] = None
             m.update((extra or {}).get(s, {}))
             if "sector" in m:
                 m["stage2"] = agents.is_stage2(m)
@@ -239,8 +247,14 @@ def build_markets(years: int = YEARS, context_path: str | None = None) -> list[M
     sessions = [d.date() for d in spy.index]
     days = sessions[WARMUP:][-years * SESSIONS_PER_YEAR:]
     names = dict(UCITS_ETFS)
+    import fundamentals
+
+    funds = fundamentals.load()
+    first = pd.Timestamp(days[0]) - pd.Timedelta(days=10)
+    frames = {s: fundamentals.daily(funds[s], df["Close"][df.index >= first]) for s, df in stock_hist.items() if s in funds}
+    print(f"::notice title=Fundamentos::{len(frames)} de {len(stock_hist)} ações com fundamentos da SEC", flush=True)
     stocks = snapshots(stock_hist, days, {s: {"sector": sector_of[s]} for s in stock_hist},
-                       member if membership else None)
+                       member if membership else None, frames)
     left = [s for s in stock_hist if s not in {c["symbol"] for c in constituents}]
     print(f"{len(stock_hist)} ações com preços, {len(left)} já saíram do índice", file=sys.stderr)
     COVERAGE.clear()

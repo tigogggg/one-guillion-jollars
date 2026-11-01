@@ -14,6 +14,13 @@ Each day gets one small dict (Market.context):
 - usd_chg: change of EUR/USD over 3 months; positive = the dollar weakened, which costs a
   euro investor in US stocks.
 - spy_trend: S&P 500 (SPY) close against its 200-day average.
+- gpr_pct: Geopolitical Risk index (Caldara & Iacoviello, daily since 1985: wars, terrorism, military
+  tensions counted in newspapers), 7-day average, as a percentile of the previous 3 years.
+- oil_chg: Brent crude over 3 months (FRED DCOILBRENTEU since 1987, Yahoo BZ=F / CL=F for the latest
+  days): oil shocks follow wars and supply crises and feed inflation.
+- gold_chg: gold over 3 months (Yahoo GC=F): investors run to gold when they are afraid.
+- sec_<ETF>_trend / sec_<ETF>_rs: each S&P 500 sector's ETF (SECTOR_ETFS) against its 200-day
+  average, and its 3-month return minus the S&P 500's (relative strength).
 
 Policy uncertainty comes from data/context/epu.csv, kept up to date by the
 context-data workflow (FRED often times out from cloud machines), plus the latest
@@ -38,11 +45,49 @@ import requests
 FRED = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 FRED_SERIES = {"epu": "USEPUINDXD", "hy": "BAMLH0A0HYM2"}
 EPU_DIRECT = "https://www.policyuncertainty.com/media/All_Daily_Policy_Data.csv"  # the index's own site, if FRED fails
-YAHOO_SERIES = {"vix": "^VIX", "tnx": "^TNX"}
+YAHOO_SERIES = {"vix": "^VIX", "tnx": "^TNX", "oil_y": "BZ=F", "oil_y2": "CL=F", "gold": "GC=F"}
+GPR_URLS = ["https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls",
+            "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xlsx"]
+# GICS sector -> its SPDR ETF, then an older proxy for the years before it existed
+SECTOR_ETFS = {
+    "Information Technology": ["XLK"], "Financials": ["XLF"], "Energy": ["XLE"], "Health Care": ["XLV"],
+    "Industrials": ["XLI"], "Consumer Discretionary": ["XLY"], "Consumer Staples": ["XLP"], "Utilities": ["XLU"],
+    "Materials": ["XLB"], "Real Estate": ["XLRE", "IYR"], "Communication Services": ["XLC", "VOX"],
+}
 CREDIT_PAIRS = [("VWEHX", "VFITX"), ("HYG", "IEF")]  # (high yield, Treasuries), longest history first
 CACHE_DIR = Path(__file__).resolve().parents[1] / "data" / "context"
 SESSIONS_3M = 63
 EPU_WINDOW = 3 * 252
+
+
+def sector_key(sector: str) -> str | None:
+    """The context prefix of a GICS sector (its main ETF), or None for an unknown sector."""
+    etfs = SECTOR_ETFS.get(sector)
+    return f"sec_{etfs[0]}" if etfs else None
+
+
+def gpr_daily() -> pd.Series | None:
+    """The daily Geopolitical Risk index (GPRD) from the authors' site, or None."""
+    for url in GPR_URLS:
+        try:
+            resp = requests.get(url, timeout=90, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            df = pd.read_excel(io.BytesIO(resp.content))
+            cols = {c.lower(): c for c in df.columns}
+            value = cols.get("gprd")
+            when = cols.get("date") or cols.get("day")
+            if not value or not when:
+                warn(f"GPR: colunas inesperadas {list(df.columns)[:8]}")
+                continue
+            raw = df[when]
+            idx = pd.to_datetime(raw.astype(str).str.slice(0, 10), errors="coerce") if raw.dtype != "int64" else pd.to_datetime(raw.astype(str), format="%Y%m%d", errors="coerce")
+            out = pd.Series(pd.to_numeric(df[value], errors="coerce").to_numpy(), index=idx).dropna()
+            out = out[out.index.notna()].sort_index()
+            if len(out) > 1000:
+                return out
+        except Exception as e:  # noqa: BLE001 - any failure leaves the rule idle
+            warn(f"GPR {url}: {e!r}")
+    return None
 
 
 def fred(series: str, tries: int = 3, start: str | None = None, end: str | None = None, timeout: int = 90) -> pd.Series | None:
@@ -95,7 +140,8 @@ def refresh_cache() -> dict[str, str]:
     epu = fred_in_pieces("USEPUINDXD", 1985)
     if epu is None:
         epu = epu_direct()
-    for name, s in (("epu", epu), ("hy", fred_in_pieces("BAMLH0A0HYM2", 1997))):
+    for name, s in (("epu", epu), ("hy", fred_in_pieces("BAMLH0A0HYM2", 1997)), ("brent", fred_in_pieces("DCOILBRENTEU", 1987)),
+                    ("gpr", gpr_daily())):
         if s is not None and len(s):
             s.rename(name).to_csv(CACHE_DIR / f"{name}.csv")
             done[name] = f"{s.index.min().date()} a {s.index.max().date()} ({len(s)} dias)"
@@ -169,6 +215,16 @@ def download(period: str, spy: pd.DataFrame | None, fx: pd.Series | None) -> pd.
             raw["tnx"] = s
         else:
             warn("juro a 10 anos indisponível (Yahoo ^TNX e FRED DGS10)")
+    for name in ("brent", "gpr"):  # cached history (data/context), the latest GPR days when the site answers
+        base = cached(name)
+        recent = gpr_daily() if name == "gpr" else None
+        s = base.combine_first(recent) if base is not None and recent is not None else (base if base is not None else recent)
+        if s is not None and len(s):
+            raw[name] = s
+    sector_tickers = sorted({t for ts in SECTOR_ETFS.values() for t in ts})
+    sectors = download_history(sector_tickers, period=period)
+    for t, df in sectors.items():
+        raw[f"etf:{t}"] = df["Close"]
     if spy is not None:
         raw["spy"] = spy["Close"]
     if fx is not None:
@@ -195,6 +251,37 @@ def features(raw: dict[str, pd.Series]) -> pd.DataFrame:
         cols["usd_chg"] = raw["fx"] / raw["fx"].shift(SESSIONS_3M) - 1
     if "spy" in raw:
         cols["spy_trend"] = raw["spy"] / raw["spy"].rolling(200).mean() - 1
+    if "gpr" in raw:
+        avg = raw["gpr"].rolling(7, min_periods=3).mean()
+        cols["gpr_pct"] = avg.rolling(EPU_WINDOW, min_periods=250).rank(pct=True)
+    oil = None
+    for name in ("brent", "oil_y", "oil_y2"):  # FRED Brent first, then Yahoo Brent, then WTI for missing days
+        if name in raw:
+            s = raw[name].where(raw[name] > 1)  # WTI went negative in April 2020
+            chg = s / s.shift(SESSIONS_3M) - 1
+            oil = chg if oil is None else oil.combine_first(chg)
+    if oil is not None:
+        cols["oil_chg"] = oil
+    if "gold" in raw:
+        cols["gold_chg"] = raw["gold"] / raw["gold"].shift(SESSIONS_3M) - 1
+    spy = raw.get("spy")
+    for sector, tickers in SECTOR_ETFS.items():
+        key = sector_key(sector)
+        trend = rs = None
+        for t in tickers:  # the main ETF where it exists, the proxy before
+            px = raw.get(f"etf:{t}")
+            if px is None or px.empty:
+                continue
+            t_trend = px / px.rolling(200).mean() - 1
+            ret = px / px.shift(SESSIONS_3M) - 1
+            t_rs = ret - (spy / spy.shift(SESSIONS_3M) - 1).reindex(ret.index) if spy is not None else None
+            trend = t_trend if trend is None else trend.combine_first(t_trend)
+            if t_rs is not None:
+                rs = t_rs if rs is None else rs.combine_first(t_rs)
+        if trend is not None:
+            cols[f"{key}_trend"] = trend
+        if rs is not None:
+            cols[f"{key}_rs"] = rs
     if not cols:
         return pd.DataFrame()
     frame = pd.DataFrame({k: v.groupby(v.index.normalize()).last() for k, v in cols.items()})
@@ -246,7 +333,8 @@ def main() -> int:
     frame = download(a.periodo, hist.get("SPY"), hist["EURUSD=X"]["Close"] if "EURUSD=X" in hist else None)
     save(frame, a.guardar)
     cov = coverage(frame)
-    missing = [c for c in ("vix", "epu_pct", "credit_dd", "rate_chg", "usd_chg", "spy_trend") if c not in cov]
+    missing = [c for c in ("vix", "epu_pct", "credit_dd", "rate_chg", "usd_chg", "spy_trend", "gpr_pct", "oil_chg", "gold_chg", "sec_XLK_trend")
+               if c not in cov]
     print(f"::notice title=Contexto::dados desde {cov}" + (f"; em falta: {missing}" if missing else ""), flush=True)
     return 0
 

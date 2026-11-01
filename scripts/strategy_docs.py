@@ -45,10 +45,20 @@ PARAMS = {
     "filtro_spy": "não compra quando o S&P 500 está abaixo da média de 200 dias (1 = ligado)",
     "dias_resultados": "não compra ações com resultados trimestrais nos próximos N dias",
     "evita_macro": "não compra na véspera de eventos macro (Fed, inflação, emprego) (1 = ligado)",
+    "gpr_max": "não compra quando o risco geopolítico (guerras e tensões nas notícias) está acima deste percentil dos últimos 3 anos (0 = desligado)",
+    "petroleo_max": "não compra quando o petróleo subiu mais do que isto em 3 meses (choque petrolífero; 0 = desligado)",
+    "ouro_max": "não compra quando o ouro subiu mais do que isto em 3 meses (fuga para ativos de refúgio; 0 = desligado)",
+    "filtro_setor": "só compra se o setor da ação estiver acima da média de 200 dias (1) e também mais forte do que o S&P 500 em 3 meses (2) (0 = desligado)",
+    "ema_filtro": "só compra com o preço acima das médias exponenciais de 21 e 50 dias, e a de 21 acima da de 50 (1 = ligado)",
+    "stop_suporte": "põe o stop abaixo do último suporte (mínimo confirmado) menos este múltiplo do ATR, se estiver a menos de 15% (0 = desligado)",
+    "qualidade_fund_min": "só compra empresas com qualidade dos fundamentos (margens, crescimento, cash flow, liquidez, dívida) de pelo menos isto, 0-100 (0 = desligado)",
+    "valor_fund_min": "só compra empresas com score de valor (P/E, cash flow livre, margem de segurança) de pelo menos isto, 0-100 (0 = desligado)",
+    "evita_geo": "não compra quando o Claude classifica o risco geopolítico do dia como alto (1 = ligado)",
+    "valor_min": "score de valor mínimo (0-100): rendimento dos lucros, do cash flow livre e margem de segurança",
 }
 
 PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext",
-              "epu_max", "usd_max", "credito_max"}
+              "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max"}
 
 # strategy: (idea, buys when, sells when, position size)
 DOCS = {
@@ -80,6 +90,12 @@ DOCS = {
         "Qualidade: as melhores do ranking diário com lucros, margens e crescimento sólidos.",
         "A cada {cada} sessões compra as {n} melhores do ranking com qualidade ≥ {qualidade_min}.",
         "Vende as que saem da lista, ou no stop de {stop_pct}.",
+        "Partes iguais, ajustadas à zona do mercado.",
+    ),
+    "analista": (
+        "Fundamentos: empresas com bons números (margens, crescimento, cash flow, pouca dívida) a preço razoável e em tendência de alta.",
+        "A cada {cada} sessões compra as {n} ações em Stage 2 com qualidade ≥ {qualidade_min} e valor ≥ {valor_min} (relatórios da SEC já publicados nesse dia), ordenadas por qualidade + valor + tendência.",
+        "Vende as que saem do top {n}×2, ou no stop de {stop_pct}.",
         "Partes iguais, ajustadas à zona do mercado.",
     ),
     "cacador": (

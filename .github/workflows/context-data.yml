@@ -1,12 +1,12 @@
-name: Dados de contexto (FRED)
+name: Dados de contexto e fundamentos
 
-# Refreshes data/context/ with the slow FRED series (policy uncertainty, high-yield
-# spread), downloaded in small date ranges with retries, since FRED often times out
-# from cloud machines. The pre-training and the daily runs read these files and add
-# the latest days when FRED answers. Monthly, before the re-training, or by hand.
+# Refreshes data/context/ with the slow series (FRED policy uncertainty, high-yield spread and
+# Brent, downloaded in small date ranges with retries; the daily Geopolitical Risk index) and
+# data/fundamentals/ with the companies' SEC filings (EDGAR, point in time). The pre-training
+# and the daily runs read these files. Weekly (Sunday), before the monthly re-training, or by hand.
 on:
   schedule:
-    - cron: "17 3 1 * *"
+    - cron: "17 3 * * 0"
   workflow_dispatch:
 
 permissions:
@@ -15,22 +15,26 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - run: uv sync
-      - name: Descarregar
+      - name: Contexto (FRED, risco geopolítico)
+        continue-on-error: true
         run: uv run python scripts/context.py --atualizar-dados
+      - name: Fundamentos (SEC EDGAR)
+        continue-on-error: true
+        run: uv run python scripts/fundamentals.py --atualizar
       - name: Guardar
         if: ${{ !cancelled() }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/context/
+          git add data/context/ data/fundamentals/
           git diff --cached --quiet && exit 0
-          git commit -m "Dados de contexto: $(date -u +%F)"
+          git commit -m "Dados de contexto e fundamentos: $(date -u +%F)"
           git pull --rebase origin main
           git push origin HEAD:main

@@ -93,7 +93,7 @@ jobs:
         env:
           ESTRATEGIAS: ${{ inputs.estrategias }}
         run: |
-          all="indexador guardiao rotador foguetao cacador sniper campeao pescador deriva kamikaze"
+          all="indexador guardiao rotador foguetao analista cacador sniper campeao pescador deriva kamikaze"
           chosen="${ESTRATEGIAS:-$all}"
           json=$(echo "$chosen indexador" | tr ', ' '\n\n' | sed '/^$/d' | sort -u | jq -R . | jq -sc .)
           echo "strategies=$json" >> "$GITHUB_OUTPUT"

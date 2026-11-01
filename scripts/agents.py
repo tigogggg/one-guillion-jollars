@@ -127,19 +127,35 @@ PARAM_BOUNDS = {
     "juros_max": (0.3, 1.5, float),
     "usd_max": (0.02, 0.10, float),
     "filtro_spy": (1, 1, int),
+    "gpr_max": (0.60, 0.98, float),
+    "petroleo_max": (0.15, 0.60, float),
+    "ouro_max": (0.06, 0.25, float),
+    # the stock's sector, technical levels and fundamentals; 0 = off
+    "filtro_setor": (1, 2, int),
+    "ema_filtro": (1, 1, int),
+    "stop_suporte": (0.25, 1.5, float),
+    "qualidade_fund_min": (30.0, 75.0, float),
+    "valor_fund_min": (20.0, 70.0, float),
     # calendar, live only (no free history to backtest them): tuned by the monthly mutation and the shadow copies
     "dias_resultados": (0, 10, int),
     "evita_macro": (1, 1, int),
+    "evita_geo": (1, 1, int),
+    # the Analista's own
+    "valor_min": (20.0, 70.0, float),
 }
 # Variables every strategy (but the Indexador) has, on top of its own. The defaults keep the original
 # behaviour; the training (pre-training, monthly mutation and the shadow copies) switches them on and tunes them.
 COMMON = {"stop_atr": 0, "trail_atr": 0, "tempo_max": 0, "min_tecnico": 0, "max_ext": 0, "peso_noticias": NEWS_VETO_DEFAULT,
           "vix_max": 0, "vix_meio": 0, "epu_max": 0, "credito_max": 0, "juros_max": 0, "usd_max": 0, "filtro_spy": 0,
-          "dias_resultados": EARNINGS_AVOID_DAYS_DEFAULT, "evita_macro": 0}
+          "gpr_max": 0, "petroleo_max": 0, "ouro_max": 0, "filtro_setor": 0, "ema_filtro": 0, "stop_suporte": 0,
+          "qualidade_fund_min": 0, "valor_fund_min": 0,
+          "dias_resultados": EARNINGS_AVOID_DAYS_DEFAULT, "evita_macro": 0, "evita_geo": 0}
 OFFABLE = {"stop_atr", "trail_atr", "tempo_max", "min_tecnico", "max_ext", "vix_max", "vix_meio", "epu_max", "credito_max",
-           "juros_max", "usd_max", "filtro_spy", "evita_macro"}
-CONTEXT_RULES = {"vix_max", "vix_meio", "epu_max", "credito_max", "juros_max", "usd_max", "filtro_spy"}
-LIVE_TUNED = {"peso_noticias", "dias_resultados", "evita_macro"}  # no history: not in the backtest
+           "juros_max", "usd_max", "filtro_spy", "gpr_max", "petroleo_max", "ouro_max", "filtro_setor", "ema_filtro", "stop_suporte",
+           "qualidade_fund_min", "valor_fund_min", "evita_macro", "evita_geo"}
+CONTEXT_RULES = {"vix_max", "vix_meio", "epu_max", "credito_max", "juros_max", "usd_max", "filtro_spy", "gpr_max", "petroleo_max", "ouro_max"}
+LIVE_TUNED = {"peso_noticias", "dias_resultados", "evita_macro", "evita_geo"}  # no history: not in the backtest
+GEO_RISK_HIGH = 4  # evita_geo: no new buys when Claude rates the geopolitical risk this high (0-5), live only
 ZONES = ("Alta", "Neutra", "Cautelosa", "Queda")
 
 
@@ -195,6 +211,23 @@ def atr14(df: pd.DataFrame) -> float:
     return float(tr.iloc[-14:].mean())
 
 
+PIVOT = 5  # a swing low is the lowest of PIVOT days on each side; it is only known PIVOT days later
+
+
+def technical_lines(df: pd.DataFrame) -> pd.DataFrame:
+    """Exponential averages (21 and 50 days) and the support: the last confirmed swing low below the price,
+    else the lowest low of the previous 60 days. The same for every day at once, live and in the backtest."""
+    close, low = df["Close"], df["Low"]
+    out = pd.DataFrame(index=df.index)
+    out["ema21"] = close.ewm(span=21, adjust=False).mean()
+    out["ema50"] = close.ewm(span=50, adjust=False).mean()
+    pivot = low.eq(low.rolling(2 * PIVOT + 1, center=True).min())
+    swing = low.where(pivot).shift(PIVOT).ffill()  # confirmed PIVOT sessions after the low, no look-ahead
+    fallback = low.shift(1).rolling(60, min_periods=10).min()
+    out["support"] = swing.where(swing < close, fallback)
+    return out
+
+
 def extra_metrics(df: pd.DataFrame) -> dict:
     before = df.iloc[:-1]
     last = df.iloc[-1]
@@ -207,6 +240,7 @@ def extra_metrics(df: pd.DataFrame) -> dict:
         "vol20": float(df["Close"].pct_change().iloc[-20:].std()),
         "atr14": atr14(df),
         **last_gap(df),
+        **{k: (float(v) if pd.notna(v) else None) for k, v in technical_lines(df.iloc[-300:]).iloc[-1].items()},
     }
 
 
@@ -237,6 +271,15 @@ def load_market() -> Market:
             stocks[sym] = {**m, **extra_metrics(df), "sector": sector_of[sym], "name": name_of.get(sym, ""),
                             "stage2": is_stage2(m)}
     add_trend_scores(stocks)
+    try:  # fundamentals as of today (SEC filings in data/fundamentals, today's price)
+        import fundamentals
+
+        funds = fundamentals.load()
+        today = stock_hist["SPY"].index[-1].date()
+        for sym, m in stocks.items():
+            m.update(fundamentals.latest(funds.get(sym), m["price"], today))
+    except Exception as e:  # missing fundamentals only switch those rules off
+        print(f"WARN: fundamentos: {e!r}", file=sys.stderr)
     names = dict(UCITS_ETFS)
     etfs = {}
     for sym, df in etf_hist.items():
@@ -690,6 +733,18 @@ def s_joalheiro(cfg, port, mkt, p):
     return rebalance(port, mkt, targets, exposure(mkt) / n, set(), p["stop_pct"], "qualidade")
 
 
+def s_analista(cfg, port, mkt, p):
+    """Quality + value + trend: solid, reasonably priced companies in an uptrend (point-in-time SEC fundamentals)."""
+    if not due(port, mkt, p["cada"]):
+        return []
+    pool = [s for s, m in mkt.stocks.items() if m["stage2"] and m.get("fund_q") is not None and m.get("fund_v") is not None
+            and m["fund_q"] >= p["qualidade_min"] and m["fund_v"] >= p["valor_min"]]
+    score = lambda s: mkt.stocks[s]["fund_q"] + mkt.stocks[s]["fund_v"] + mkt.stocks[s]["trend_score"]  # noqa: E731
+    ranked = sorted(pool, key=score, reverse=True)
+    n = p["n"]
+    return rebalance(port, mkt, ranked[:n], exposure(mkt) / n, set(ranked[: 2 * n]), p["stop_pct"], "qualidade, valor e tendência")
+
+
 def s_cacador(cfg, port, mkt, p):
     if mkt.zone == "Queda":
         return []
@@ -939,6 +994,8 @@ STRATEGIES = {
     "rotador": (s_rotador, "Roda entre os melhores ETFs UCITS", {"n": 3, "cada": 5}),
     "foguetao": (s_foguetao, "Top ações por score de tendência", {"n": 5, "stop_pct": 0.10, "cada": 5}),
     "joalheiro": (s_joalheiro, "Melhores do ranking com qualidade alta", {"n": 6, "qualidade_min": 70, "stop_pct": 0.15, "cada": 20}),
+    "analista": (s_analista, "Empresas sólidas e baratas em tendência de alta (fundamentos da SEC)",
+                 {"n": 6, "qualidade_min": 60, "valor_min": 40, "stop_pct": 0.15, "cada": 10}),
     "cacador": (s_cacador, "Rompimentos com volume", {"n": 5, "risco_pct": 0.02, "alvo_r": 3.0, "max_pos": 0.30}),
     "sniper": (s_sniper, "Contração de volatilidade (VCP)", {"n": 4, "risco_pct": 0.01, "aperto_pct": 0.06, "max_pos": 0.30}),
     "campeao": (s_campeao, "Melhores ações dos setores mais fortes", {"setores": 2, "por_setor": 2, "stop_pct": 0.12, "cada": 5}),
@@ -1080,6 +1137,37 @@ def tech_score(m: dict) -> float:
             + opportunities.lerp(m["pct_from_high"], 0.05, 0.30, 15))
 
 
+SUPPORT_MAX_RISK = 0.15  # stop_suporte only when the support is at most 15% below
+
+
+def sector_state(mkt: Market, sector: str | None) -> tuple[float | None, float | None]:
+    """(sector ETF vs its 200-day average, sector 3-month return minus the S&P 500's) from the context, or Nones."""
+    import context
+
+    key = context.sector_key(sector or "")
+    if not key:
+        return None, None
+    return mkt.context.get(f"{key}_trend"), mkt.context.get(f"{key}_rs")
+
+
+def stock_filter(m: dict, mkt: Market, p: dict) -> str | None:
+    """Why a stock fails the sector, moving-average and fundamental rules, or None. Missing data never blocks."""
+    if p.get("filtro_setor") and m.get("sector"):
+        trend, rs = sector_state(mkt, m["sector"])
+        sector = SECTORS_PT.get(m["sector"], m["sector"])
+        if trend is not None and trend < 0:
+            return f"setor {sector} abaixo da média de 200 dias"
+        if p["filtro_setor"] >= 2 and rs is not None and rs < 0:
+            return f"setor {sector} mais fraco do que o S&P 500 em 3 meses"
+    if p.get("ema_filtro") and m.get("ema21") and m.get("ema50") and not (m["price"] > m["ema21"] > m["ema50"]):
+        return "abaixo das médias exponenciais de 21 e 50 dias"
+    if p.get("qualidade_fund_min") and m.get("fund_q") is not None and m["fund_q"] < p["qualidade_fund_min"]:
+        return f"fundamentos fracos: qualidade {m['fund_q']:.0f} < {p['qualidade_fund_min']:.0f}"
+    if p.get("valor_fund_min") and m.get("fund_v") is not None and m["fund_v"] < p["valor_fund_min"]:
+        return f"cara: valor {m['fund_v']:.0f} < {p['valor_fund_min']:.0f}"
+    return None
+
+
 def context_gate(mkt: Market, p: dict) -> str | None:
     """Why no new buys today, from the market context and the calendar, or None."""
     c = mkt.context
@@ -1093,6 +1181,14 @@ def context_gate(mkt: Market, p: dict) -> str | None:
         return f"juro a 10 anos subiu {c['rate_chg']:.2f} p.p. em 3 meses"
     if p.get("filtro_spy") and c.get("spy_trend", 0) < 0:
         return "S&P 500 abaixo da média de 200 dias"
+    if p.get("gpr_max") and c.get("gpr_pct", 0) > p["gpr_max"]:
+        return f"risco geopolítico no percentil {c['gpr_pct']:.0%} (guerras e tensões nas notícias)"
+    if p.get("petroleo_max") and c.get("oil_chg", 0) > p["petroleo_max"]:
+        return f"choque do petróleo: +{c['oil_chg']:.0%} em 3 meses"
+    if p.get("ouro_max") and c.get("gold_chg", 0) > p["ouro_max"]:
+        return f"fuga para o ouro: +{c['gold_chg']:.0%} em 3 meses"
+    if p.get("evita_geo") and (c.get("geo_risk") or 0) >= GEO_RISK_HIGH:
+        return f"risco geopolítico alto segundo o Claude ({c['geo_risk']}/5)"
     if p.get("evita_macro") and c.get("macro"):
         return "evento macro: " + ", ".join(c["macro"][:2])
     return None
@@ -1123,10 +1219,18 @@ def shared_rules(orders: list[dict], port: dict, mkt: Market, p: dict) -> tuple[
             if p.get("min_tecnico") and tech_score(m) < p["min_tecnico"]:
                 notes.append(f"{o['symbol']} (score técnico {tech_score(m):.0f} < {p['min_tecnico']:.0f})")
                 continue
+            why = stock_filter(m, mkt, p)
+            if why:
+                notes.append(f"{o['symbol']} ({why})")
+                continue
             if p.get("stop_atr") and m.get("atr14"):
                 atr_stop = round(m["price"] - p["stop_atr"] * m["atr14"], 4)
                 if atr_stop > 0 and (not o.get("stop") or atr_stop > o["stop"]):
                     o = {**o, "stop": atr_stop}
+            if p.get("stop_suporte") and m.get("support") and m.get("atr14"):
+                level = round(m["support"] - p["stop_suporte"] * m["atr14"], 4)
+                if 0 < level < m["price"] and (m["price"] - level) / m["price"] <= SUPPORT_MAX_RISK and (not o.get("stop") or level > o["stop"]):
+                    o = {**o, "stop": level}
         kept.append(o)
     if p.get("tempo_max"):
         selling = {o["symbol"] for o in kept if o["side"] == "sell"}

@@ -113,3 +113,30 @@ def test_merge_job_combines_partial_results(monkeypatch, tmp_path):
     merged = json.loads(report.read_text())
     assert set(merged["strategies"]) == {"joalheiro", "foguetao", "indexador"}
     assert "old" not in merged["strategies"]["foguetao"] and merged["coverage"] == {"2008": 0.9}
+
+
+def test_new_rules_and_analista_run_in_the_backtest():
+    import fundamentals as F
+
+    hist = {s: synthetic(600, seed=i) for i, s in enumerate(["AAA", "BBB", "CCC"])}
+    idx = hist["AAA"].index
+    days = [d.date() for d in idx[pretrain.WARMUP:]]
+    rows = pd.DataFrame({"symbol": "AAA", "end": idx[100], "revenue": 1000.0, "op_income": 250.0, "net_income": 200.0,
+                         "ocf": 260.0, "capex": 40.0, "assets_cur": 500.0, "liab_cur": 200.0, "cash": 300.0, "debt": 100.0,
+                         "debt_cur": 0.0, "equity": 800.0, "shares": 20.0, "rev_growth": 0.12}, index=pd.DatetimeIndex([idx[450]]))
+    frames = {"AAA": F.daily(rows, hist["AAA"]["Close"])}
+    snaps = pretrain.snapshots(hist, days, {s: {"sector": "Energy"} for s in hist}, frames=frames)
+    some = snaps[days[-1]]
+    assert some["AAA"]["fund_q"] is not None and "fund_q" not in some["BBB"]
+    assert all(k in some["BBB"] for k in ("ema21", "ema50", "support"))
+    from agents import Market, zone_for
+    fx = pd.Series(1.1, index=idx)
+    ctx = {"sec_XLE_trend": -0.05, "sec_XLE_rs": -0.02, "gpr_pct": 0.5, "oil_chg": 0.1, "gold_chg": 0.02}
+    markets = [Market(hist=hist, fx=fx, stocks=snaps[d], etfs={}, as_of=d, sessions=[x for x in days if x <= d],
+                      zone=zone_for(0.5), stage2_share=0.5, closes={s: float(h["Close"].asof(pd.Timestamp(d))) for s, h in hist.items()},
+                      context=ctx) for d in days]
+    base = dict(pretrain.STRATEGIES["analista"][2], qualidade_min=0, valor_min=0)
+    r = pretrain.simulate("analista", base, markets)
+    assert "points" in r
+    blocked = pretrain.simulate("foguetao", {**pretrain.STRATEGIES["foguetao"][2], "filtro_setor": 1}, markets)
+    assert blocked["trades"] == 0  # the sector is below its 200-day average every day
