@@ -305,9 +305,11 @@ def build(mkt, holders: dict[str, list[str]], fetch_earnings=None) -> dict:
             buy.append({**r, "reasons": ["📦 um dos ETFs UCITS com melhor tendência"],
                         "checks": ["✅ tendência de alta", f"✅ {r['stretch_pct']:.0f}% acima da média de 50 dias", f"✅ score {r['safety']}"]})
 
+    # The lists above pick who gets in; the page shows each one by safety score, highest first.
+    by_score = lambda rows: sorted(rows, key=lambda r: r["safety"], reverse=True)  # noqa: E731
     return {
         "as_of": today.isoformat(), "zone": mkt.zone, "stage2_pct": round(mkt.stage2_share * 100, 1),
-        "buy": buy, "watch": watch[:MAX_WATCH], "sell": sell[:MAX_SELL],
+        "buy": by_score(buy), "watch": by_score(watch[:MAX_WATCH]), "sell": by_score(sell[:MAX_SELL]),
         "criteria": [{"key": k, "label": label, "max": mx, "rule": rule} for k, label, mx, rule in CRITERIA],
         "rules": {"buy": BUY_RULES, "sell": SELL_RULES, "watch": WATCH_RULES},
         "levels": [{"from": f, "name": n} for f, n in LEVELS],

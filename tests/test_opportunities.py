@@ -93,3 +93,15 @@ def test_fundamentals_and_sector_count_in_the_score():
     s2, _ = opportunities.safety(weak, None, 30, None, "Alta", sector_trend=-0.05)
     assert s1 - s2 == round(90 * 0.1 + 60 * 0.05 - (20 * 0.1 + 10 * 0.05)) + 2
     assert "P/E 18" in next(p["why"] for p in p1 if p["key"] == "qualidade")
+
+
+def test_every_list_is_shown_by_score_highest_first():
+    mkt = market({
+        "VCP": metrics(price=104.0, high20_prev=103.0),
+        "PULL": metrics(price=102.0),
+        "BRK": metrics(price=111.0, high20_prev=108.0, vol_ratio=2.0),
+    }, rankings=["PULL"], vcp=["VCP"])
+    out = build(mkt)
+    for kind in ("buy", "watch", "sell"):
+        scores = [r["safety"] for r in out[kind]]
+        assert scores == sorted(scores, reverse=True)

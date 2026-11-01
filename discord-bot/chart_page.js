@@ -1087,7 +1087,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
       '<p class="muted small">Só se propõem compras em setores acima da média de 200 dias. Os agentes podem aprender a exigir também força face ao S&P 500.</p></details>' : '') +
     '<h2>🟢 Comprar (' + MARKET.buy.length + ')</h2><p class="muted small">Só as que passam em todos os filtros: tendência de alta, um sinal de entrada, não esticadas, sem resultados nem notícias negativas por perto, stop curto e score alto. Poucas e boas; há dias sem nenhuma.</p>' +
     rules(R.buy) + '<div id="buy" class="cards"></div>' +
-    '<h2>🔴 Vender (' + MARKET.sell.length + ')</h2><p class="muted small">Ações dos agentes ou do ranking cuja tendência quebrou. Ordenadas pela gravidade.</p>' + rules(R.sell) +
+    '<h2>🔴 Vender (' + MARKET.sell.length + ')</h2><p class="muted small">Ações dos agentes ou do ranking cuja tendência quebrou. Ordenadas pelo score, do mais alto para o mais baixo.</p>' + rules(R.sell) +
     '<div class="cards">' + (MARKET.sell.map((r) => card(r, "sell")).join("") || '<p class="muted">Nenhuma com a tendência quebrada.</p>') + '</div>' +
     '<h2>🟡 Atenção: não comprar agora (' + W.length + ')</h2><p class="muted small">Ações fortes com um motivo para esperar: resultados à porta, notícias negativas, perderam a média de 50 dias ou estão esticadas. Não são sinais de venda.</p>' + rules(R.watch) +
     '<div class="cards">' + (W.map((r) => card(r, "watch")).join("") || '<p class="muted">Nenhuma.</p>') + '</div>';
