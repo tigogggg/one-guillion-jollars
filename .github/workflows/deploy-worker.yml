@@ -37,7 +37,39 @@ jobs:
           fi
           [ -n "$id" ] && [ "$id" != "null" ] || { echo "::error::Não consegui obter a KV"; exit 1; }
           sed -i "s/__KV_ID__/$id/" discord-bot/wrangler.toml
+      - name: Encontrar ou criar a base de dados D1 (opcional)
+        run: |
+          api="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/d1/database"
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          id=$(curl -sS -H "$auth" "$api?name=ogj" | jq -r '.result[]? | select(.name == "ogj") | .uuid' | head -1)
+          if [ -z "$id" ]; then
+            id=$(curl -sS -X POST -H "$auth" -H "Content-Type: application/json" -d '{"name": "ogj"}' "$api" | jq -r '.result.uuid // empty')
+            [ -n "$id" ] && echo "D1 criada: $id"
+          fi
+          if [ -n "$id" ]; then
+            sed -i "s/__D1_ID__/$id/" discord-bot/wrangler.toml
+            echo "D1: $id"
+          else
+            echo "::warning title=D1::O token da Cloudflare não tem permissão D1 (Edit). As carteiras ficam no KV, sem versões nem backups. Acrescenta 'Account · D1 · Edit' ao token."
+            sed -i '/^# --- optional: D1/,/^# --- end D1/d' discord-bot/wrangler.toml
+          fi
       - name: Publicar
+        id: deploy
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: discord-bot
+          command: deploy
+      - name: Sem os limites de pedidos (se a Cloudflare os recusou)
+        if: ${{ steps.deploy.outcome == 'failure' }}
+        run: |
+          echo "::warning title=Limites de pedidos::A publicação com os limites falhou; publico sem eles."
+          sed -i '/^# --- optional: rate limits/,/^# --- end rate limits/d' discord-bot/wrangler.toml
+      - name: Publicar (sem limites)
+        id: fallback
+        if: ${{ steps.deploy.outcome == 'failure' }}
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}

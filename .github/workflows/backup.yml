@@ -1,0 +1,43 @@
+name: Cópia de segurança
+run-name: "Cópia de segurança das carteiras"
+
+# Daily off-site copy of the members' data (KV + D1) as an artifact of this private repo,
+# kept 30 days; encrypted with BACKUP_KEY when that secret exists. The Worker also keeps
+# 14 daily copies inside D1. Restore: download the artifact, decrypt, gunzip.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Copiar
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: uv run python scripts/backup.py out/backup.json.gz
+      - name: Cifrar (se houver BACKUP_KEY)
+        env:
+          BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
+        run: |
+          if [ -n "$BACKUP_KEY" ]; then
+            openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in out/backup.json.gz -out out/backup.json.gz.enc -pass env:BACKUP_KEY
+            rm out/backup.json.gz
+            echo "Cifrado. Para abrir: openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in backup.json.gz.enc -out backup.json.gz"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backup-${{ github.run_id }}
+          path: out/
+          retention-days: 30

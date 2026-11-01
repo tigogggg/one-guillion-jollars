@@ -19,6 +19,7 @@ import { loginRoute, rememberDiscord } from "./login.js";
 import { chartResponse, portalResponse } from "./chart_page.js";
 import { portfolioCommand, portfolioRoute } from "./portfolio.js";
 import { ICONS } from "./icons.js";
+import { dailyBackup } from "./store.js";
 
 // Installable as an app: a service worker that only passes requests through (the pages need live data).
 const SERVICE_WORKER = `self.addEventListener("install", () => self.skipWaiting());
@@ -93,8 +94,74 @@ const HELP = [
   "_Ferramenta educativa. Nada aqui é recomendação de compra; as decisões são tuas._",
 ].join("\n");
 
+// Security headers on every answer. Scripts and styles inline (the pages are self-contained),
+// plus the few CDNs and the YouTube player; nothing can frame the site.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://www.youtube.com https://s.ytimg.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self'",
+  "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
+  "media-src 'self' https:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+const SECURITY_HEADERS = {
+  "Content-Security-Policy": CSP,
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "strict-origin",  // other sites never see the private /c/<token> path
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+  "Cross-Origin-Opener-Policy": "same-origin",
+};
+
+function secure(response) {
+  const out = new Response(response.body, response);
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) if (!out.headers.has(k)) out.headers.set(k, v);
+  return out;
+}
+
+// Requests per minute and address (Workers rate limiting bindings; skipped when not bound).
+async function tooMany(env, request, path) {
+  const ip = request.headers.get("CF-Connecting-IP") || "?";
+  const [binding, key] = path === "/entrar" || path.startsWith("/entrar/") || path === "/sair" ? [env.RL_AUTH, "auth"]
+    : request.method === "POST" && path.startsWith("/c/") ? [env.RL_WRITE, "write"]
+    : request.method === "GET" && /^\/(c|p|g)\//.test(path) ? [env.RL_READ, "read"] : [null, ""];
+  if (!binding?.limit) return false;
+  try {
+    const { success } = await binding.limit({ key: `${key}:${ip}` });
+    return !success;
+  } catch {
+    return false;
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
+    const path = new URL(request.url).pathname;
+    if (await tooMany(env, request, path)) {
+      return secure(new Response("Demasiados pedidos seguidos. Espera um minuto e tenta outra vez.", {
+        status: 429, headers: { "Content-Type": "text/plain; charset=utf-8", "Retry-After": "60" } }));
+    }
+    return secure(await route(request, env, ctx));
+  },
+
+  // Cron trigger, every 5 minutes: start whatever is due and not started yet today.
+  async scheduled(event, env, ctx) {
+    if (!env.CONFIG) return;
+    const now = lisbonNow(new Date(event.scheduledTime));
+    if (env.DB && now.minutes >= 3 * 60 + 30) ctx.waitUntil(dailyBackup(env, now.date).catch((e) => console.log("backup", e)));
+    await runSchedule(env, ctx, now);
+  },
+};
+
+async function route(request, env, ctx) {
+  {
     const path = new URL(request.url).pathname;
     if (request.method === "GET" && ICONS[path.slice(1)]) {
       const bytes = Uint8Array.from(atob(ICONS[path.slice(1)]), (c) => c.charCodeAt(0));
@@ -115,7 +182,7 @@ export default {
     if (portal && env.CONFIG) {
       return portalResponse(env, portal[1], await getSchedule(env), !!portal[2]);
     }
-    const wallet = path.match(/^\/c\/([0-9a-f]{24})(\/data|\/history|\/analysis|\/manifest\.webmanifest)?$/);
+    const wallet = path.match(/^\/c\/([0-9a-f]{24})(\/data|\/history|\/analysis|\/versions|\/export|\/manifest\.webmanifest)?$/);
     if (wallet && env.CONFIG) {
       return portfolioRoute(request, env, wallet[1], wallet[2] || "", (workflow, inputs) => dispatchWorkflow(env, workflow, inputs));
     }
@@ -190,12 +257,11 @@ export default {
       return json({ type: DEFERRED_CHANNEL_MESSAGE });
     }
     return json({ type: CHANNEL_MESSAGE, data: { content: `Comando desconhecido: /${name}`, flags: EPHEMERAL } });
-  },
+  }
+}
 
-  // Cron trigger, every 5 minutes: start whatever is due and not started yet today.
-  async scheduled(event, env, ctx) {
-    if (!env.CONFIG) return;
-    const now = lisbonNow(new Date(event.scheduledTime));
+async function runSchedule(env, ctx, now) {
+  {
     const schedule = await getSchedule(env);
     const weekday = now.day !== "sab" && now.day !== "dom";
     const jobs = [];
@@ -219,8 +285,8 @@ export default {
       await env.CONFIG.put(key, "1", { expirationTtl: 3 * 24 * 3600 });
       ctx.waitUntil(dispatchWorkflow(env, WORKFLOWS[job], {}));
     }
-  },
-};
+  }
+}
 
 // /seguir: a personal list of tickers in KV (follows:<user id>); the alerts
 // workflow DMs each user about their stocks.

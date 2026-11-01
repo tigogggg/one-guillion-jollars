@@ -17,24 +17,13 @@
 
 import { esc, html, page } from "./chart_page.js";
 import { ensurePortfolio } from "./portfolio.js";
+import { loadPortfolio, savePortfolio } from "./store.js";
+import { HEX24, SESSION_DAYS, cookie, cookies, currentSession, loginActive, newSession } from "./session.js";
 
-const SESSION_DAYS = 30;
 const STATE_SECONDS = 600;
-const HEX24 = /^[0-9a-f]{24}$/;
 
 function rand() {
   return [...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function cookies(request) {
-  return Object.fromEntries((request.headers.get("Cookie") || "").split(/;\s*/).filter(Boolean).map((c) => {
-    const i = c.indexOf("=");
-    return [c.slice(0, i), c.slice(i + 1)];
-  }));
-}
-
-function cookie(name, value, seconds) {
-  return `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${seconds}`;
 }
 
 function redirect(location, setCookies = []) {
@@ -60,19 +49,14 @@ async function discordIds(env) {
   return { app: env.DISCORD_CLIENT_ID || kv.app, guild: env.DISCORD_GUILD_ID || kv.guild };
 }
 
-async function providers(env) {
-  const ids = await discordIds(env);
-  return { discord: !!(ids.app && ids.guild && env.DISCORD_CLIENT_SECRET), google: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) };
-}
-
 async function currentToken(env, owner) {
   return owner ? env.CONFIG.get(`portfolio-user:${owner}`) : null;
 }
 
 async function signIn(env, owner) {
-  const sid = rand();
-  await env.CONFIG.put(`session:${sid}`, JSON.stringify({ owner, at: new Date().toISOString() }), { expirationTtl: SESSION_DAYS * 86400 });
   const tok = await currentToken(env, owner);
+  const cur = tok ? await loadPortfolio(env, tok) : null;
+  const sid = await newSession(env, owner, cur?.data.session_epoch);
   return redirect(`/c/${tok}`, [cookie("ogj_s", sid, SESSION_DAYS * 86400), cookie("ogj_state", "", 0)]);
 }
 
@@ -149,12 +133,15 @@ async function googleCallback(env, request) {
   const linked = await env.CONFIG.get(key);
 
   if (saved.link) {  // linking from the portfolio page
-    const data = await env.CONFIG.get(`portfolio:${saved.link}`, "json");
+    const cur = await loadPortfolio(env, saved.link);
+    const data = cur?.data;
     if (!data?.owner) return message("Link inválido", "<p>Abre a tua carteira outra vez e repete.</p>", 400);
     if (linked && linked !== data.owner) return message("Conta já associada", "<p>Esta conta Google já abre outra carteira. Desassocia-a lá primeiro.</p>", 409);
     if (data.google?.sub && data.google.sub !== info.sub) await env.CONFIG.delete(`login-google:${data.google.sub}`);
     data.google = { sub: info.sub, email: info.email || "", linked: new Date().toISOString().slice(0, 10) };
-    await env.CONFIG.put(`portfolio:${saved.link}`, JSON.stringify(data));
+    if ((await savePortfolio(env, saved.link, data, cur.version, "google_link")) == null) {
+      return message("Tenta outra vez", "<p>A carteira mudou ao mesmo tempo noutro sítio.</p>", 409);
+    }
     await env.CONFIG.put(key, data.owner);
     return signIn(env, data.owner);
   }
@@ -167,11 +154,17 @@ async function googleCallback(env, request) {
   return signIn(env, linked);
 }
 
-async function loginPage(env, request) {
-  const on = await providers(env);
+const REASONS = {
+  login: "🔒 Esta carteira pede login: entra com o Discord ou com a conta Google associada.",
+  apagada: "🗑️ A carteira foi apagada.",
+};
+
+async function loginPage(env, request, reason) {
+  const on = await loginActive(env);
   const origin = new URL(request.url).origin;
   const button = (href, label, ok) => ok ? `<a class="btn" style="display:inline-block;text-decoration:none;font-size:.75rem;padding:12px 16px" href="${href}">${label}</a>` : `<span class="btn" style="display:inline-block;opacity:.45;font-size:.75rem;padding:12px 16px">${label} (ainda não ativo)</span>`;
   return html(page("Entrar", `<h1>💼 Entrar na tua carteira</h1>
+  ${REASONS[reason] ? `<p class="panel">${esc(REASONS[reason])}</p>` : ""}
   <div class="panel prose">
     <div style="display:flex;flex-wrap:wrap;gap:12px;margin:6px 0 14px">${button("/entrar/discord", "🎮 Entrar com o Discord", on.discord)}
     ${button("/entrar/google", "🔑 Entrar com o Google", on.google)}</div>
@@ -194,13 +187,11 @@ export async function loginRoute(request, env) {
     return redirect("/entrar", [cookie("ogj_s", "", 0)]);
   }
   if (path === "/entrar") {
-    const sid = cookies(request).ogj_s;
-    const session = sid && HEX24.test(sid) ? await env.CONFIG.get(`session:${sid}`, "json") : null;
-    const tok = await currentToken(env, session?.owner);
-    if (tok && url.searchParams.get("trocar") == null) return redirect(`/c/${tok}`);
-    return loginPage(env, request);
+    const session = await currentSession(env, request);
+    if (session && url.searchParams.get("trocar") == null) return redirect(`/c/${session.tok}`);
+    return loginPage(env, request, url.searchParams.get("motivo"));
   }
-  const on = await providers(env);
+  const on = await loginActive(env);
   if (path === "/entrar/discord") return on.discord ? startOAuth(env, request, "discord") : loginPage(env, request);
   if (path === "/entrar/google") {
     if (!on.google) return loginPage(env, request);

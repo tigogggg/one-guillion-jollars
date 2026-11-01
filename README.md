@@ -279,6 +279,23 @@ Secrets (GitHub → Worker on deploy, each login stays off until set):
 `DISCORD_CLIENT_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`. Redirect
 URIs: `https://<worker>/entrar/discord/callback` and `/entrar/google/callback`.
 
+**Storage, backups and security.** With the D1 database `ogj` (found or
+created by the deploy workflow; the Cloudflare token needs `D1 · Edit`), each
+portfolio is a row with a version number (`discord-bot/store.js`): a save only
+succeeds if nobody saved in between, so two tabs cannot overwrite each other,
+and the last 30 versions stay for "Desfazer"/"Repor" in the portfolio's 🔒 Conta
+tab. Portfolios still in KV move to D1 on first use; without D1 everything stays
+in KV. Every night the Worker copies all portfolios and the members' KV keys
+into D1's `backups` table (14 days), and `backup.yml` keeps an off-site copy as
+an artifact (30 days, encrypted with `BACKUP_KEY` if set). D1 also shares the
+Yahoo quotes (1 minute) and daily histories (6 hours) between visitors.
+Every response carries security headers (CSP, no framing, `Referrer-Policy:
+strict-origin` so the private path never leaks, HSTS) and rate limits per
+address (Workers rate limiting: sign-in 20/min, portfolio changes 60/min, pages
+300/min). A member can require sign-in (the link alone stops working), end the
+sessions on every device, export the operations (CSV) or everything (JSON) and
+delete the portfolio with everything linked to it.
+
 **Music.** Every page plays a YouTube track in a hidden player, muted by
 default; the 🔇/🔊 button turns it on and the choice is remembered per device.
 

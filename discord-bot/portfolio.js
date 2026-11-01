@@ -10,6 +10,8 @@
 // converts everything to euros, and draws the value since the first purchase.
 
 import { esc, html, page, safeJson } from "./chart_page.js";
+import { currentSession, loginActive } from "./session.js";
+import { cached, createPortfolio, deletePortfolio, getVersion, hasDb, listVersions, loadPortfolio, renamePortfolio, savePortfolio } from "./store.js";
 
 const MAX_TX = 3000;
 const MAX_IMPORT = 2000;
@@ -28,15 +30,25 @@ function token() {
 export async function ensurePortfolio(env, user, fresh = false) {
   const userKey = `portfolio-user:${user.id}`;
   let current = await env.CONFIG.get(userKey);
-  let data = current ? await env.CONFIG.get(`portfolio:${current}`, "json") : null;
-  if (!data) data = { owner: user.id, name: user.global_name || user.username, created: new Date().toISOString(), tx: [] };
-  if (!current || fresh) {
-    if (current) await env.CONFIG.delete(`portfolio:${current}`);
+  const name = user.global_name || user.username;
+  let cur = current ? await loadPortfolio(env, current) : null;
+  if (!cur) {
     current = token();
+    await createPortfolio(env, current, { owner: user.id, name, created: new Date().toISOString(), tx: [] });
     await env.CONFIG.put(userKey, current);
+    return current;
   }
-  data.name = user.global_name || user.username || data.name;
-  await env.CONFIG.put(`portfolio:${current}`, JSON.stringify(data));
+  if (fresh) {
+    const next = token();
+    await renamePortfolio(env, current, next);
+    await env.CONFIG.put(userKey, next);
+    current = next;
+    cur = await loadPortfolio(env, current);
+  }
+  if (name && cur.data.name !== name) {
+    cur.data.name = name;
+    await savePortfolio(env, current, cur.data, cur.version, "name");
+  }
   return current;
 }
 
@@ -55,59 +67,133 @@ export async function portfolioCommand(env, interaction, origin) {
   ].filter(Boolean).join("\n");
 }
 
-// /c/<token>, /c/<token>/data (GET quotes, POST add/delete) and /c/<token>/history
+// Load, change and save, again from the start if someone saved in between (another tab).
+// fn(data) returns {error} or a result; nothing is saved on error.
+async function mutate(env, tok, label, fn) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const cur = await loadPortfolio(env, tok);
+    if (!cur) return { error: "Carteira não encontrada.", status: 404 };
+    const out = (await fn(cur.data)) || {};
+    if (out.error) return { ...out, data: cur.data };
+    if ((await savePortfolio(env, tok, cur.data, cur.version, label)) != null) return { ...out, data: cur.data };
+  }
+  return { error: "A carteira mudou noutro sítio ao mesmo tempo. Tenta outra vez.", status: 409 };
+}
+
+function redirect(location, headers = {}) {
+  return new Response(null, { status: 302, headers: { Location: location, "Cache-Control": "no-store", ...headers } });
+}
+
+// /c/<token>, /c/<token>/data (GET quotes, POST changes), /history, /analysis, /versions
 export async function portfolioRoute(request, env, tok, rest, dispatch) {
-  const data = await env.CONFIG.get(`portfolio:${tok}`, "json");
-  if (!data) return html(page("Carteira", "<p class='muted'>Link inválido ou substituído. Pede o teu link com /carteira no Discord.</p>"), 404);
-  if (rest === "" && request.method === "GET") return html(portfolioPage(data, tok));
+  ENV = env;
+  const cur = await loadPortfolio(env, tok);
+  if (!cur) return html(page("Carteira", "<p class='muted'>Link inválido ou substituído. Entra em <a href='/entrar'>/entrar</a> ou pede o teu link com /carteira no Discord.</p>"), 404);
+  let data = cur.data;
+  const session = await currentSession(env, request);
+  const mine = session?.owner === data.owner;
+  if (data.require_login && !mine && (await loginActive(env)).any) {  // the link alone is not enough
+    return rest === "" ? redirect("/entrar?motivo=login") : json({ error: "Esta carteira pede login: entra outra vez em /entrar." }, 401);
+  }
+  if (rest === "" && request.method === "GET") return html(portfolioPage(data, tok, { signedIn: mine, loginOn: (await loginActive(env)).any, versions: hasDb(env) }));
   if (rest === "/data" && request.method === "GET") return json(await snapshot(env, data));
-  if (rest === "/history" && request.method === "GET") return json(await history(data));
+  if (rest === "/history" && request.method === "GET") return json(await history(env, data));
   if (rest === "/analysis" && request.method === "GET") return json(await analysisStatus(env, data));
+  if (rest === "/versions" && request.method === "GET") return json({ versions: await listVersions(env, tok), current: cur.version });
+  if (rest === "/export" && request.method === "GET") {
+    const day = new Date().toISOString().slice(0, 10);
+    const { session_epoch, google, analyses, ...out } = data;
+    return new Response(JSON.stringify({ exported: new Date().toISOString(), ...out, google: google ? { email: google.email } : undefined }, null, 1), {
+      headers: { "Content-Type": "application/json", "Content-Disposition": `attachment; filename="carteira-${day}.json"`, "Cache-Control": "no-store" } });
+  }
   if (rest === "/analysis" && request.method === "POST") {
     const out = await requestAnalysis(env, data, dispatch);
     if (out.error) return json({ error: out.error }, 400);
-    await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
-    return json(await analysisStatus(env, data));
+    const saved = await mutate(env, tok, "analysis", (d) => { d.analyses = (d.analyses || []).concat([out.entry]).slice(-20); });
+    return json(await analysisStatus(env, saved.data || data));
   }
   if (rest === "/manifest.webmanifest") return manifest(data, tok);
-  if (rest === "/data" && request.method === "POST") {
-    let body;
-    try { body = await request.json(); } catch { return json({ error: "Pedido inválido." }, 400); }
-    if (body.action === "follow_add" || body.action === "follow_remove") {
-      const error = await follow(env, data, body);
-      if (error) return json({ error }, 400);
-      return json(await snapshot(env, data));
-    }
-    if (body.action === "import") {
-      const out = await importRows(data, body);
-      if (out.error) return json({ error: out.error }, 400);
-      await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
-      return json({ ...(await snapshot(env, data)), imported: out });
-    }
-    if (body.action === "dedupe") {
-      const out = dedupe(data);
-      if (out.error) return json({ error: out.error }, 400);
-      await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
-      return json({ ...(await snapshot(env, data)), deduped: out.removed });
-    }
-    if (body.action === "google_unlink") {
-      if (data.google?.sub) await env.CONFIG.delete(`login-google:${data.google.sub}`);
-      delete data.google;
-      await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
-      return json({ ok: true });
-    }
-    if (body.action === "account") {
-      const error = setAccount(data, body);
-      if (error) return json({ error }, 400);
-      await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
-      return json(await snapshot(env, data));
-    }
-    const error = await change(data, body);
-    if (error) return json({ error }, 400);
-    await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
-    return json(await snapshot(env, data));
+  if (rest !== "/data" || request.method !== "POST") return json({ error: "Não encontrado." }, 404);
+
+  let body;
+  try { body = await request.json(); } catch { return json({ error: "Pedido inválido." }, 400); }
+  const fail = (out) => json({ error: out.error }, out.status || 400);
+  const action = String(body.action || "add");
+
+  if (action === "follow_add" || action === "follow_remove") {
+    const error = await follow(env, data, body);
+    return error ? fail({ error }) : json(await snapshot(env, data));
   }
-  return json({ error: "Não encontrado." }, 404);
+  if (action === "security") {
+    if (body.require_login && !mine) return fail({ error: "Entra primeiro com o Discord ou o Google neste aparelho (em /entrar): assim confirmas que consegues entrar antes de trancar o link." });
+    const out = await mutate(env, tok, "security", (d) => { d.require_login = !!body.require_login; });
+    return out.error ? fail(out) : json({ ok: true, require_login: out.data.require_login });
+  }
+  if (action === "logout_all") {
+    const out = await mutate(env, tok, "logout_all", (d) => { d.session_epoch = (d.session_epoch || 0) + 1; });
+    return out.error ? fail(out) : json({ ok: true });
+  }
+  if (action === "google_unlink") {
+    const out = await mutate(env, tok, "google_unlink", (d) => {
+      const sub = d.google?.sub;
+      delete d.google;
+      return { sub };
+    });
+    if (out.error) return fail(out);
+    if (out.sub) await env.CONFIG.delete(`login-google:${out.sub}`);
+    return json({ ok: true });
+  }
+  if (action === "delete_all") {
+    if (body.confirm !== "APAGAR") return fail({ error: "Escreve APAGAR para confirmar." });
+    await deleteEverything(env, tok, data);
+    return json({ ok: true, deleted: true });
+  }
+  if (action === "restore") {
+    const version = Number(body.version);
+    const old = Number.isInteger(version) ? await getVersion(env, tok, version) : null;
+    if (!old) return fail({ error: "Versão não encontrada." });
+    const out = await mutate(env, tok, `restore:${version}`, (d) => {
+      for (const k of ["tx", "accounts", "dividends", "settings", "profile"]) {
+        if (old[k] === undefined) delete d[k]; else d[k] = old[k];
+      }
+    });
+    return out.error ? fail(out) : json(await snapshot(env, out.data));
+  }
+
+  let extra = {};
+  const out = await mutate(env, tok, action, async (d) => {
+    if (action === "import") {
+      const r = await importRows(d, body);
+      if (r.error) return r;
+      extra = { imported: r };
+    } else if (action === "dedupe") {
+      const r = dedupe(d);
+      if (r.error) return r;
+      extra = { deduped: r.removed };
+    } else if (action === "account") {
+      const error = setAccount(d, body);
+      if (error) return { error };
+    } else {
+      const error = await change(d, body);
+      if (error) return { error };
+    }
+    return null;
+  });
+  if (out.error) return fail(out);
+  return json({ ...(await snapshot(env, out.data)), ...extra });
+}
+
+// RGPD: the portfolio, its versions, the links to Discord and Google, the follow list and the analyses.
+async function deleteEverything(env, tok, data) {
+  const owner = data.owner;
+  await deletePortfolio(env, tok);
+  if (owner && (await env.CONFIG.get(`portfolio-user:${owner}`)) === tok) await env.CONFIG.delete(`portfolio-user:${owner}`);
+  if (data.google?.sub) await env.CONFIG.delete(`login-google:${data.google.sub}`);
+  if (owner) await env.CONFIG.delete(`follows:${owner}`);
+  for (const a of data.analyses || []) {
+    await env.CONFIG.delete(`analysis-res:${a.rid}`);
+    await env.CONFIG.delete(`analysis-req:${a.rid}`);
+  }
 }
 
 const MAX_FOLLOWS = 20;
@@ -349,8 +435,21 @@ async function yahoo(symbol, params) {
   }
 }
 
+// One shared copy per ticker: quotes for a minute, daily histories for 6 hours (see store.js).
+let ENV = null;  // set by the route; the price helpers below are called from many places
+
+async function yahooCached(symbol, params, seconds) {
+  if (!ENV) return yahoo(symbol, params);
+  return cached(ENV, `y:${symbol}:${params}`, seconds, async () => {
+    const r = await yahoo(symbol, params);
+    if (!r) return null;
+    const q = r.indicators?.quote?.[0] || {};  // keep only what is used, small enough to share
+    return { meta: r.meta, timestamp: r.timestamp, indicators: { quote: [{ close: q.close, high: q.high, low: q.low }] } };
+  });
+}
+
 async function yahooQuote(symbol) {
-  const r = await yahoo(symbol, "range=5d&interval=1d");
+  const r = await yahooCached(symbol, "range=5d&interval=1d", 60);
   const m = r?.meta;
   if (!m || m.regularMarketPrice == null) return null;
   const closes = (r.indicators?.quote?.[0]?.close || []).filter((x) => x != null);
@@ -507,8 +606,7 @@ async function requestAnalysis(env, data, dispatch) {
   await env.CONFIG.put(`analysis-req:${rid}`, JSON.stringify(payload), { expirationTtl: 86400 });
   const resp = await dispatch("portfolio-analysis.yml", { rid });
   if (!resp || !resp.ok) return { error: "Não consegui iniciar a análise (GitHub)." };
-  data.analyses = (data.analyses || []).concat([{ rid, at: new Date().toISOString() }]).slice(-20);
-  return {};
+  return { entry: { rid, at: new Date().toISOString() } };
 }
 
 async function judge(data, quotes, fx, proposals, news) {
@@ -525,7 +623,7 @@ async function judge(data, quotes, fx, proposals, news) {
   const out = { rules: VERDICT_RULES };
   await Promise.all(open.map(async ([sym, p]) => {
     const q = quotes[sym];
-    const r = await yahoo(sym, "range=1y&interval=1d");
+    const r = await yahooCached(sym, "range=1y&interval=1d", 3600);
     const c = (r?.indicators?.quote?.[0]?.close || []).filter((x) => x != null);
     const hi = r?.indicators?.quote?.[0]?.high || [], lo = r?.indicators?.quote?.[0]?.low || [], cl = r?.indicators?.quote?.[0]?.close || [];
     if (!q || c.length < 60) { out[sym] = { verdict: "?", reasons: ["sem histórico suficiente"] }; return; }
@@ -565,14 +663,14 @@ async function judge(data, quotes, fx, proposals, news) {
   return out;
 }
 
-async function history(data) {
+async function history(env, data) {
   if (!data.tx.length) return { series: {}, fx: {} };
   const first = data.tx.reduce((m, t) => (t.date < m ? t.date : m), data.tx[0].date);
   const p1 = Math.floor(Date.parse(first + "T00:00:00Z") / 1000) - 7 * 86400;
-  const p2 = Math.floor(Date.now() / 1000) + 86400;
+  const p2 = (Math.floor(Date.now() / 864e5) + 2) * 86400;  // whole days, so the shared copy is reused all day
   const params = `period1=${p1}&period2=${p2}&interval=1d`;
   const grab = async (sym) => {
-    const r = await yahoo(sym, params);
+    const r = await yahooCached(sym, params, 6 * 3600);
     const ts = r?.timestamp || [], cl = r?.indicators?.quote?.[0]?.close || [];
     return { t: ts.map((x) => new Date(x * 1000).toISOString().slice(0, 10)), c: cl };
   };
@@ -589,7 +687,7 @@ async function history(data) {
 // Page
 // ---------------------------------------------------------------------------
 
-function portfolioPage(data, tok) {
+function portfolioPage(data, tok, opts = {}) {
   const body = `
 <header>
   <h1>💼 Carteira de ${esc(data.name || "membro")}</h1>
@@ -604,20 +702,46 @@ function portfolioPage(data, tok) {
   <button class="tab" data-tab="seguir">👀 Seguir</button>
   <button class="tab" data-tab="importar">📥 Importar</button>
   <button class="tab" data-tab="analise">🤖 Análise do Claude</button>
+  <button class="tab" data-tab="conta">🔒 Conta</button>
 </nav>
+<section data-tab="conta" hidden>
+  <h2>🔑 Entrar</h2>
+  <div class="panel small">
+    <p>Além deste link, entras em <a href="/entrar">/entrar</a> com o <b>Discord</b> (só membros do servidor)${data.google ? ` ou com a conta Google <b>${esc(data.google.email)}</b>.` : "."}
+      ${opts.signedIn ? "Este aparelho tem sessão iniciada." : "Este aparelho não tem sessão iniciada."}</p>
+    <p class="row-btns">${data.google
+      ? '<button class="btn alt" id="g-unlink" type="button">DESASSOCIAR GOOGLE</button>'
+      : `<a class="btn" style="display:inline-block;text-decoration:none" href="/entrar/google?ligar=${tok}">ASSOCIAR CONTA GOOGLE</a>`}
+      ${opts.signedIn ? '<a class="btn alt" style="display:inline-block;text-decoration:none" href="/sair">TERMINAR SESSÃO AQUI</a>' : '<a class="btn alt" style="display:inline-block;text-decoration:none" href="/entrar">INICIAR SESSÃO</a>'}
+      <button class="btn alt" id="logout-all" type="button">TERMINAR SESSÃO EM TODOS OS APARELHOS</button></p>
+  </div>
+  <h2>🔒 Segurança</h2>
+  <div class="panel small">
+    <label><input type="checkbox" id="require-login" ${data.require_login ? "checked" : ""} ${opts.loginOn ? "" : "disabled"}>
+      <b>Exigir login</b>: o link sozinho deixa de abrir a carteira; é preciso entrar com o Discord ou o Google.</label>
+    <p class="muted">${opts.loginOn ? "Para ligar, inicia sessão neste aparelho primeiro (assim tens a certeza de que consegues entrar)." : "Fica disponível quando o login com Discord ou Google estiver ativo."}
+      Se o link tiver sido visto por alguém, troca-o com <code>/carteira novo_link:True</code>.</p>
+  </div>
+  <h2>🕘 Histórico de alterações</h2>
+  <div class="panel small" id="versions">${opts.versions ? '<p class="muted">A carregar…</p>' : '<p class="muted">Disponível quando a base de dados (D1) estiver ligada.</p>'}</div>
+  <h2>📤 Exportar</h2>
+  <div class="panel small"><p class="row-btns"><button class="btn alt" id="export-csv" type="button">OPERAÇÕES EM CSV</button>
+    <a class="btn alt" style="display:inline-block;text-decoration:none" href="/c/${tok}/export">TUDO EM JSON</a></p>
+    <p class="muted">O CSV abre no Excel; o JSON tem tudo (operações, contas, dividendos, perfil).</p></div>
+  <h2>🛡️ Privacidade</h2>
+  <div class="panel small prose">
+    <p>Guardamos: as operações, contas, dividendos, perfil e definições que puseste aqui, o teu id e nome do Discord, o email da conta Google se a associaste, a lista do /seguir e as análises pedidas ao Claude. Nada disto é mostrado a outros membros.</p>
+    <p>As análises do Claude enviam os dados da carteira para a Anthropic (sem o teu nome). As cópias de segurança diárias são apagadas ao fim de 14 dias.</p>
+    <p><button class="btn" id="delete-all" type="button" style="background:#b3122e;border-bottom-color:#5a0917">APAGAR A MINHA CARTEIRA</button></p>
+    <p class="muted">Apaga tudo de imediato: carteira, histórico de alterações, ligação ao Discord e Google, /seguir e análises. Não dá para desfazer (exporta antes).</p>
+  </div>
+</section>
 <section data-tab="resumo">
   <div id="totals" class="grid"></div>
   <div id="accounts"></div>
   <h2>📈 Evolução</h2>
   <div id="chart" class="chart"></div>
   <p class="muted small" id="chart-note">Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.</p>
-  <details class="panel small" id="logins"><summary><b>🔑 Contas para entrar</b> <span class="muted">${data.google ? "Discord + Google" : "Discord"}</span></summary>
-    <p>Além deste link, entras em <a href="/entrar">/entrar</a> com o <b>Discord</b> (só membros do servidor)${data.google ? ` ou com a conta Google <b>${esc(data.google.email)}</b>.` : "."}</p>
-    <p>${data.google
-      ? '<button class="btn alt" id="g-unlink" type="button">DESASSOCIAR GOOGLE</button>'
-      : `<a class="btn" style="display:inline-block;text-decoration:none" href="/entrar/google?ligar=${tok}">ASSOCIAR CONTA GOOGLE</a>`}
-    <a class="muted" href="/sair" style="margin-left:12px">Terminar sessão neste aparelho</a></p>
-  </details>
 </section>
 <section data-tab="posicoes" hidden><div id="positions"></div><div id="verdict-rules"></div><h2>✅ Posições fechadas</h2><div id="closed"></div></section>
 <section data-tab="analise" hidden>
@@ -802,6 +926,51 @@ async function post(body) {
   if (!r.ok) throw new Error(out.error || "erro");
   return out;
 }
+const LABELS = { add: "operação adicionada", edit: "operação editada", delete: "operação apagada", import: "importação", dedupe: "repetidas removidas",
+  account: "conta alterada", settings: "capital e risco", profile: "perfil", analysis: "pedido de análise", security: "segurança", logout_all: "sessões terminadas",
+  google_link: "Google associado", google_unlink: "Google desassociado", create: "carteira criada", migrate: "passou para a base de dados", name: "nome" };
+async function loadVersions() {
+  const box = $("versions");
+  if (!box || /D1/.test(box.textContent)) return;
+  try {
+    const r = await (await fetch(location.pathname.replace(/\/$/, "") + "/versions", { cache: "no-store" })).json();
+    const rows = r.versions || [];
+    if (!rows.length) { box.innerHTML = '<p class="muted">Sem alterações registadas.</p>'; return; }
+    box.innerHTML = '<p class="muted">As últimas ' + rows.length + ' alterações. "Repor" volta ao estado logo a seguir a essa alteração (a reposição também fica no histórico, por isso dá para voltar atrás).</p>' +
+      (rows.length > 1 ? '<p><button class="btn" data-restore="' + rows[1].version + '">↶ DESFAZER A ÚLTIMA ALTERAÇÃO</button></p>' : '') +
+      table(["Versão", "Quando", "O quê", ""], rows.map((v) => [String(v.version), esc(new Date(v.at).toLocaleString("pt-PT")),
+        esc(/^restore:/.test(v.label || "") ? "reposta a versão " + v.label.slice(8) : (LABELS[v.label] || v.label || "—")),
+        v.version === r.current ? '<span class="muted">atual</span>' : '<button class="del" data-restore="' + v.version + '">repor</button>']));
+  } catch (e) { box.innerHTML = '<p class="muted">Não consegui carregar o histórico.</p>'; }
+}
+$("versions").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-restore]"); if (!b) return;
+  if (!confirm("Repor a carteira como estava na versão " + b.dataset.restore + "?")) return;
+  try { SNAP = await post({ action: "restore", version: +b.dataset.restore }); render(); drawHistory(); loadVersions(); } catch (err) { alert(err.message); }
+});
+document.querySelector('[data-tab="conta"]').addEventListener("click", loadVersions);
+$("require-login").onchange = async (e) => {
+  try { await post({ action: "security", require_login: e.target.checked }); alert(e.target.checked ? "Feito: a partir de agora é preciso entrar com o Discord ou o Google." : "Feito: o link volta a abrir a carteira sem login."); }
+  catch (err) { e.target.checked = !e.target.checked; alert(err.message); }
+};
+$("logout-all").onclick = async () => {
+  if (!confirm("Terminar a sessão em todos os aparelhos (incluindo este)?")) return;
+  try { await post({ action: "logout_all" }); alert("Sessões terminadas."); location.reload(); } catch (err) { alert(err.message); }
+};
+$("export-csv").onclick = () => {
+  const cols = ["date", "side", "symbol", "qty", "price", "fee", "currency", "account", "note"];
+  const cell = (v) => { const t = String(v ?? ""); return /[";\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+  const lines = [cols.join(";")].concat((SNAP.tx || []).slice().sort((a, b) => a.date.localeCompare(b.date))
+    .map((t) => cols.map((c) => cell(typeof t[c] === "number" ? String(t[c]).replace(".", ",") : t[c])).join(";")));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" }));
+  a.download = "operacoes-" + new Date().toISOString().slice(0, 10) + ".csv"; a.click();
+};
+$("delete-all").onclick = async () => {
+  const typed = prompt("Isto apaga a carteira e tudo o que está associado, sem volta.\nEscreve APAGAR para confirmar:");
+  if (typed !== "APAGAR") return;
+  try { await post({ action: "delete_all", confirm: "APAGAR" }); try { localStorage.removeItem("carteira"); } catch (e) {} location.href = "/sair"; } catch (err) { alert(err.message); }
+};
 if ($("g-unlink")) $("g-unlink").onclick = async () => {
   if (!confirm("Desassociar a conta Google? Deixas de poder entrar com ela.")) return;
   try { await post({ action: "google_unlink" }); location.reload(); } catch (err) { alert(err.message); }
