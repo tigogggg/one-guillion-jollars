@@ -185,8 +185,10 @@ def build(config: dict, state: dict, mkt: Market) -> dict:
             return None, None, []
         d = mkt.earnings.get(sym)
         days = (d - mkt.as_of).days if isinstance(d, date) and d >= mkt.as_of else None
+        from agents import sector_state
+
         score, parts = opportunities.safety(m, quality.get(sym), days, (mkt.news.get(sym) or {}).get("score"), mkt.zone,
-                                            etf=sym in mkt.etfs)
+                                            etf=sym in mkt.etfs, sector_trend=None if sym in mkt.etfs else sector_state(mkt, m.get("sector"))[0])
         return score, opportunities.level(score), parts
 
     def record(votes: list) -> dict:

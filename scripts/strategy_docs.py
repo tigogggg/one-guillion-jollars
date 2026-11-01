@@ -248,6 +248,17 @@ def context_text(ctx: dict | None) -> str:
         bits.append(f"crédito de alto risco {ctx['credit_dd'] * 100:.0f}% abaixo do melhor do ano")
     if ctx.get("usd_chg") is not None and "usd_chg" in ctx:
         bits.append(f"dólar {-ctx['usd_chg'] * 100:+.1f}% face ao euro em 3 meses")
+    if ctx.get("fund_q") is not None:
+        bits.append(f"fundamentos: qualidade {ctx['fund_q']:.0f}/100" + (f", valor {ctx['fund_v']:.0f}/100" if ctx.get("fund_v") is not None else "")
+                    + (f", P/E {ctx['pe']:.0f}" if ctx.get("pe") else "") + (f", margem de segurança {ctx['mos'] * 100:+.0f}%" if ctx.get("mos") is not None else ""))
+    if ctx.get("sector_trend") is not None:
+        bits.append(f"setor {ctx['sector_trend']:+.0f}% face à média de 200 dias")
+    if ctx.get("gpr_pct") is not None:
+        bits.append(f"risco geopolítico no percentil {ctx['gpr_pct'] * 100:.0f}")
+    if ctx.get("oil_chg") is not None:
+        bits.append(f"petróleo {ctx['oil_chg'] * 100:+.0f}% em 3 meses")
+    if ctx.get("geo_risk") is not None:
+        bits.append(f"risco geopolítico (Claude) {ctx['geo_risk']}/5")
     if ctx.get("stop") and "low" not in ctx:
         bits.append(f"stop em {ctx['stop']:.2f}")
     if "low" in ctx:

@@ -34,7 +34,7 @@ import statistics
 import sys
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -323,6 +323,14 @@ def load_market() -> Market:
             market.context["macro"] = [name for d, name in ahead if d == nxt]
     except Exception as e:  # the context only switches rules off when missing
         print(f"WARN: contexto de mercado: {e!r}", file=sys.stderr)
+    geo = WATCHLIST_DIR.parent / "news" / "geo.json"  # Claude's geopolitical risk (news.py), live only
+    if geo.exists():
+        try:
+            g = json.loads(geo.read_text())
+            if datetime.now(timezone.utc) - datetime.fromisoformat(g["at"]) <= timedelta(hours=36):
+                market.context["geo_risk"] = g["risk"]
+        except (ValueError, KeyError) as e:
+            print(f"WARN: geopolítica: {e!r}", file=sys.stderr)
     vcp = WATCHLIST_DIR / "vcp-latest.json"
     if vcp.exists():
         market.vcp = {
@@ -1168,6 +1176,27 @@ def stock_filter(m: dict, mkt: Market, p: dict) -> str | None:
     return None
 
 
+def sector_table(mkt: Market) -> list[dict]:
+    """Each S&P 500 sector's health for the portal: ETF vs its 200-day average, 3-month strength vs the index,
+    and the share of its stocks in Stage 2."""
+    import context
+
+    rows = []
+    for sector in context.SECTOR_ETFS:
+        trend, rs = sector_state(mkt, sector)
+        members = [m for m in mkt.stocks.values() if m.get("sector") == sector]
+        rows.append({"sector": SECTORS_PT.get(sector, sector), "etf": context.SECTOR_ETFS[sector][0],
+                     "trend": None if trend is None else round(trend * 100, 1), "rs": None if rs is None else round(rs * 100, 1),
+                     "stage2": round(sum(m["stage2"] for m in members) / len(members) * 100) if members else None})
+    return sorted(rows, key=lambda r: (r["rs"] is None, -(r["rs"] or 0)))
+
+
+def fundamentals_table(mkt: Market) -> dict:
+    """{symbol: SEC fundamentals as of today} for the portal and Claude's portfolio analysis."""
+    keys = ("fund_q", "fund_v", "mos", "pe", "fcf_yield", "earn_yield", "rev_growth", "op_margin", "current_ratio")
+    return {s: {k: round(m[k], 3) for k in keys if m.get(k) is not None} for s, m in mkt.stocks.items() if m.get("fund_q") is not None}
+
+
 def context_gate(mkt: Market, p: dict) -> str | None:
     """Why no new buys today, from the market context and the calendar, or None."""
     c = mkt.context
@@ -1284,11 +1313,17 @@ def decision_context(order: dict, port: dict, mkt: Market) -> dict:
     s = order["symbol"]
     m = mkt.stocks.get(s) or mkt.etfs.get(s) or {}
     ctx = {"zone": mkt.zone, "date": mkt.as_of.isoformat(),
-           **{k: v for k, v in mkt.context.items() if k in ("vix", "epu_pct", "credit_dd", "usd_chg", "spy_trend")}}
+           **{k: v for k, v in mkt.context.items() if k in ("vix", "epu_pct", "credit_dd", "usd_chg", "spy_trend", "gpr_pct", "oil_chg", "geo_risk")}}
     if m:
         ctx.update(trend=round(m.get("trend_score", 0)), ret_3m=round(m.get("ret_3m", 0) * 100, 1),
                    from_high=round(m.get("pct_from_high", 0) * 100, 1), vs_sma50=round((m["price"] / m["sma50"] - 1) * 100, 1),
                    vol_ratio=round(m.get("vol_ratio", 0), 2), tech=round(tech_score(m)), price=round(m["price"], 2))
+        for k in ("fund_q", "fund_v", "pe", "mos"):
+            if m.get(k) is not None:
+                ctx[k] = round(m[k], 2)
+        trend, _ = sector_state(mkt, m.get("sector"))
+        if trend is not None:
+            ctx["sector_trend"] = round(trend * 100, 1)
     score = news_score(mkt, s)
     if score:
         ctx["news"] = score
@@ -1952,7 +1987,8 @@ def main() -> int:
             for sym in (state["agents"].get(cfg["id"]) or {}).get("positions", {}):
                 holders.setdefault(sym, []).append(f"{cfg['emoji']} {cfg['name']}")
         interactive.publish_section("market", {**opportunities.build(mkt, holders, earnings.next_earnings_many),
-                                               "context": dict(mkt.context)})
+                                               "context": dict(mkt.context), "sectors": sector_table(mkt)})
+        interactive.publish_section("fundamentals", fundamentals_table(mkt))
         return 0
     try:
         if a.mode == "daily":
@@ -1989,7 +2025,8 @@ def main() -> int:
                 for sym in (state["agents"].get(cfg["id"]) or {}).get("positions", {}):
                     holders.setdefault(sym, []).append(f"{cfg['emoji']} {cfg['name']}")
             interactive.publish_section("market", {**opportunities.build(mkt, holders, earnings.next_earnings_many),
-                                                   "context": {k: v for k, v in mkt.context.items()}})
+                                                   "context": {k: v for k, v in mkt.context.items()}, "sectors": sector_table(mkt)})
+            interactive.publish_section("fundamentals", fundamentals_table(mkt))
             import proposals  # imports this module
 
             props = proposals.build(config, state, mkt)

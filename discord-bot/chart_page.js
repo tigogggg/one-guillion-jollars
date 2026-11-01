@@ -51,11 +51,11 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
   const latest = (await env.CONFIG.get("chart-latest:liga", "json")) || (await env.CONFIG.get("chart-latest:pretreino", "json"));
   const data = (latest && (await env.CONFIG.get(`chart:${latest}`, "json"))) ||
     { title: "Liga dos agentes", subtitle: "ainda sem dados", updated: new Date().toISOString(), series: [], agents: [] };
-  const [news, market, proposals, calendar] = await Promise.all(["news", "market", "proposals", "calendar"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
+  const [news, market, proposals, calendar, geo] = await Promise.all(["news", "market", "proposals", "calendar", "geo"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
   const ptId = await env.CONFIG.get("chart-latest:pretreino", "json");
   const pretrain = ptId && ptId !== latest ? await env.CONFIG.get(`chart:${ptId}`, "json") : null;
   const user = session ? { name: session.data.name || "membro", wallet: `/c/${session.tok}` } : null;
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user,
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo,
                                                                        manifest: token === null ? "/manifest.webmanifest" : `/p/${token}/manifest.webmanifest` }));
 }
 
@@ -305,6 +305,7 @@ const MARKET = ${safeJson(extras.market || null)};
 const PROPOSALS = ${safeJson(extras.proposals || null)};
 const CALENDAR = ${safeJson(extras.calendar || null)};
 const PRETRAIN = ${safeJson(extras.pretrain || null)};
+const GEO = ${safeJson(extras.geo || null)};
 </script>
 <script src="${STATIC_PATHS.portal}"></script>
 ${portal ? `<script src="${STATIC_PATHS.extra}"></script>` : ""}`;
@@ -809,7 +810,17 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
     c.credit_dd != null ? ["Crédito de alto risco", fmtNum(c.credit_dd * 100, 1) + "% abaixo do melhor do ano", c.credit_dd > 0.05 ? "down" : c.credit_dd < 0.01 ? "up" : ""] : null,
     c.hy != null ? ["Spread de crédito", fmtNum(c.hy, 1) + "%", c.hy > 5 ? "down" : ""] : null,
     c.usd_chg != null ? ["Dólar vs euro (3 meses)", fmtPct(-c.usd_chg * 100), c.usd_chg > 0.03 ? "down" : ""] : null,
-    c.spy_trend != null ? ["S&P 500 vs média 200d", fmtPct(c.spy_trend * 100), cls(c.spy_trend)] : null].filter(Boolean);
+    c.spy_trend != null ? ["S&P 500 vs média 200d", fmtPct(c.spy_trend * 100), cls(c.spy_trend)] : null,
+    c.gpr_pct != null ? ["Risco geopolítico (índice)", "percentil " + fmtNum(c.gpr_pct * 100, 0), c.gpr_pct > 0.85 ? "down" : ""] : null,
+    c.oil_chg != null ? ["Petróleo (3 meses)", fmtPct(c.oil_chg * 100), c.oil_chg > 0.25 ? "down" : ""] : null,
+    c.gold_chg != null ? ["Ouro (3 meses)", fmtPct(c.gold_chg * 100), c.gold_chg > 0.12 ? "down" : ""] : null].filter(Boolean);
+  const G = GEO;
+  const geoHtml = G && G.risk != null ? '<div class="panel"><div class="top" style="display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center">' +
+    '<span class="pixel" style="font-size:.75rem;color:' + (G.risk >= 4 ? "var(--down)" : G.risk >= 3 ? "var(--gold)" : "var(--up)") + '">🌍 RISCO GEOPOLÍTICO E MACRO: ' + G.risk + '/5</span>' +
+    '<span class="muted small">lido pelo Claude às ' + esc(lisbon(Date.parse(G.at), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) + '</span></div>' +
+    '<p>' + esc(G.summary || "") + '</p>' + ((G.themes || []).length ? '<div class="cards">' + G.themes.map((t) => '<div class="opp"><b>' + esc(t.theme) + '</b><p class="small">' + esc(t.impact) + '</p>' +
+      ((t.winners || []).length ? '<p class="small up">▲ ' + t.winners.map(esc).join(", ") + '</p>' : '') + ((t.losers || []).length ? '<p class="small down">▼ ' + t.losers.map(esc).join(", ") + '</p>' : '') + '</div>').join("") + '</div>' : '') +
+    '</div>' : '';
   const leaders = agents.slice().sort((a, b) => headline(b) - headline(a)).slice(0, 3);
   const news = ((NEWS || {}).items || []).filter((i) => (i.importancia || 0) >= 2).slice(0, 3);
   $("today").innerHTML = '<h2>🏠 Hoje</h2>' +
@@ -817,6 +828,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
     (M.stage2_pct != null ? '<span class="muted small">' + fmtNum(M.stage2_pct, 0) + '% das ações do S&P 500 em <abbr class="g" title="' + esc(GLOSS["Stage 2"]) + '">Stage 2</abbr></span>' : '') + '</div>' +
     (M.stage2_pct != null ? '<div class="bar" style="margin:8px 0"><i style="width:' + M.stage2_pct + '%;background:' + colour + '"></i></div>' : '') +
     (ctx.length ? '<div class="grid">' + ctx.map(([k, v, cl]) => tile(k, v, "", cl)).join("") + '</div>' : '') + '</div>' +
+    geoHtml +
     '<h2>🧠 Melhores propostas</h2>' + (P && P.buys.some((b) => !b.conflict) ? '<div class="cards">' + P.buys.filter((b) => !b.conflict).slice(0, 3).map((b) => '<div class="opp"><div class="top"><span class="sym">' + esc(b.symbol) +
       '</span><span class="muted">' + esc(b.name || "") + '</span>' + (b.safety != null ? '<span class="score ' + esc((b.level || "").split(" ")[0]) + '">🛡️ ' + b.safety + '</span>' : '') + '</div><p class="small">Confiança ' +
       fmtNum(b.confidence, 0) + '% · entrada até ' + fmtNum(b.plan.entry_max) + ' · stop ' + fmtNum(b.plan.stop) + ' · alvo ' + fmtNum(b.plan.target) + ' (' + fmtNum(b.plan.rr, 1) + 'R)</p></div>').join("") +
@@ -1048,6 +1060,10 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
     '<p class="small">' + fmtNum(r.price) + (r.etf ? " €" : " $") + ' · dia <span class="' + cls(r.ret_1d) + '">' + fmtPct(r.ret_1d) + '</span> · semana <span class="' + cls(r.ret_1w) + '">' +
     fmtPct(r.ret_1w) + '</span> · 3 meses <span class="' + cls(r.ret_3m) + '">' + fmtPct(r.ret_3m) + '</span> · tendência ' + r.trend_score + '/100</p>' +
     '<p>' + (kind === "buy" ? r.reasons : r.warnings).map((x) => '<span class="tag">' + esc(x) + '</span>').join("") + '</p>' +
+    (r.fund && r.fund.fund_q != null ? '<p class="small">💰 ' + [r.fund.pe ? "P/E " + fmtNum(r.fund.pe, 0) : null,
+      r.fund.fcf_yield != null ? "FCF yield " + fmtPct(r.fund.fcf_yield * 100) : null, r.fund.mos != null ? "margem de segurança " + fmtPct(r.fund.mos * 100, 0) : null,
+      r.fund.rev_growth != null ? "receitas " + fmtPct(r.fund.rev_growth * 100, 0) : null, r.fund.op_margin != null ? "margem operacional " + fmtPct(r.fund.op_margin * 100, 0) : null,
+      "qualidade " + fmtNum(r.fund.fund_q, 0) + "/100", r.fund.fund_v != null ? "valor " + fmtNum(r.fund.fund_v, 0) + "/100" : null].filter(Boolean).join(" · ") + '</p>' : '') +
     (kind === "buy" && (r.checks || []).length ? '<details><summary>Porque passou nos filtros</summary><p class="small">' + r.checks.map(esc).join("<br>") + '</p></details>' : '') +
     '<p class="small">' + (kind === "buy" ? '🛑 Stop sugerido ' + fmtNum(r.stop) + ' (risco ' + fmtNum(r.risk_pct, 1) + '%)' : kind === "sell" ? '🔴 Quem tem: considerar vender ou apertar o stop.' : '🟡 Não comprar agora; quem tem pode manter com stop.') +
     (r.earnings ? ' · 📅 resultados ' + esc(r.earnings) : '') + (r.held_by.length ? ' · 🤖 na carteira de ' + esc(r.held_by.join(", ")) : '') + '</p>' +
@@ -1061,6 +1077,11 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
     '<details class="panel"><summary><b>🛡️ Como se calcula o score de segurança (0-100)</b></summary><p class="small">Mede quão ordenada e suportada está a ação agora: tendência, volatilidade, distância ao máximo, liquidez, qualidade da empresa, resultados, notícias e mercado. ' +
     'Não diz quanto vai subir. Níveis: ' + MARKET.levels.map((l) => esc(l.name) + " ≥ " + l.from).join(" · ") + '.</p>' +
     table(["Critério", "Máx.", "Regra"], MARKET.criteria.map((c) => [esc(c.label), c.max, esc(c.rule)]), [1]) + '</details>' +
+    ((MARKET.sectors || []).length ? '<details class="panel"><summary><b>🏭 Saúde dos setores</b> <span class="muted small">(ETF de cada setor)</span></summary>' +
+      table(["Setor", "ETF", "Face à média de 200 dias", "Força vs S&P 500 (3 meses)", "Ações em tendência de alta"], MARKET.sectors.map((r) => [esc(r.sector), esc(r.etf),
+        r.trend == null ? "—" : '<span class="' + cls(r.trend) + '">' + fmtPct(r.trend) + '</span>', r.rs == null ? "—" : '<span class="' + cls(r.rs) + '">' + fmtPct(r.rs) + '</span>',
+        r.stage2 == null ? "—" : fmtNum(r.stage2, 0) + "%"]), [2, 3, 4]) +
+      '<p class="muted small">Só se propõem compras em setores acima da média de 200 dias. Os agentes podem aprender a exigir também força face ao S&P 500.</p></details>' : '') +
     '<h2>🟢 Comprar (' + MARKET.buy.length + ')</h2><p class="muted small">Só as que passam em todos os filtros: tendência de alta, um sinal de entrada, não esticadas, sem resultados nem notícias negativas por perto, stop curto e score alto. Poucas e boas; há dias sem nenhuma.</p>' +
     rules(R.buy) + '<div id="buy" class="cards"></div>' +
     '<h2>🔴 Vender (' + MARKET.sell.length + ')</h2><p class="muted small">Ações dos agentes ou do ranking cuja tendência quebrou. Ordenadas pela gravidade.</p>' + rules(R.sell) +

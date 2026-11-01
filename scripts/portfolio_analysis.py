@@ -39,6 +39,14 @@ Pontos a considerar:
 - custos, liquidez e o dinheiro parado em conta;
 - o contexto de mercado (zona da breadth, VIX, stress de crédito, juros, dólar) e o calendário (resultados, Fed);
 - os vereditos técnicos, o score de segurança e as notícias de cada posição;
+- os FUNDAMENTOS de cada ação (fundamentals_of_holdings, dos relatórios da SEC): qualidade e valor 0-100, P/E,
+  rendimento do cash flow livre, crescimento das receitas, margem operacional, liquidez (rácio corrente) e a margem de
+  segurança face a um valor intrínseco por DCF simples. Diz se a ação está cara ou barata face ao valor e se a empresa
+  é sólida; lembra que o DCF é uma estimativa grosseira (crescimento limitado a 15%, desconto de 9%);
+- a SAÚDE DOS SETORES (sectors: ETF de cada setor face à média de 200 dias e força face ao S&P 500 em 3 meses):
+  posições em setores fracos merecem mais cuidado;
+- a GEOPOLÍTICA e a macro (geopolitics: risco 0-5 avaliado hoje a partir das notícias, com temas e setores
+  beneficiados ou prejudicados) e o contexto (índice de risco geopolítico, petróleo e ouro em 3 meses);
 - o que os agentes da casa propõem hoje (são simulações treinadas: usa-as como mais um sinal, não como verdade);
 - o capital e o risco por operação que o investidor definiu (settings), e o dinheiro disponível;
 - o PERFIL do investidor (investor_profile: horizonte, objetivo, queda que aguenta, entradas mensais, fundo de

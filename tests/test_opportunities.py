@@ -17,7 +17,7 @@ def metrics(**kw):
 
 def test_a_calm_strong_stock_scores_high_and_every_criterion_is_explained():
     score, parts = opportunities.safety(metrics(), quality=90, earnings_days=30, news_score=None, zone="Alta")
-    assert score == 98  # 25 + 20 + 15 + 10 + 13.5 (quality 90) + 5 + 4 (no news) + 5 = 97.5
+    assert score == 96  # 25 + 20 + 15 + 10 + 13.5 (quality 90) + 5 + 4 (no news) + 3 (zone) + 1 (sector unknown) = 96.5
     assert [p["key"] for p in parts] == [c[0] for c in opportunities.CRITERIA]
     assert sum(c[2] for c in opportunities.CRITERIA) == 100
     assert opportunities.level(score) == "Alta"
@@ -26,7 +26,7 @@ def test_a_calm_strong_stock_scores_high_and_every_criterion_is_explained():
 def test_a_broken_volatile_stock_scores_low():
     m = metrics(price=80.0, sma50=95.0, sma200=100.0, sma200_rising=False, pct_from_high=0.4, vol20=0.05, dollar_volume=5e7)
     score, _ = opportunities.safety(m, quality=None, earnings_days=3, news_score=-4, zone="Queda")
-    assert score == 0 + 0 + 0 + 1 + 7 + 0 + 0 + 0
+    assert score == 0 + 0 + 0 + 1 + 7 + 0 + 0 + 1  # the last 1: sector unknown
     assert opportunities.level(score) == "Muito baixa"
 
 
@@ -84,3 +84,12 @@ def test_sell_only_when_the_trend_breaks():
 def test_no_stock_buys_in_a_falling_market():
     mkt = market({"VCP": metrics()}, vcp=["VCP"], zone="Queda")
     assert build(mkt)["buy"] == []
+
+
+def test_fundamentals_and_sector_count_in_the_score():
+    strong = metrics(fund_q=90.0, fund_v=60.0, pe=18.0, mos=0.2)
+    weak = metrics(fund_q=20.0, fund_v=10.0)
+    s1, p1 = opportunities.safety(strong, None, 30, None, "Alta", sector_trend=0.05)
+    s2, _ = opportunities.safety(weak, None, 30, None, "Alta", sector_trend=-0.05)
+    assert s1 - s2 == round(90 * 0.1 + 60 * 0.05 - (20 * 0.1 + 10 * 0.05)) + 2
+    assert "P/E 18" in next(p["why"] for p in p1 if p["key"] == "qualidade")

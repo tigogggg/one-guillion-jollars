@@ -578,7 +578,7 @@ async function requestAnalysis(env, data, dispatch) {
   if (last && Date.now() - Date.parse(last.at) < 15 * 60e3 && !(await env.CONFIG.get(`analysis-res:${last.rid}`))) return { error: "Já há uma análise a caminho." };
   const snap = await snapshot(env, data);
   if (!snap.tx.length && !Object.keys(snap.accounts).length) return { error: "A carteira está vazia: importa ou adiciona operações primeiro." };
-  const [market, news, calendar, proposals] = await Promise.all(["market", "news", "calendar", "proposals"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
+  const [market, news, calendar, proposals, funds, geo] = await Promise.all(["market", "news", "calendar", "proposals", "fundamentals", "geo"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
   const h = holdings(data, snap.quotes, snap.fx);
   const held = new Set(h.open.map((x) => x.symbol));
   const cash = Object.entries(snap.accounts).map(([name, a]) => ({ account: name, currency: a.currency, cash: a.cash,
@@ -606,6 +606,10 @@ async function requestAnalysis(env, data, dispatch) {
     agents_proposals_today: (proposals?.buys || []).slice(0, 8).map((b) => ({ symbol: b.symbol, name: b.name, confidence_pct: b.confidence,
       entry_max: b.plan.entry_max, stop: b.plan.stop, target: b.plan.target, currency: b.plan.currency, safety: b.safety, agents: b.agents.map((a) => a.name) })),
     agents_selling_today: (proposals?.sells || []).map((x) => ({ symbol: x.symbol, agents: x.agents.map((a) => a.name) })),
+    // SEC filings as of today: quality and value 0-100, margin of safety vs a DCF value, P/E, FCF yield, growth, margins, liquidity
+    fundamentals_of_holdings: Object.fromEntries([...held].map((s) => [s, (funds || {})[s] || null]).filter(([, v]) => v)),
+    sectors: market?.sectors || null,
+    geopolitics: geo ? { risk_0_5: geo.risk, summary: geo.summary, themes: geo.themes, at: geo.at } : null,
   };
   const rid = token();
   await env.CONFIG.put(`analysis-req:${rid}`, JSON.stringify(payload), { expirationTtl: 86400 });

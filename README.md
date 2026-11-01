@@ -320,6 +320,22 @@ safety score of 70+, 80+ in a cautious market, none in a falling one; the best
 10). The agents' buy proposals carry the same warnings and go to the end of the
 list when they conflict.
 
+**Economic factors.** The agents can react to (and the pre-training measures,
+on 20 years of point-in-time data): the Geopolitical Risk index (Caldara &
+Iacoviello, daily: wars and tensions in the news), Brent and gold over three
+months, each sector's health (its SPDR ETF against the 200-day average and
+against the S&P 500), exponential averages (21/50) and support levels (the last
+confirmed swing low, for stops), and company fundamentals from the SEC's XBRL
+filings (`scripts/fundamentals.py`, each number used only from its filing date):
+quality (margins, revenue growth, free cash flow, current ratio, net debt) and
+value (earnings and free-cash-flow yields, margin of safety against a simple
+DCF). New shared parameters: `gpr_max`, `petroleo_max`, `ouro_max`,
+`filtro_setor`, `ema_filtro`, `stop_suporte`, `qualidade_fund_min`,
+`valor_fund_min`; and `evita_geo` live only (Claude reads the day's war,
+sanctions, energy and macro headlines and rates the market risk 0-5, shown on
+the portal). The 🧐 Analista buys solid, reasonably priced companies in an
+uptrend. `context-data.yml` refreshes the data weekly.
+
 **Platform updates.** The read-only 📢-novidades channel in 📈 FINANÇAS
 (`discord_setup.py --canal-updates`). After each push that
 changes the platform (`discord-bot/`, `scripts/`, workflows), `updates.yml`

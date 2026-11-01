@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from datetime import date
 
-ZONE_POINTS = {"Alta": 5, "Neutra": 3, "Cautelosa": 1, "Queda": 0}
+ZONE_POINTS = {"Alta": 3, "Neutra": 2, "Cautelosa": 1, "Queda": 0}
 
 # (key, label, max points, the rule as shown on the page)
 CRITERIA = [
@@ -38,18 +38,19 @@ CRITERIA = [
      "5% ou menos abaixo do máximo = 15 pontos; 30% ou mais abaixo = 0; proporcional entre os dois."),
     ("liquidez", "💧 Liquidez", 10,
      "Volume médio diário em dólares (50 sessões): 1 000 M$ ou mais = 10; 300 M$ = 7; 100 M$ = 4; menos = 1."),
-    ("qualidade", "💎 Qualidade da empresa", 15,
-     "Score de qualidade do ranking (margem de lucro, rentabilidade dos capitais, crescimento das vendas e "
-     "dívida, 0-100) × 0,15. Sem dados = 7. Nos ETFs, 15 (carteira diversificada)."),
+    ("qualidade", "💎 Fundamentos", 15,
+     "Relatórios da SEC: qualidade (margens, crescimento das receitas, cash flow livre, liquidez e dívida, 0-100) "
+     "× 0,10 + valor (P/E, rendimento do cash flow livre e margem de segurança face ao valor intrínseco, 0-100) × 0,05. "
+     "Sem relatórios: o score de qualidade do Yahoo × 0,15; sem dados = 7. Nos ETFs, 15 (carteira diversificada)."),
     ("resultados", "📅 Resultados", 5,
      "Sem apresentação de resultados nos próximos 10 dias = 5; com resultados = 0 (o preço pode saltar). "
      "Data desconhecida = 3. Nos ETFs, 5."),
     ("noticias", "📰 Notícias (36 h)", 5,
      "Score das notícias lidas pelo Claude (sentimento × importância): positivo = 5; sem notícias ou neutro = 4; "
      "ligeiramente negativo = 2; -3 ou pior = 0."),
-    ("mercado", "🧭 Estado do mercado", 5,
-     "Zona do mercado pela breadth do S&P 500: Alta = 5; Neutra = 3; Cautelosa = 1; Queda = 0. "
-     "Igual para todas as ações do dia."),
+    ("mercado", "🧭 Mercado e setor", 5,
+     "Zona do mercado pela breadth do S&P 500: Alta = 3; Neutra = 2; Cautelosa = 1; Queda = 0. "
+     "Mais 2 se o ETF do setor da ação estiver acima da média de 200 dias (1 se o setor for desconhecido)."),
 ]
 LEVELS = [(75, "Alta"), (55, "Média"), (35, "Baixa"), (0, "Muito baixa")]
 MAX_BUY = 10
@@ -64,6 +65,7 @@ MIN_DOLLAR_VOLUME = 1e8
 EARNINGS_BUY_DAYS = 10
 EARNINGS_WATCH_DAYS = 7
 NEWS_BAD = -3
+MIN_FUND_Q = 40  # SEC fundamentals quality, when known
 
 BUY_RULES = [
     "Tendência de alta (Stage 2): preço acima da média de 50 dias, esta acima da de 200, e a de 200 a subir.",
@@ -72,6 +74,7 @@ BUY_RULES = [
     "Não esticada: no máximo 12% acima da média de 50 dias.",
     "Sem resultados nos próximos 10 dias e sem notícias negativas nas últimas 36 h.",
     "Liquidez de pelo menos 100 M$ por dia e stop no máximo 8% abaixo.",
+    "Setor saudável: o ETF do setor acima da média de 200 dias; e fundamentos da SEC com qualidade de pelo menos 40/100 (quando há relatórios).",
     "Score de segurança de 70 ou mais (80 com o mercado em zona Cautelosa; nenhuma ação com o mercado em Queda).",
     "Uma ação só aparece numa lista: se tiver sinais de venda ou de atenção, não é proposta para compra.",
 ]
@@ -96,7 +99,7 @@ def lerp(x: float, best: float, worst: float, points: float) -> float:
 
 
 def safety(m: dict, quality: float | None, earnings_days: int | None, news_score: float | None, zone: str,
-           etf: bool = False) -> tuple[int, list[dict]]:
+           etf: bool = False, sector_trend: float | None = None) -> tuple[int, list[dict]]:
     """(score 0-100, [{key, points, max, why}]) for one stock's metrics."""
     trend = (10 if m["price"] > m["sma50"] else 0) + (10 if m["sma50"] > m["sma200"] else 0) + (5 if m["sma200_rising"] else 0)
     vol = m.get("vol20")
@@ -110,18 +113,37 @@ def safety(m: dict, quality: float | None, earnings_days: int | None, news_score
         "maximo": (lerp(m["pct_from_high"], 0.05, 0.30, 15), f"{m['pct_from_high'] * 100:.0f}% abaixo do máximo"),
         "liquidez": ((10 if dv >= 1e9 else 7 if dv >= 3e8 else 4 if dv >= 1e8 else 1) if not etf else 10,
                      f"{dv / 1e6:,.0f} M$ por dia".replace(",", " ") if not etf else "ETF UCITS"),
-        "qualidade": (15 if etf else 7 if quality is None else quality * 0.15,
-                      "ETF" if etf else "sem dados" if quality is None else f"score {quality:.0f}/100"),
+        "qualidade": fundamentals_points(m, quality, etf),
         "resultados": (5 if etf else 3 if earnings_days is None else 0 if earnings_days <= 10 else 5,
                        "ETF" if etf else "data desconhecida" if earnings_days is None
                        else f"resultados daqui a {earnings_days} dias" if earnings_days <= 10 else "sem resultados nos próximos 10 dias"),
         "noticias": (4 if not news_score else 5 if news_score > 0 else 2 if news_score > -3 else 0,
                      "sem notícias relevantes" if not news_score else f"score {news_score:+.0f}"),
-        "mercado": (ZONE_POINTS.get(zone, 3), f"zona {zone}"),
+        "mercado": (ZONE_POINTS.get(zone, 2) + (1 if sector_trend is None else 2 if sector_trend >= 0 else 0),
+                    f"zona {zone}" + ("" if sector_trend is None else f"; setor {sector_trend * 100:+.0f}% face à média de 200 dias")),
     }
     breakdown = [{"key": k, "label": label, "points": round(parts[k][0], 1), "max": mx, "why": parts[k][1]}
                  for k, label, mx, _ in CRITERIA]
     return round(sum(b["points"] for b in breakdown)), breakdown
+
+
+def fundamentals_points(m: dict, quality: float | None, etf: bool) -> tuple[float, str]:
+    """(points 0-15, why) from the SEC fundamentals, else the Yahoo quality score."""
+    if etf:
+        return 15, "ETF"
+    q, v = m.get("fund_q"), m.get("fund_v")
+    if q is not None:
+        bits = [f"qualidade {q:.0f}/100"]
+        if v is not None:
+            bits.append(f"valor {v:.0f}/100")
+        if m.get("pe"):
+            bits.append(f"P/E {m['pe']:.0f}")
+        if m.get("mos") is not None:
+            bits.append(f"margem de segurança {m['mos'] * 100:+.0f}%")
+        return q * 0.10 + (v if v is not None else 50) * 0.05, ", ".join(bits)
+    if quality is not None:
+        return quality * 0.15, f"score Yahoo {quality:.0f}/100"
+    return 7, "sem dados"
 
 
 def level(score: int) -> str:
@@ -176,9 +198,15 @@ def build(mkt, holders: dict[str, list[str]], fetch_earnings=None) -> dict:
         base = m.get("low10_prev", m["price"] * 0.92)
         return min(base, m["price"] - 1.5 * atr) if atr else min(base, m["price"] * 0.97)
 
+    def sector_trend(m: dict) -> float | None:
+        import context
+
+        key = context.sector_key(m.get("sector") or "")
+        return (getattr(mkt, "context", {}) or {}).get(f"{key}_trend") if key else None
+
     def row(sym: str, m: dict, etf: bool = False) -> dict:
         news_score, headline = news_of(sym)
-        score, parts = safety(m, quality.get(sym), days_to(sym), news_score, mkt.zone, etf)
+        score, parts = safety(m, quality.get(sym), days_to(sym), news_score, mkt.zone, etf, None if etf else sector_trend(m))
         stop = stop_of(m, etf)
         return {
             "symbol": sym, "name": m.get("name", ""), "sector": m.get("sector", ""), "etf": etf,
@@ -189,6 +217,9 @@ def build(mkt, holders: dict[str, list[str]], fetch_earnings=None) -> dict:
             "stretch_pct": round((m["price"] / m["sma50"] - 1) * 100, 1) if m["sma50"] else None,
             "earnings": mkt.earnings[sym].isoformat() if isinstance(mkt.earnings.get(sym), date) else None,
             "news": headline, "held_by": holders.get(sym, []),
+            "fund": {k: round(m[k], 3) for k in ("fund_q", "fund_v", "mos", "pe", "fcf_yield", "rev_growth", "op_margin", "current_ratio")
+                     if m.get(k) is not None} if not etf else {},
+            "sector_trend": None if etf or sector_trend(m) is None else round(sector_trend(m) * 100, 1),
         }
 
     def stage2(m: dict) -> bool:
@@ -243,6 +274,8 @@ def build(mkt, holders: dict[str, list[str]], fetch_earnings=None) -> dict:
             "liquidez": (m.get("dollar_volume") or 0) >= MIN_DOLLAR_VOLUME,
             "risco": r["risk_pct"] <= MAX_RISK * 100,
             "seguranca": r["safety"] >= min_safety,
+            "setor": r["sector_trend"] is None or r["sector_trend"] >= 0,
+            "fundamentos": m.get("fund_q") is None or m["fund_q"] >= MIN_FUND_Q,
         }
         if not all(checks.values()):
             continue
@@ -254,7 +287,9 @@ def build(mkt, holders: dict[str, list[str]], fetch_earnings=None) -> dict:
         buy.append({**r, "reasons": reasons, "checks": [
             "✅ tendência de alta (Stage 2)", f"✅ {r['stretch_pct']:.0f}% acima da média de 50 dias (máx. {MAX_STRETCH * 100:.0f}%)",
             "✅ sem resultados nos próximos 10 dias" if d is None or d > EARNINGS_BUY_DAYS else "", "✅ sem notícias negativas",
-            f"✅ stop a {r['risk_pct']:.1f}% (máx. {MAX_RISK * 100:.0f}%)", f"✅ score {r['safety']} (mín. {min_safety})"]})
+            f"✅ stop a {r['risk_pct']:.1f}% (máx. {MAX_RISK * 100:.0f}%)", f"✅ score {r['safety']} (mín. {min_safety})",
+            "✅ setor acima da média de 200 dias" if r["sector_trend"] is not None else "",
+            f"✅ fundamentos: qualidade {m['fund_q']:.0f}/100 (mín. {MIN_FUND_Q})" if m.get("fund_q") is not None else ""]})
     for b in buy:
         b["checks"] = [c for c in b["checks"] if c]
     # Best first: safety, then several entry signals, then company quality.
