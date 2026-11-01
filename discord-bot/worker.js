@@ -16,7 +16,7 @@
 // Bindings: KV namespace as CONFIG. Triggers: cron "*/5 * * * *".
 
 import { loginRoute, rememberDiscord } from "./login.js";
-import { currentSession } from "./session.js";
+import { currentSession, loginActive } from "./session.js";
 import { chartResponse, portalResponse, staticResponse } from "./chart_page.js";
 import { portfolioCommand, portfolioRoute } from "./portfolio.js";
 import { ICONS } from "./icons.js";
@@ -182,6 +182,13 @@ async function route(request, env, ctx) {
     if (path === "/entrar" || path.startsWith("/entrar/") || path === "/sair") {
       const out = await loginRoute(request, env);
       if (out) return out;
+    }
+    // The inside of the site is for signed-in members only (once a sign-in is configured).
+    if (request.method === "GET" && env.CONFIG && (/^\/(p|g)\//.test(path) || path === "/" || path === "/manifest.webmanifest")) {
+      if (!(await currentSession(env, request)) && (await loginActive(env)).any) {
+        const next = path === "/" ? "" : `?voltar=${encodeURIComponent(path)}`;
+        return new Response(null, { status: 302, headers: { Location: `/entrar${next}`, "Cache-Control": "no-store" } });
+      }
     }
     const chart = request.method === "GET" && path.match(/^\/g\/([0-9a-f]{24})$/);
     if (chart && env.CONFIG) {

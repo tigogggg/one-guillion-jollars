@@ -269,7 +269,9 @@ last chosen parameters; they are adopted only if they pass the same tests as
 any other candidate. The report and the portal show each proposal's outcome.
 Claude proposes; the backtest decides.
 
-**Signing in.** Besides the private link, `/entrar` (`discord-bot/login.js`)
+**Signing in.** Nothing inside the site (portal, charts, portfolios) opens
+without a session: `/entrar` is the front door, and after signing in the member
+goes back to the page they asked for. `/entrar` (`discord-bot/login.js`)
 opens the portfolio with Discord (OAuth2 scopes `identify guilds`: only members
 of the server; the first sign-in creates the portfolio) or with a Google
 account the member linked on their portfolio page ("Contas para entrar").
@@ -303,8 +305,8 @@ and the member's own position when their portfolio was opened on that device;
 first visit (📖 Guia reopens it). Scripts and styles are served once from
 `/static/<name>-<hash>` and cached for a year, so pages are small.
 
-**Platform updates.** The 📢 UPDATES category has a read-only
-📢-novidades channel (`discord_setup.py --canal-updates`). After each push that
+**Platform updates.** The read-only 📢-novidades channel in 📈 FINANÇAS
+(`discord_setup.py --canal-updates`). After each push that
 changes the platform (`discord-bot/`, `scripts/`, workflows), `updates.yml`
 waits five minutes so a burst of pushes becomes one post, then
 `scripts/updates.py` gives Claude the commits since the last note (KV

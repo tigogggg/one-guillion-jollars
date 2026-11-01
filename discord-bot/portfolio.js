@@ -62,8 +62,7 @@ export async function portfolioCommand(env, interaction, origin) {
     `💼 **A tua carteira** (só tu vês esta mensagem)`,
     `${origin}/c/${current}`,
     fresh ? "🔄 Link novo: o anterior deixou de funcionar." : "",
-    "-# Quem tiver este link vê e edita a tua carteira: não o partilhes. `/carteira novo_link:True` troca-o.",
-    `-# Também podes entrar em ${origin}/entrar com o Discord ou com uma conta Google associada.`,
+    `-# Abre com a tua sessão do Discord ou Google (entras em ${origin}/). O link sozinho não chega.`,
   ].filter(Boolean).join("\n");
 }
 
@@ -92,8 +91,8 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
   let data = cur.data;
   const session = await currentSession(env, request);
   const mine = session?.owner === data.owner;
-  if (data.require_login && !mine && (await loginActive(env)).any) {  // the link alone is not enough
-    return rest === "" ? redirect("/entrar?motivo=login") : json({ error: "Esta carteira pede login: entra outra vez em /entrar." }, 401);
+  if (!mine && (await loginActive(env)).any) {  // the link alone is not enough: sign in as the owner
+    return rest === "" ? redirect(`/entrar?voltar=${encodeURIComponent(`/c/${tok}`)}`) : json({ error: "Sessão terminada: entra outra vez em /entrar." }, 401);
   }
   if (rest === "" && request.method === "GET") {
     const login = await loginActive(env);
@@ -724,10 +723,8 @@ function portfolioPage(data, tok, opts = {}) {
   </div>
   <h2>🔒 Segurança</h2>
   <div class="panel small">
-    <label><input type="checkbox" id="require-login" ${data.require_login ? "checked" : ""} ${opts.loginOn ? "" : "disabled"}>
-      <b>Exigir login</b>: o link sozinho deixa de abrir a carteira; é preciso entrar com o Discord ou o Google.</label>
-    <p class="muted">${opts.loginOn ? "Para ligar, inicia sessão neste aparelho primeiro (assim tens a certeza de que consegues entrar)." : "Fica disponível quando o login com Discord ou Google estiver ativo."}
-      Se o link tiver sido visto por alguém, troca-o com <code>/carteira novo_link:True</code>.</p>
+    <p>🔒 A carteira só abre com a tua sessão (Discord ou Google): o link sozinho não chega. Se achares que alguém entrou na tua conta, usa
+      <b>Terminar sessão em todos os aparelhos</b> acima.</p>
   </div>
   <h2>🕘 Histórico de alterações</h2>
   <div class="panel small" id="versions">${opts.versions ? '<p class="muted">A carregar…</p>' : '<p class="muted">Disponível quando a base de dados (D1) estiver ligada.</p>'}</div>
@@ -956,7 +953,7 @@ $("versions").addEventListener("click", async (e) => {
   try { SNAP = await post({ action: "restore", version: +b.dataset.restore }); render(); drawHistory(); loadVersions(); } catch (err) { alert(err.message); }
 });
 document.querySelector('[data-tab="conta"]').addEventListener("click", loadVersions);
-$("require-login").onchange = async (e) => {
+if ($("require-login")) $("require-login").onchange = async (e) => {
   try { await post({ action: "security", require_login: e.target.checked }); alert(e.target.checked ? "Feito: a partir de agora é preciso entrar com o Discord ou o Google." : "Feito: o link volta a abrir a carteira sem login."); }
   catch (err) { e.target.checked = !e.target.checked; alert(err.message); }
 };

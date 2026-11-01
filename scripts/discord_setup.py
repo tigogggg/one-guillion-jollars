@@ -314,7 +314,7 @@ TEST_CHANNEL = ("testes", "🧪-testes", "Testes de funcionalidades novas antes 
 STATUS_CHANNEL = ("estado", "🔧-estado", "Verificação diária do bot: as tarefas do dia correram e os dados estão em dia? Só o bot publica.")
 
 
-UPDATES_CATEGORY = "📢 UPDATES"
+UPDATES_CATEGORY = "📢 UPDATES"  # old home of 📢-novidades, removed once empty
 UPDATES_CHANNEL = ("updates", "📢-novidades", "Novidades e correções da plataforma One Guillion Jollars (portal, carteira, agentes e bot), "
                    "resumidas sempre que há uma atualização. Só o bot publica; comenta em tópicos.")
 
@@ -400,6 +400,17 @@ def create_portal() -> int:
     return 0
 
 
+def remove_empty_category(name: str) -> int:
+    """Delete a category of this server that no channel uses any more."""
+    guild = json.loads(CHANNELS_PATH.read_text())["guild_id"]
+    channels = discord_api("GET", f"/guilds/{guild}/channels")
+    for cat in [c for c in channels if c["type"] == 4 and c["name"].lower() == name.lower()]:
+        if not any(c.get("parent_id") == cat["id"] for c in channels):
+            discord_api("DELETE", f"/channels/{cat['id']}")
+            print(f"::notice title=Canais::Categoria {name} apagada (vazia)")
+    return 0
+
+
 def create_test_channel(spec: tuple[str, str, str] = TEST_CHANNEL, category_name: str | None = None) -> int:
     """Create (or reuse) one extra read-only channel (🧪-testes by default) in the category and add it to discord/channels.json.
 
@@ -425,6 +436,9 @@ def create_test_channel(spec: tuple[str, str, str] = TEST_CHANNEL, category_name
         print(f"::notice title=Canais::Criado #{name}")
         discord_api("POST", f"/channels/{channel['id']}/messages",
                     json={"embeds": [embed(f"Bem-vindo a #{name}", topic, color=BLUE, footer="")]})
+    elif channel.get("parent_id") != category:  # moved to this category (e.g. 📢-novidades into 📈 FINANÇAS)
+        discord_api("PATCH", f"/channels/{channel['id']}", json={"parent_id": category, "lock_permissions": False})
+        print(f"::notice title=Canais::#{name} movido para a categoria")
     saved["channels"][key] = channel["id"]
     CHANNELS_PATH.write_text(json.dumps(saved, indent=2) + "\n")
     return 0
@@ -576,7 +590,7 @@ def main() -> int:
     parser.add_argument("--canais", action="store_true", help="Create the 📈 FINANÇAS category and channels")
     parser.add_argument("--canal-testes", action="store_true", help="Create the 🧪-testes channel (for DISCORD_TESTES)")
     parser.add_argument("--canal-estado", action="store_true", help="Create the 🔧-estado channel (health check)")
-    parser.add_argument("--canal-updates", action="store_true", help="Create the 📢 UPDATES category and its 📢-novidades channel")
+    parser.add_argument("--canal-updates", action="store_true", help="Create (or move) the 📢-novidades channel in the 📈 FINANÇAS category")
     parser.add_argument("--portal", action="store_true", help="Create 🏟️-portal and pin the portal message with its banner")
     parser.add_argument("--apagar-canais", metavar="IDS", help="Delete these channels (comma-separated ids)")
     parser.add_argument("--espelho", metavar="GUILD_ID", help="Create the channels in a second server and copy posts there")
@@ -618,7 +632,7 @@ def main() -> int:
             status = 1
     if args.canal_updates:
         try:
-            status = status or create_test_channel(UPDATES_CHANNEL, UPDATES_CATEGORY)
+            status = status or create_test_channel(UPDATES_CHANNEL) or remove_empty_category(UPDATES_CATEGORY)
         except (RuntimeError, KeyError, requests.RequestException) as e:
             print(f"::error title=Canal de updates::{e}")
             status = 1

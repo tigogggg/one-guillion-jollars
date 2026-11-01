@@ -32,7 +32,7 @@ on:
         type: boolean
         default: false
       canal_updates:
-        description: "Criar a categoria 📢 UPDATES e o canal 📢-novidades (novidades da plataforma)"
+        description: "Criar (ou mover) o canal 📢-novidades na categoria 📈 FINANÇAS (novidades da plataforma)"
         type: boolean
         default: false
       apagar_canais:
