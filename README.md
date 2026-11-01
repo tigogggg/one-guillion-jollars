@@ -238,7 +238,14 @@ XTB symbols are mapped to Yahoo's (`AAPL.US` → `AAPL`, `ASML.NL` → `ASML.AS`
 (or the sum of its cash operations). Only the rows the member confirms are
 sent; each keeps its XTB position number, so importing again adds nothing
 twice. Each import belongs to an account (one per XTB currency account) whose
-available cash shows in the totals and can be corrected by hand.
+available cash shows in the totals and can be corrected by hand. The XTB
+export is a zip with one xlsx per account (`<currency>_<account>_<from>_<to>`):
+the page opens it with JSZip and imports every account at once, recognised by
+its XTB number, so a later import goes to the same account whatever name is
+typed. An import skips anything already in the portfolio (same XTB position,
+or the same side, ticker, date, quantity and price from any account), the
+operations tab offers to remove repeated operations, and an account can be
+removed with or without its operations.
 
 `/carteira` works only inside the server, so only its members get one: each
 member gets one private link (`/c/<token>`, KV `portfolio-user:<discord id>`

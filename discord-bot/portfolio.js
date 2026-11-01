@@ -70,6 +70,12 @@ export async function portfolioRoute(request, env, tok, rest) {
       await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
       return json({ ...(await snapshot(env, data)), imported: out });
     }
+    if (body.action === "dedupe") {
+      const out = dedupe(data);
+      if (out.error) return json({ error: out.error }, 400);
+      await env.CONFIG.put(`portfolio:${tok}`, JSON.stringify(data));
+      return json({ ...(await snapshot(env, data)), deduped: out.removed });
+    }
     if (body.action === "account") {
       const error = setAccount(data, body);
       if (error) return json({ error }, 400);
@@ -138,22 +144,57 @@ function setAccount(data, body) {
   const name = String(body.name || "").trim();
   if (!ACCOUNT.test(name)) return "Nome de conta inválido.";
   data.accounts ||= {};
-  if (body.remove) { delete data.accounts[name]; return null; }
+  if (body.remove) {
+    if (body.withTx) {
+      const left = data.tx.filter((t) => t.account !== name);
+      for (const t of left.filter((x) => x.side === "sell")) {  // other accounts' sales must still have their shares
+        if (heldOn(left, t.symbol, t.date, t.id) < t.qty - 1e-6) return `Não posso apagar: a venda de ${t.symbol} a ${t.date} ficaria sem ações.`;
+      }
+      data.tx = left;
+    }
+    delete data.accounts[name];
+    return null;
+  }
   const currency = String(body.currency || data.accounts[name]?.currency || "EUR").toUpperCase();
   const cash = Number(body.cash);
   if (!CURRENCY.test(currency)) return "Moeda inválida (ex.: EUR, USD).";
   if (!isFinite(cash) || Math.abs(cash) > 1e10) return "Valor do dinheiro inválido.";
-  data.accounts[name] = { currency, cash, updated: new Date().toISOString().slice(0, 10), source: body.source || "manual" };
+  data.accounts[name] = { ...(data.accounts[name] || {}), currency, cash, updated: new Date().toISOString().slice(0, 10), source: body.source || "manual",
+                          ...(body.number ? { number: String(body.number).slice(0, 20) } : {}) };
   return null;
 }
 
 // A broker export already read in the browser: {account, currency, cash?, rows: [{side, symbol, date, qty, price, fee, note, ext}]}.
 // Rows already imported (same account and ext) are skipped; unknown tickers and sales without the shares are reported.
+// The same operation, whatever account or import it came from.
+const fingerprint = (t) => [t.side, t.symbol, t.date, Number(t.qty).toFixed(6), Number(t.price).toFixed(4)].join("|");
+
+// Remove repeated operations (same side, ticker, date, quantity and price), keeping the first.
+function dedupe(data) {
+  const seen = new Set(), keep = [];
+  for (const t of data.tx.slice().sort((a, b) => (a.seq || 0) - (b.seq || 0))) {
+    const f = fingerprint(t);
+    if (seen.has(f)) continue;
+    seen.add(f);
+    keep.push(t);
+  }
+  for (const t of keep.filter((x) => x.side === "sell")) {
+    if (heldOn(keep, t.symbol, t.date, t.id) < t.qty - 1e-6) return { error: `Não posso limpar: a venda de ${t.symbol} a ${t.date} ficaria sem ações.` };
+  }
+  const removed = data.tx.length - keep.length;
+  data.tx = keep;
+  return { removed };
+}
+
 async function importRows(data, body) {
-  const account = String(body.account || "").trim();
+  let account = String(body.account || "").trim();
   if (!ACCOUNT.test(account)) return { error: "Indica o nome da conta (ex.: XTB EUR)." };
+  const number = String(body.number || "").replace(/\D/g, "").slice(0, 20);
+  const sameNumber = number && Object.entries(data.accounts || {}).find(([, a]) => a.number === number);
+  if (sameNumber) account = sameNumber[0];  // the same XTB account, whatever name was typed this time
   const rows = Array.isArray(body.rows) ? body.rows.slice(0, MAX_IMPORT) : [];
-  const have = new Set(data.tx.filter((t) => t.account === account && t.ext).map((t) => t.ext));
+  const have = new Set(data.tx.filter((t) => t.ext).map((t) => t.ext));
+  const prints = new Set(data.tx.map(fingerprint));
   const skipped = [], quotes = {};
   let seq = data.tx.reduce((m, x) => Math.max(m, x.seq || 0), 0);
   const fresh = [];
@@ -163,6 +204,7 @@ async function importRows(data, body) {
     const qty = Number(r.qty), price = Number(r.price), fee = Number(r.fee || 0), date = String(r.date || "");
     const ext = String(r.ext || "").slice(0, 60);
     if (ext && have.has(ext)) { skipped.push({ symbol, date, reason: "já importada" }); continue; }
+    if (prints.has(fingerprint({ side, symbol, date, qty, price }))) { skipped.push({ symbol, date, reason: "já existe na carteira" }); continue; }
     if (!side || !SYMBOL.test(symbol) || !DAY.test(date) || !(qty > 0) || !(price > 0) || !(fee >= 0)) {
       skipped.push({ symbol, date, reason: "linha incompleta" }); continue;
     }
@@ -172,6 +214,7 @@ async function importRows(data, body) {
     fresh.push({ id: token().slice(0, 12), seq: ++seq, side, symbol, date, qty, price, fee, currency: q.currency, name: q.name,
                  note: String(r.note || "").slice(0, 120), account, ext });
     if (ext) have.add(ext);
+    prints.add(fingerprint({ side, symbol, date, qty, price }));
   }
   if (data.tx.length + fresh.length > MAX_TX) return { error: `Limite de ${MAX_TX} operações na carteira.` };
   // a sale needs the shares on its date: drop the ones the file cannot back (e.g. history cut short)
@@ -185,11 +228,11 @@ async function importRows(data, body) {
   const added = next.length - data.tx.length;
   data.tx = next;
   if (body.cash != null && body.cash !== "") {
-    setAccount(data, { name: account, currency: body.currency, cash: body.cash, source: "importado" });
+    setAccount(data, { name: account, currency: body.currency, cash: body.cash, source: "importado", number });
   } else if (!data.accounts?.[account]) {
-    setAccount(data, { name: account, currency: body.currency || "EUR", cash: 0, source: "importado sem saldo" });
+    setAccount(data, { name: account, currency: body.currency || "EUR", cash: 0, source: "importado sem saldo", number });
   }
-  return { added, skipped: skipped.slice(0, 200), skippedCount: skipped.length };
+  return { added, account, merged: !!sameNumber, skipped: skipped.slice(0, 200), skippedCount: skipped.length };
 }
 
 async function change(data, body) {
@@ -412,14 +455,14 @@ function portfolioPage(data, tok) {
 <section data-tab="importar" hidden>
   <h2>📥 Importar da XTB</h2>
   <div class="panel prose small">
-    <p><b>1.</b> No xStation 5 (computador): <b>Histórico</b> (ou o teu nome no canto → Histórico da conta) → escolhe o período <b>desde a abertura da conta</b> → <b>Exportar</b> → Excel (.xlsx).</p>
-    <p><b>2.</b> A XTB tem uma conta por moeda: exporta cada uma e importa-a com o seu nome (ex.: <i>XTB EUR</i>, <i>XTB USD</i>).</p>
+    <p><b>1.</b> No xStation 5 (computador): <b>Histórico</b> (ou o teu nome no canto → Histórico da conta) → escolhe o período <b>desde a abertura da conta</b> → <b>Exportar</b>. A XTB entrega um <b>zip</b> com um Excel por conta: podes escolher o zip diretamente.</p>
+    <p><b>2.</b> Cada conta da XTB (uma por moeda) entra com o seu nome e o seu dinheiro, reconhecida pelo número da conta.</p>
     <p><b>3.</b> Escolhe o ficheiro aqui. É lido <b>no teu navegador</b>: o ficheiro não é enviado; só as compras, vendas e o saldo que confirmares.</p>
     <p class="muted">As posições fechadas entram como compra + venda; as abertas como compra; o saldo da conta como dinheiro disponível. Importar o mesmo ficheiro outra vez não duplica nada. Posições a descoberto (venda) e CFDs ficam de fora.</p>
   </div>
   <form id="import-form" class="panel form">
     <label>Nome da conta <input name="account" value="XTB EUR" maxlength="40" required></label>
-    <label>Ficheiro da XTB <input name="file" type="file" accept=".xlsx,.xls,.csv" required></label>
+    <label>Ficheiro da XTB (zip ou xlsx) <input name="file" type="file" accept=".zip,.xlsx,.xls,.csv" required></label>
   </form>
   <div id="import-preview"></div>
 </section>
@@ -512,8 +555,11 @@ $("accounts").addEventListener("change", async (e) => {
   try { SNAP = await post({ action: "account", name: i.dataset.acc, currency: i.dataset.cur, cash: +i.value }); render(); } catch (err) { alert(err.message); }
 });
 $("accounts").addEventListener("click", async (e) => {
-  const b = e.target.closest("[data-delacc]"); if (!b || !confirm("Remover a conta " + b.dataset.delacc + "? As operações ficam.")) return;
-  try { SNAP = await post({ action: "account", name: b.dataset.delacc, remove: true }); render(); } catch (err) { alert(err.message); }
+  const b = e.target.closest("[data-delacc]"); if (!b) return;
+  const name = b.dataset.delacc, n = SNAP.tx.filter((t) => t.account === name).length;
+  if (!confirm("Remover a conta " + name + "?")) return;
+  const withTx = n > 0 && confirm("Apagar também as " + n + " operações importadas para esta conta?\n\nOK = apagar as operações · Cancelar = manter as operações");
+  try { SNAP = await post({ action: "account", name, remove: true, withTx }); render(); drawHistory(); } catch (err) { alert(err.message); }
 });
 
 // ---- XTB import: read the export in the browser, show what was understood, send only the rows ----
@@ -636,49 +682,78 @@ function loadSheetJs() {
     document.head.appendChild(s);
   });
 }
-let PARSED = null;
+let PARSED = [];  // one entry per account file: {file, account, parsed}
 $("import-form").account.addEventListener("input", (e) => { e.target.dataset.touched = "1"; });
+function loadJsZip() {
+  return window.JSZip ? Promise.resolve() : new Promise((ok, fail) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"; s.onload = ok; s.onerror = () => fail(new Error("não consegui carregar o leitor de zip"));
+    document.head.appendChild(s);
+  });
+}
+// XTB names each account's file <currency>_<account number>_<from>_<to>.xlsx (inside a zip with a folder per account)
+async function readExport(f) {
+  await loadSheetJs();
+  const files = [];
+  if (/\.zip$/i.test(f.name)) {
+    await loadJsZip();
+    const zip = await JSZip.loadAsync(await f.arrayBuffer());
+    for (const entry of Object.values(zip.files)) {
+      if (!entry.dir && /\.(xlsx|xls|csv)$/i.test(entry.name)) files.push({ name: entry.name.split("/").pop(), data: await entry.async("arraybuffer") });
+    }
+    if (!files.length) throw new Error("o zip não tem nenhum ficheiro Excel da XTB");
+  } else {
+    files.push({ name: f.name, data: await f.arrayBuffer() });
+  }
+  const typed = $("import-form").account;
+  return files.map((x) => {
+    const parsed = parseXtb(XLSX.read(x.data, { cellDates: true }));
+    const hint = x.name.match(/^([A-Z]{3})_(\d+)_/);
+    if (hint) { parsed.currency ||= hint[1]; parsed.number = hint[2]; }
+    const account = hint && (files.length > 1 || !typed.dataset.touched) ? "XTB " + hint[1] + " " + hint[2] : typed.value.trim();
+    return { file: x.name, account, parsed };
+  });
+}
 $("import-form").file.addEventListener("change", async (e) => {
   const f = e.target.files[0]; if (!f) return;
   $("import-preview").innerHTML = '<p class="muted">A ler o ficheiro…</p>';
-  try {
-    await loadSheetJs();
-    const wb = XLSX.read(await f.arrayBuffer(), { cellDates: true });
-    PARSED = parseXtb(wb);
-    const hint = f.name.match(/^([A-Z]{3})_(\d+)_/);  // XTB: <currency>_<account>_<from>_<to>.xlsx
-    if (hint) {
-      PARSED.currency ||= hint[1];
-      const acc = $("import-form").account;
-      if (!acc.dataset.touched) acc.value = "XTB " + hint[1] + " " + hint[2];
-    }
-  } catch (err) { $("import-preview").innerHTML = '<p class="down">⚠️ ' + esc(err.message) + '</p>'; return; }
-  const P = PARSED;
-  const diagnosis = '<details class="panel"' + (P.rows.length ? '' : ' open') + '><summary><b>🔎 Diagnóstico da leitura</b> (só os títulos das colunas, sem valores)</summary>' +
+  try { PARSED = await readExport(f); } catch (err) { $("import-preview").innerHTML = '<p class="down">⚠️ ' + esc(err.message) + '</p>'; return; }
+  if (PARSED.length === 1 && !$("import-form").account.dataset.touched) $("import-form").account.value = PARSED[0].account;
+  const diagnosis = (P) => '<details class="panel"' + (P.rows.length ? '' : ' open') + '><summary><b>🔎 Diagnóstico da leitura</b> (só os títulos das colunas, sem valores)</summary>' +
     table(["Folha", "Linhas", "Títulos das colunas", "Reconhecida como"], P.sheets.map((x) => [esc(x.name), x.rows, esc(x.titles.join(" | ") || "—"),
       x.found === "positions" ? "✅ posições" : x.found === "cash" ? "✅ dinheiro" : "—"])) + '</details>';
-  if (!P.rows.length) {
-    $("import-preview").innerHTML = '<p class="down">⚠️ Não reconheci as colunas das posições neste ficheiro' + (P.cash != null ? ' (encontrei o saldo: ' + nf(P.cash) + ')' : '') +
-      '. Envia um print deste diagnóstico no Discord para eu ajustar a leitura ao formato do teu ficheiro.</p>' + diagnosis;
+  const total = PARSED.reduce((n, x) => n + x.parsed.rows.length, 0);
+  if (!total && PARSED.every((x) => x.parsed.cash == null)) {
+    $("import-preview").innerHTML = '<p class="down">⚠️ Não reconheci posições nem dinheiro neste ficheiro. Envia um print do diagnóstico no Discord para eu ajustar a leitura.</p>' +
+      PARSED.map((x) => '<h3>' + esc(x.file) + '</h3>' + diagnosis(x.parsed)).join("");
     return;
   }
-  $("import-preview").innerHTML = '<div class="grid">' + tile("Posições fechadas", P.closed, "compra + venda") + tile("Posições abertas", P.open, "compra") +
-    tile("Operações", P.rows.length) + tile("Dinheiro disponível", P.cash == null ? "não encontrado" : nf(P.cash) + " " + esc(P.currency || ""), esc(P.cashFrom)) + '</div>' +
-    (P.shorts ? '<p class="small muted">' + P.shorts + ' posições a descoberto ficam de fora.</p>' : '') +
-    '<div class="panel filters"><label class="small">Moeda da conta <input id="imp-cur" value="' + esc(P.currency || "EUR") + '" maxlength="3" style="width:70px"></label>' +
-    '<label class="small">Dinheiro disponível <input id="imp-cash" type="number" step="0.01" value="' + (P.cash ?? "") + '" style="width:130px"></label>' +
-    '<button class="btn" id="imp-go">IMPORTAR ' + P.rows.length + ' OPERAÇÕES</button></div>' +
-    diagnosis + '<details><summary>Ver as operações lidas</summary>' + table(["Data", "Tipo", "Ativo", "Qtd.", "Preço", "Ref."], P.rows.slice(0, 500).map((r) =>
-      [esc(r.date), r.side === "buy" ? "🟢 compra" : "🔴 venda", '<b>' + esc(r.symbol) + '</b>', nf(r.qty, 4), nf(r.price), esc(r.note)]), [3, 4]) + '</details>';
+  $("import-preview").innerHTML = '<h3>' + PARSED.length + (PARSED.length === 1 ? ' conta encontrada' : ' contas encontradas') + '</h3>' +
+    table(["Ficheiro", "Conta", "Moeda", "Fechadas", "Abertas", "Operações", "Dinheiro disponível"], PARSED.map((x, i) => [esc(x.file),
+      '<input class="imp-acc" data-i="' + i + '" value="' + esc(x.account) + '" maxlength="40" style="width:190px">',
+      '<input class="imp-cur" data-i="' + i + '" value="' + esc(x.parsed.currency || "EUR") + '" maxlength="3" style="width:56px">',
+      x.parsed.closed, x.parsed.open, x.parsed.rows.length,
+      '<input class="imp-cash" data-i="' + i + '" type="number" step="0.01" value="' + (x.parsed.cash ?? "") + '" style="width:110px"> <span class="muted small">' + esc(x.parsed.cashFrom || "não encontrado") + '</span>']), [3, 4, 5]) +
+    (PARSED.some((x) => x.parsed.shorts) ? '<p class="small muted">Posições a descoberto ficam de fora.</p>' : '') +
+    '<p><button class="btn" id="imp-go">IMPORTAR ' + total + ' OPERAÇÕES</button></p>' +
+    '<p class="muted small">O que já existir na carteira (mesma operação, de qualquer conta ou importação anterior) é ignorado.</p>' +
+    PARSED.map((x) => '<details><summary>Ver as operações de ' + esc(x.file) + '</summary>' + table(["Data", "Tipo", "Ativo", "Qtd.", "Preço", "Ref."], x.parsed.rows.slice(0, 500).map((r) =>
+      [esc(r.date), r.side === "buy" ? "🟢 compra" : "🔴 venda", '<b>' + esc(r.symbol) + '</b>', nf(r.qty, 4), nf(r.price), esc(r.note)]), [3, 4]) + '</details>' + diagnosis(x.parsed)).join("");
   $("imp-go").addEventListener("click", async () => {
     const btn = $("imp-go"); btn.disabled = true; btn.textContent = "A IMPORTAR…";
+    const results = [];
     try {
-      const out = await post({ action: "import", account: $("import-form").account.value.trim(), currency: $("imp-cur").value.trim().toUpperCase(),
-                               cash: $("imp-cash").value === "" ? null : +$("imp-cash").value, rows: PARSED.rows });
-      SNAP = out; render(); drawHistory();
+      for (const [i, x] of PARSED.entries()) {
+        const val = (cls) => document.querySelector("." + cls + '[data-i="' + i + '"]').value.trim();
+        const out = await post({ action: "import", account: val("imp-acc"), currency: val("imp-cur").toUpperCase(),
+                                 cash: val("imp-cash") === "" ? null : +val("imp-cash"), rows: x.parsed.rows, number: x.parsed.number || "" });
+        SNAP = out; results.push(out.imported);
+      }
+      render(); drawHistory();
       $("import-form").file.value = "";  // so the same file can be chosen again
-      const im = out.imported;
-      $("import-preview").innerHTML = '<p class="up">✅ ' + im.added + ' operações importadas.' + (im.skippedCount ? ' ' + im.skippedCount + ' ficaram de fora:' : '') + '</p>' +
-        (im.skippedCount ? table(["Ativo", "Data", "Porquê"], im.skipped.map((x) => [esc(x.symbol), esc(x.date), esc(x.reason)])) : '');
+      $("import-preview").innerHTML = results.map((im) => '<p class="up">✅ ' + im.added + ' operações importadas na conta ' + esc(im.account) +
+        (im.merged ? ' (a mesma conta da XTB que já tinhas)' : '') + '.' + (im.skippedCount ? ' ' + im.skippedCount + ' ficaram de fora:' : '') + '</p>' +
+        (im.skippedCount ? '<details><summary>Ver quais e porquê</summary>' + table(["Ativo", "Data", "Porquê"], im.skipped.map((y) => [esc(y.symbol), esc(y.date), esc(y.reason)])) + '</details>' : '')).join("");
     } catch (err) { btn.disabled = false; btn.textContent = "TENTAR DE NOVO"; $("import-preview").insertAdjacentHTML("beforeend", '<p class="down">⚠️ ' + esc(err.message) + '</p>'); }
   });
 });
@@ -821,7 +896,10 @@ function render() {
     closed.map((p) => ['<b>' + esc(p.symbol) + '</b>', nf(p.bought) + " " + esc(p.currency), nf(p.sold) + " " + esc(p.currency),
       '<span class="' + cls(p.realized) + '">' + nf(p.realized) + " " + esc(p.currency) + '</span>', '<span class="' + cls(p.realized) + '">' + pct(p.bought ? p.realized / p.bought : null) + '</span>',
       nf(p.fees) + " " + esc(p.currency), esc(p.first), esc(p.last)]), [1, 2, 3, 4, 5]);
-  $("txs").innerHTML = '<h2>🧾 Todas as operações (' + s.tx.length + ')</h2>' + table(["Data", "Tipo", "Ativo", "Qtd.", "Preço", "Comissão", "Total", "Nota", ""],
+  const fp = (t) => [t.side, t.symbol, t.date, Number(t.qty).toFixed(6), Number(t.price).toFixed(4)].join("|");
+  const dupes = s.tx.length - new Set(s.tx.map(fp)).size;
+  $("txs").innerHTML = '<h2>🧾 Todas as operações (' + s.tx.length + ')</h2>' +
+    (dupes ? '<p class="panel">⚠️ Há <b>' + dupes + '</b> operações repetidas (mesma ação, data, quantidade e preço). <button class="btn" id="dedupe">🧹 REMOVER DUPLICADOS</button></p>' : '') + table(["Data", "Tipo", "Ativo", "Qtd.", "Preço", "Comissão", "Total", "Nota", ""],
     s.tx.slice().sort((a, b) => b.date.localeCompare(a.date) || b.seq - a.seq).map((t) => [esc(t.date), t.side === "buy" ? "🟢 compra" : "🔴 venda", '<b>' + esc(t.symbol) + '</b>',
       nf(t.qty, 4), nf(t.price) + " " + esc(t.currency), nf(t.fee), nf(t.qty * t.price + (t.side === "buy" ? t.fee : -t.fee)) + " " + esc(t.currency), esc(t.note || ""),
       '<button class="act" data-act="edit" data-id="' + esc(t.id) + '">✏️ editar</button> <button class="act" data-act="dup" data-id="' + esc(t.id) +
@@ -876,6 +954,10 @@ $("form").addEventListener("submit", async (e) => {
 });
 
 $("txs").addEventListener("click", async (e) => {
+  if (e.target.closest("#dedupe")) {
+    try { SNAP = await post({ action: "dedupe" }); const n = SNAP.deduped; render(); drawHistory(); alert(n + " operações repetidas removidas."); } catch (err) { alert(err.message); }
+    return;
+  }
   const a = e.target.closest(".act");
   if (a) { const t = SNAP.tx.find((x) => x.id === a.dataset.id); if (t) fillForm(t, a.dataset.act === "edit"); return; }
   const b = e.target.closest(".del"); if (!b || !confirm("Apagar esta operação?")) return;
