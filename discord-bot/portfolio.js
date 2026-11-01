@@ -539,8 +539,10 @@ const num = (v) => typeof v === "number" ? v : v == null ? NaN : parseFloat(Stri
 // Column titles in English or Portuguese (XTB's export language follows the account); accents and case ignored.
 const plain = (t) => String(t ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
 const COLS = {
-  id: /^(position|posicao|order|ordem|id|n\.? ?(da )?posicao|numero)$/,
-  symbol: /^(symbol|simbolo|instrument|instrumento|ticker|ativo|activo)( .*)?$/,
+  id: /^(position|posicao|order|ordem|id|position id|id da posicao|id posicao|n\.? ?(da )?posicao|numero)$/,
+  symbol: /^(ticker|symbol|simbolo)( .*)?$/,  // the exchange code (XTB: "Ticker", e.g. VUSA.DE)
+  name: /^(instrument|instrumento|ativo|activo)$/,  // the product name ("S&P 500"), used only if there is no ticker column
+  idAlt: /position/,  // XTB's open positions: "Instrument/Position" holds the position number on each buy row
   type: /^(type|tipo|direction|direcao|side|lado)$/,
   volume: /^(volume|quantidade|quantity|qtd\.?|units|unidades|lotes?|nominal)( .*)?$/,
   openTime: /(open|opening|abertura).*(time|date|hora|data)|(time|date|hora|data).*(open|abertura)/,
@@ -553,8 +555,11 @@ function findHeader(rows) {
   for (let i = 0; i < Math.min(rows.length, 120); i++) {
     const cells = (rows[i] || []).map(plain);
     const at = (re) => cells.findIndex((c) => re.test(c));
-    if (at(COLS.symbol) >= 0 && (at(COLS.openTime) >= 0 || at(COLS.openPrice) >= 0)) {
-      return { row: i, kind: "positions", col: Object.fromEntries(Object.entries(COLS).map(([k, re]) => [k, at(re)])) };
+    const symbolAt = at(COLS.symbol) >= 0 ? at(COLS.symbol) : at(COLS.name);
+    if (symbolAt >= 0 && (at(COLS.openTime) >= 0 || at(COLS.openPrice) >= 0)) {
+      const col = Object.fromEntries(Object.entries(COLS).map(([k, re]) => [k, at(re)]));
+      col.symbol = symbolAt;
+      return { row: i, kind: "positions", col };
     }
     if (at(COLS.type) >= 0 && at(COLS.amount) >= 0) return { row: i, kind: "cash", col: { type: at(COLS.type), amount: at(COLS.amount) } };
   }
@@ -602,11 +607,14 @@ function parseXtb(wb) {
     const c = h.col;
     for (const r of rows.slice(h.row + 1)) {
       if (!r || r[c.symbol] == null) continue;
-      const type = String(c.type >= 0 ? r[c.type] ?? "BUY" : "BUY");
+      const type = plain(c.type >= 0 ? r[c.type] : "buy");
       const symbol = xtbSymbol(r[c.symbol]), qty = num(r[c.volume]), openDay = toDay(r[c.openTime]), openPrice = num(r[c.openPrice]);
+      if (/sell|venda|short|curta/.test(type)) { out.shorts++; continue; }
+      if (!/buy|compra|long|longa/.test(type)) continue;  // XTB's summary row per instrument has no type
       if (!symbol || !(qty > 0) || !openDay || !(openPrice > 0)) continue;
-      if (/sell|venda|short|curta/i.test(plain(type))) { out.shorts++; continue; }
-      const id = c.id >= 0 && r[c.id] != null ? String(r[c.id]) : symbol + "-" + openDay + "-" + qty + "-" + openPrice;
+      const altId = c.idAlt >= 0 && /^\d{5,}$/.test(String(r[c.idAlt] ?? "").trim()) ? String(r[c.idAlt]).trim() : null;
+      const id = c.id >= 0 && r[c.id] != null && String(r[c.id]).trim() !== "" ? String(r[c.id]).trim()
+        : altId || symbol + "-" + openDay + "-" + qty + "-" + openPrice;
       out.rows.push({ side: "buy", symbol, date: openDay, qty, price: openPrice, fee: 0, note: "XTB " + id, ext: "xtb-" + id + "-b" });
       const closeDay = c.closeTime >= 0 ? toDay(r[c.closeTime]) : null, closePrice = c.closePrice >= 0 ? num(r[c.closePrice]) : NaN;
       if (closeDay && closePrice > 0) {
@@ -629,6 +637,7 @@ function loadSheetJs() {
   });
 }
 let PARSED = null;
+$("import-form").account.addEventListener("input", (e) => { e.target.dataset.touched = "1"; });
 $("import-form").file.addEventListener("change", async (e) => {
   const f = e.target.files[0]; if (!f) return;
   $("import-preview").innerHTML = '<p class="muted">A ler o ficheiro…</p>';
@@ -636,6 +645,12 @@ $("import-form").file.addEventListener("change", async (e) => {
     await loadSheetJs();
     const wb = XLSX.read(await f.arrayBuffer(), { cellDates: true });
     PARSED = parseXtb(wb);
+    const hint = f.name.match(/^([A-Z]{3})_(\d+)_/);  // XTB: <currency>_<account>_<from>_<to>.xlsx
+    if (hint) {
+      PARSED.currency ||= hint[1];
+      const acc = $("import-form").account;
+      if (!acc.dataset.touched) acc.value = "XTB " + hint[1] + " " + hint[2];
+    }
   } catch (err) { $("import-preview").innerHTML = '<p class="down">⚠️ ' + esc(err.message) + '</p>'; return; }
   const P = PARSED;
   const diagnosis = '<details class="panel"' + (P.rows.length ? '' : ' open') + '><summary><b>🔎 Diagnóstico da leitura</b> (só os títulos das colunas, sem valores)</summary>' +
