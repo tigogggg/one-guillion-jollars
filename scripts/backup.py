@@ -1,8 +1,8 @@
 """Off-site copy of the members' data: KV keys and the D1 portfolios, as a gzip JSON file.
 
 The Worker already keeps 14 daily copies inside D1 and D1 keeps 30 days of point-in-time
-history; this copy lives outside Cloudflare (a GitHub Actions artifact of this private repo,
-kept 30 days). With BACKUP_KEY set, the file is encrypted (AES-256, openssl) before upload.
+history; this copy lives outside Cloudflare (a GitHub Actions artifact, kept 30 days). The repo
+is public, so backup.yml always encrypts the file with BACKUP_KEY (AES-256, openssl) before upload.
 
     uv run python scripts/backup.py out/backup.json.gz
 """

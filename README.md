@@ -292,7 +292,7 @@ and the last 30 versions stay for "Desfazer"/"Repor" in the portfolio's 🔒 Con
 tab. Portfolios still in KV move to D1 on first use; without D1 everything stays
 in KV. Every night the Worker copies all portfolios and the members' KV keys
 into D1's `backups` table (14 days), and `backup.yml` keeps an off-site copy as
-an artifact (30 days, encrypted with `BACKUP_KEY` if set). D1 also shares the
+an artifact (30 days, always encrypted with `BACKUP_KEY`; the job fails without it). D1 also shares the
 Yahoo quotes (1 minute) and daily histories (6 hours) between visitors.
 Every response carries security headers (CSP, no framing, `Referrer-Policy:
 strict-origin` so the private path never leaks, HSTS) and rate limits per
