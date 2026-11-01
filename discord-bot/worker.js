@@ -16,6 +16,7 @@
 // Bindings: KV namespace as CONFIG. Triggers: cron "*/5 * * * *".
 
 import { loginRoute, rememberDiscord } from "./login.js";
+import { currentSession } from "./session.js";
 import { chartResponse, portalResponse, staticResponse } from "./chart_page.js";
 import { portfolioCommand, portfolioRoute } from "./portfolio.js";
 import { ICONS } from "./icons.js";
@@ -103,7 +104,7 @@ const CSP = [
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
   "connect-src 'self'",
-  "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
+  "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com",
   "media-src 'self' https:",
   "object-src 'none'",
   "base-uri 'none'",
@@ -122,6 +123,11 @@ const SECURITY_HEADERS = {
 
 function secure(response) {
   const out = new Response(response.body, response);
+  if (out.headers.get("X-Embed") === "1") {  // the portfolio inside the portal: same site only
+    out.headers.delete("X-Embed");
+    out.headers.set("Content-Security-Policy", CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'"));
+    out.headers.set("X-Frame-Options", "SAMEORIGIN");
+  }
   for (const [k, v] of Object.entries(SECURITY_HEADERS)) if (!out.headers.has(k)) out.headers.set(k, v);
   return out;
 }
@@ -183,7 +189,12 @@ async function route(request, env, ctx) {
     }
     const portal = request.method === "GET" && path.match(/^\/p\/([0-9a-f]{24})(\/manifest\.webmanifest)?$/);
     if (portal && env.CONFIG) {
-      return portalResponse(env, portal[1], await getSchedule(env), !!portal[2]);
+      return portalResponse(env, portal[1], await getSchedule(env), !!portal[2], await currentSession(env, request));
+    }
+    if (request.method === "GET" && (path === "/" || path === "/manifest.webmanifest") && env.CONFIG) {  // the site's home: the portal for members
+      const session = await currentSession(env, request);
+      if (!session) return new Response(null, { status: 302, headers: { Location: "/entrar", "Cache-Control": "no-store" } });
+      return portalResponse(env, null, await getSchedule(env), path !== "/", session);
     }
     const wallet = path.match(/^\/c\/([0-9a-f]{24})(\/data|\/history|\/analysis|\/versions|\/export|\/manifest\.webmanifest)?$/);
     if (wallet && env.CONFIG) {
@@ -243,7 +254,7 @@ async function route(request, env, ctx) {
         await env.CONFIG.put("portal:token", JSON.stringify(token));
       }
       const content = token
-        ? `🏟️ **One Guillion Jollars**: corrida e fichas dos agentes, notícias, oportunidades com score de segurança e agenda.\n${new URL(request.url).origin}/p/${token}\n-# Link do servidor: partilha só com os membros.`
+        ? `🏟️ **One Guillion Jollars**: corrida e fichas dos agentes, notícias, oportunidades com score de segurança e agenda.\n${new URL(request.url).origin}/p/${token}\n🔑 Ou entra em ${new URL(request.url).origin}/ com o Discord ou o Google: o portal e a tua carteira no mesmo sítio.\n-# Link do servidor: partilha só com os membros.`
         : "⚠️ O portal aparece depois da próxima liga dos agentes (dias úteis às 12:15).";
       return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
     }

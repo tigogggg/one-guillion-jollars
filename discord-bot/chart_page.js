@@ -32,12 +32,17 @@ export async function chartResponse(env, id, schedule) {
   return html(chartPage(data, upcoming, latest && latest !== id ? latest : null));
 }
 
-export async function portalResponse(env, token, schedule, wantManifest = false) {
-  const saved = await env.CONFIG.get("portal:token", "json");
-  if (!saved || saved !== token) return html(page("Link inválido", "<p class='muted'>Este link do portal não é válido. Pede o link atual com /portal no Discord.</p>"), 404);
+// The portal: /p/<token> (the server's shared link) or / for a signed-in member.
+// session (session.js currentSession) shows the member's name and their portfolio inside the portal.
+export async function portalResponse(env, token, schedule, wantManifest = false, session = null) {
+  if (token !== null) {
+    const saved = await env.CONFIG.get("portal:token", "json");
+    if (!saved || saved !== token) return html(page("Link inválido", "<p class='muted'>Este link do portal não é válido. Entra em <a href='/'>One Guillion Jollars</a> ou pede o link atual com /portal no Discord.</p>"), 404);
+  }
+  const home = token === null ? "/" : `/p/${token}`;
   if (wantManifest) {
     return new Response(JSON.stringify({
-      name: "One Guillion Jollars", short_name: "OGJ", start_url: `/p/${token}`, scope: `/p/${token}`, display: "standalone",
+      name: "One Guillion Jollars", short_name: "OGJ", start_url: home, scope: home, display: "standalone",
       background_color: "#0b0820", theme_color: "#0b0820",
       icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" }],
     }), { headers: { "Content-Type": "application/manifest+json" } });
@@ -49,8 +54,9 @@ export async function portalResponse(env, token, schedule, wantManifest = false)
   const [news, market, proposals, calendar] = await Promise.all(["news", "market", "proposals", "calendar"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
   const ptId = await env.CONFIG.get("chart-latest:pretreino", "json");
   const pretrain = ptId && ptId !== latest ? await env.CONFIG.get(`chart:${ptId}`, "json") : null;
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain,
-                                                                       manifest: `/p/${token}/manifest.webmanifest` }));
+  const user = session ? { name: session.data.name || "membro", wallet: `/c/${session.tok}` } : null;
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user,
+                                                                       manifest: token === null ? "/manifest.webmanifest" : `/p/${token}/manifest.webmanifest` }));
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +187,7 @@ export function staticResponse(path) {
   return a ? new Response(a.body, { headers: { "Content-Type": a.type, "Cache-Control": "public, max-age=31536000, immutable" } }) : null;
 }
 
-export function page(title, body, head = "") {
+export function page(title, body, head = "", opts = {}) {
   return `<!doctype html>
 <html lang="pt-PT">
 <head>
@@ -192,7 +198,7 @@ export function page(title, body, head = "") {
 <link rel="stylesheet" href="${STATIC_PATHS.css}">
 ${head}
 </head>
-<body><main>${body}</main>${MUSIC}</body>
+<body${opts.embed ? ' class="embed"' : ""}><main>${body}</main>${opts.embed ? "" : MUSIC}</body>
 </html>`;
 }
 
@@ -209,6 +215,9 @@ export function chartPage(data, upcoming, newer, extras = {}) {
   const body = `
 ${banner}
 <header>
+  ${portal ? `<div class="userbar">${extras.user
+    ? `<span>👤 <b>${esc(extras.user.name)}</b></span><a class="btn alt" href="#carteira" data-go="carteira">💼 A MINHA CARTEIRA</a><a class="btn alt" href="/sair">SAIR</a>`
+    : `<a class="btn" href="/entrar">🔑 ENTRAR</a>`}</div>` : ""}
   <h1>${esc(portal ? "🏟️ One Guillion Jollars" : data.title)}</h1>
   <p class="muted">${esc(portal ? data.title + " · " + (data.subtitle || "") : data.subtitle || "")}</p>
   <p class="muted small">Dados da liga de <span id="updated"></span> (hora de Lisboa) · simulação com dinheiro fictício e preços reais · ferramenta educativa, não é recomendação de compra</p>
@@ -278,16 +287,15 @@ ${portal ? `<section data-tab="ajuda" hidden><div id="glossary"></div></section>
 ${portal ? `<section data-tab="pesquisa" hidden><div id="q-out"></div></section>
 <section data-tab="estado" hidden><div id="status"></div></section>` : ""}
 ${portal ? `<section data-tab="carteira" hidden>
-  <h2>💼 A tua carteira</h2>
+  ${extras.user ? `<iframe id="wallet-frame" class="wallet-frame" title="A minha carteira" data-src="${esc(extras.user.wallet)}?embed=1" loading="lazy"></iframe>
+  <p class="muted small">A tua carteira também abre sozinha em <a href="${esc(extras.user.wallet)}">${esc(extras.user.wallet.slice(0, 9))}…</a> (para guardar no ecrã principal do telemóvel).</p>`
+  : `<h2>💼 A tua carteira</h2>
   <div class="panel prose">
-    <p>Cada pessoa pode registar as suas compras e vendas reais e acompanhar o desempenho com preços quase em tempo real.</p>
-    <p><a class="btn" style="display:inline-block;text-decoration:none;font-size:.75rem;padding:12px 16px" href="/entrar">💼 ABRIR A MINHA CARTEIRA</a></p>
-    <p class="muted small">Entra com o <b>Discord</b> (só membros do servidor) ou com uma conta <b>Google</b> que tenhas associado na carteira. Neste aparelho fica a sessão aberta 30 dias.</p>
-    <p>Ou: 1. No Discord, escreve <code>/carteira</code>. O bot responde <b>só para ti</b> com o teu link privado.</p>
-    <p>2. Abre o link e adiciona as compras e vendas: ação ou ETF, data, quantidade, preço e comissão.</p>
-    <p>3. A página mostra o valor atual, o ganho de cada posição e da carteira, o resultado das vendas e a evolução desde a primeira compra.</p>
-    <p class="muted small">Quem tiver o teu link vê e edita a tua carteira: não o partilhes. Para trocar de link, usa <code>/carteira novo</code>.</p>
-  </div>
+    <p>Cada membro regista as suas compras e vendas reais (ou importa da XTB) e acompanha o desempenho com preços quase em tempo real, aqui mesmo no portal.</p>
+    <p><a class="btn" style="display:inline-block;text-decoration:none;font-size:.75rem;padding:12px 16px" href="/entrar">🔑 ENTRAR COM O DISCORD OU O GOOGLE</a></p>
+    <p class="muted small">Discord: só membros do servidor (a primeira entrada cria a carteira). Google: depois de associares a conta. A sessão fica aberta 30 dias neste aparelho.
+    Também podes usar <code>/carteira</code> no Discord, que te dá o link privado.</p>
+  </div>`}
 </section>` : ""}
 <script>
 const DATA = ${safeJson(data)};
@@ -386,6 +394,10 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .chip { background:var(--card); border:1px solid var(--line); color:var(--fg); border-radius:999px; padding:6px 10px; cursor:pointer; font:inherit; font-size:.88rem; }
 .chip.on { border-color:var(--accent); background:#3a0f45; box-shadow:0 0 8px rgba(255,46,136,.5); }
 .panel { background:var(--card); border:2px solid var(--neon); box-shadow:0 0 12px rgba(0,229,255,.25); border-radius:10px; padding:14px; margin-top:12px; }
+.userbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; margin:0 52px 0 0; font-size:.9rem; }
+.userbar .btn { text-decoration:none; display:inline-block; }
+.wallet-frame { width:100%; min-height:900px; border:0; display:block; background:transparent; }
+body.embed .tabs { position:static !important; } body.embed main { padding-top:4px; padding-bottom:12px; } body.embed .embed-hide { display:none !important; }
 .search { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 10px; } .search input { flex:1; min-width:220px; background:var(--card); color:var(--fg); border:2px solid var(--neon); border-radius:6px; padding:9px 11px; font:inherit; }
 .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; } .dot.ok { background:var(--up); box-shadow:0 0 6px var(--up); } .dot.old { background:var(--gold); } .dot.bad { background:var(--down); }
 #guide { position:fixed; inset:0; z-index:80; background:rgba(5,3,20,.78); display:flex; align-items:center; justify-content:center; padding:16px; }
@@ -1101,7 +1113,26 @@ STATIC_PATHS.css = staticAsset("style", CSS, "css");
 STATIC_PATHS.portal = staticAsset("portal", CLIENT, "js");
 
 // Search, status and guide: a separate script, so they work even if a section above fails on odd data.
-const EXTRA = String.raw`// ---- ticker search: everything the portal knows about one ticker, and the member's own position ----
+const EXTRA = String.raw`// ---- the member's portfolio inside the portal (same site, so the frame grows to fit) ----
+(function walletFrame() {
+  const f = $("wallet-frame");
+  if (!f) return;
+  const load = () => { if (!f.src) f.src = f.dataset.src; };
+  const fit = () => { try { const d = f.contentDocument; if (d && d.body) f.style.height = Math.max(600, d.documentElement.scrollHeight) + "px"; } catch (e) {} };
+  f.addEventListener("load", () => {
+    fit();
+    try { new ResizeObserver(fit).observe(f.contentDocument.body); } catch (e) { setInterval(fit, 1000); }
+  });
+  document.querySelectorAll('#tabs .tab[data-tab="carteira"]').forEach((b) => b.addEventListener("click", load));
+  document.addEventListener("click", (e) => { if (e.target.closest('[data-go="carteira"]')) { e.preventDefault(); load(); openTab("carteira"); } });
+  if (location.hash === "#carteira") load();
+  document.addEventListener("click", (e) => {  // "Abrir a minha carteira" links open the tab instead of another page
+    const a = e.target.closest('a[href^="/c/"]');
+    if (a && !a.closest(".wallet-frame") && !/\/export/.test(a.getAttribute("href"))) { e.preventDefault(); load(); openTab("carteira"); window.scrollTo(0, 0); }
+  });
+})();
+
+// ---- ticker search: everything the portal knows about one ticker, and the member's own position ----
 (function search() {
   if (!$("search")) return;
   const N = NEWS || {}, M = MARKET || {}, P = PROPOSALS || {}, C = CALENDAR || {};

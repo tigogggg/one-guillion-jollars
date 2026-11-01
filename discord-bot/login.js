@@ -57,7 +57,7 @@ async function signIn(env, owner) {
   const tok = await currentToken(env, owner);
   const cur = tok ? await loadPortfolio(env, tok) : null;
   const sid = await newSession(env, owner, cur?.data.session_epoch);
-  return redirect(`/c/${tok}`, [cookie("ogj_s", sid, SESSION_DAYS * 86400), cookie("ogj_state", "", 0)]);
+  return redirect("/#carteira", [cookie("ogj_s", sid, SESSION_DAYS * 86400), cookie("ogj_state", "", 0), cookie("ogj_gp", "", 0)]);
 }
 
 async function startOAuth(env, request, provider, extra = {}) {
@@ -212,7 +212,7 @@ export async function loginRoute(request, env) {
   }
   if (path === "/entrar") {
     const session = await currentSession(env, request);
-    if (session && url.searchParams.get("trocar") == null) return redirect(`/c/${session.tok}`);
+    if (session && url.searchParams.get("trocar") == null) return redirect("/");
     return loginPage(env, request, url.searchParams.get("motivo"));
   }
   const on = await loginActive(env);

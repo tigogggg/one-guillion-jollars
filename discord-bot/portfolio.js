@@ -97,7 +97,10 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
   }
   if (rest === "" && request.method === "GET") {
     const login = await loginActive(env);
-    return html(portfolioPage(data, tok, { signedIn: mine, loginOn: login.any, googleOn: login.google, versions: hasDb(env) }));
+    const embed = new URL(request.url).searchParams.get("embed") === "1";
+    const resp = html(portfolioPage(data, tok, { signedIn: mine, loginOn: login.any, googleOn: login.google, versions: hasDb(env), embed }));
+    if (embed) resp.headers.set("X-Embed", "1");  // the worker allows this page inside the portal (same site only)
+    return resp;
   }
   if (rest === "/data" && request.method === "GET") return json(await snapshot(env, data));
   if (rest === "/history" && request.method === "GET") return json(await history(env, data));
@@ -692,7 +695,8 @@ async function history(env, data) {
 
 function portfolioPage(data, tok, opts = {}) {
   const body = `
-<header>
+<header class="embed-hide">
+  <p class="small"><a href="/">🏟️ One Guillion Jollars</a> · ${opts.signedIn ? '<a href="/sair">Sair</a>' : '<a href="/entrar">Entrar</a>'}</p>
   <h1>💼 Carteira de ${esc(data.name || "membro")}</h1>
   <p class="muted small">Privada: só quem tem este link a vê. Preços do Yahoo Finance, atualizados a cada minuto (normalmente com ~15 min de atraso face à bolsa). Valores totais em euros ao câmbio atual. Ferramenta educativa, não é aconselhamento.</p>
 </header>
@@ -825,14 +829,14 @@ function portfolioPage(data, tok, opts = {}) {
 const TOKEN = ${safeJson(tok)};
 </script>
 <script src="${CLIENT_PATH}"></script>`;
-  return page(`Carteira de ${data.name || "membro"}`, body, `<link rel="manifest" href="/c/${tok}/manifest.webmanifest"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png">
+  return page(`Carteira de ${data.name || "membro"}`, body, `${opts.embed ? '<base target="_top">' : ""}<link rel="manifest" href="/c/${tok}/manifest.webmanifest"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 <style>.form { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; align-items:end; }
 .form label { display:grid; gap:4px; font-size:.85rem; color:var(--muted); }
 .form input, .form select { background:#0b0820; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px; font:inherit; }
 .del { background:none; border:1px solid var(--down); color:var(--down); border-radius:4px; cursor:pointer; padding:2px 6px; }
-.act { background:none; border:1px solid var(--neon); color:var(--neon); border-radius:4px; cursor:pointer; padding:2px 6px; }</style>`);
+.act { background:none; border:1px solid var(--neon); color:var(--neon); border-radius:4px; cursor:pointer; padding:2px 6px; }</style>`, { embed: !!opts.embed });
 }
 
 const CLIENT = String.raw`
@@ -958,7 +962,7 @@ $("require-login").onchange = async (e) => {
 };
 $("logout-all").onclick = async () => {
   if (!confirm("Terminar a sessão em todos os aparelhos (incluindo este)?")) return;
-  try { await post({ action: "logout_all" }); alert("Sessões terminadas."); location.reload(); } catch (err) { alert(err.message); }
+  try { await post({ action: "logout_all" }); alert("Sessões terminadas."); (window.top || window).location.reload(); } catch (err) { alert(err.message); }
 };
 $("export-csv").onclick = () => {
   const cols = ["date", "side", "symbol", "qty", "price", "fee", "currency", "account", "note"];
@@ -972,7 +976,7 @@ $("export-csv").onclick = () => {
 $("delete-all").onclick = async () => {
   const typed = prompt("Isto apaga a carteira e tudo o que está associado, sem volta.\nEscreve APAGAR para confirmar:");
   if (typed !== "APAGAR") return;
-  try { await post({ action: "delete_all", confirm: "APAGAR" }); try { localStorage.removeItem("carteira"); } catch (e) {} location.href = "/sair"; } catch (err) { alert(err.message); }
+  try { await post({ action: "delete_all", confirm: "APAGAR" }); try { localStorage.removeItem("carteira"); } catch (e) {} (window.top || window).location.href = "/sair"; } catch (err) { alert(err.message); }
 };
 if ($("g-unlink")) $("g-unlink").onclick = async () => {
   if (!confirm("Desassociar a conta Google? Deixas de poder entrar com ela.")) return;
