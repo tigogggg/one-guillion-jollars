@@ -286,19 +286,41 @@ jobs:
           git commit -m "Agentes: revisão do Claude $(date -u +%F)"
           git pull --rebase origin main
           git push origin HEAD:main
-      - name: Encadear a próxima execução
-        if: ${{ success() && !inputs.ensaio && inputs.repetir != '' && inputs.repetir != '0' }}
+      # A series of runs (repetir, or a run another run of the series dispatched): dispatch the next one, or, when
+      # the series ends (converged, no runs left, or this one failed), say so in 🤖-agentes.
+      - name: Encadear a próxima execução ou avisar no fim
+        if: ${{ !cancelled() && !inputs.ensaio && ((inputs.repetir != '' && inputs.repetir != '0') || github.actor == 'github-actions[bot]') }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          REPETIR: ${{ inputs.repetir }}
+          REPETIR: ${{ inputs.repetir || '0' }}
           SEM_MUDANCAS: ${{ inputs.sem_mudancas || '0' }}
+          ESTADO: ${{ job.status }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: |
+          avisar() {  # $1 = ok|falhou, $2 = why the series ended
+            AVISO="$1" MOTIVO="$2" MUDARAM="${changed:-}" uv run python - <<'EOF'
+          import os, sys
+          sys.path.insert(0, "scripts")
+          from discord_post import GREEN, RED, embed, route, send
+          ok = os.environ["AVISO"] == "ok"
+          title = "✅ Preparação concluída: tudo operacional" if ok else "⚠️ Preparação interrompida"
+          text = (f"O pré-treino dos agentes terminou: {os.environ['MOTIVO']}. Os parâmetros escolhidos estão guardados e "
+                  "aplicados; os agentes usam-nos a partir da próxima sessão. O relatório do pré-treino tem os detalhes."
+                  if ok else f"O pré-treino dos agentes parou: {os.environ['MOTIVO']}. Os agentes continuam com os "
+                  "parâmetros da última execução que correu bem.")
+          fields = [("Estratégias que mudaram na última execução", os.environ["MUDARAM"] or "nenhuma")] if ok else None
+          sys.exit(send([embed(title, text, GREEN if ok else RED, fields=fields)], **route("agentes")))
+          EOF
+          }
+          if [ "$ESTADO" != success ]; then avisar falhou "uma execução não correu bem (ver o Actions)"; exit 0; fi
           jq -c '.strategies | map_values(.chosen)' agents/pretrain.json > "$RUNNER_TEMP/depois.json"
           changed=$(jq -rn --slurpfile a "$RUNNER_TEMP/antes.json" --slurpfile b "$RUNNER_TEMP/depois.json" \
             '[$b[0] | to_entries[] | select($a[0][.key] != .value) | .key] | join(", ")')
           echo "Estratégias com parâmetros novos: ${changed:-nenhuma}"
           if [ -n "$changed" ]; then quiet=0; else quiet=$((SEM_MUDANCAS + 1)); fi
-          if [ "$quiet" -ge 2 ]; then echo "Convergiu: 2 execuções seguidas sem mudanças."; exit 0; fi
+          if [ "$quiet" -ge 2 ]; then avisar ok "convergiu, 2 execuções seguidas sem melhorias"; exit 0; fi
+          if [ "$REPETIR" -le 0 ]; then avisar ok "fez todas as execuções pedidas"; exit 0; fi
           gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f repetir=$((REPETIR - 1)) -f sem_mudancas=$quiet
           echo "Pedi a próxima execução (depois dela ainda faltam $((REPETIR - 1)))."
