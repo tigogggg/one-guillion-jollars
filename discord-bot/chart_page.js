@@ -452,10 +452,10 @@ const highlight = new Set(DATA.highlight || []);
 let colour = 0;
 const traces = (DATA.series || []).map((s) => {
   const on = !highlight.size || highlight.has(s.name);
-  return { x: s.x, y: s.y, name: s.name, type: "scatter", mode: s.x.length < 3 ? "lines+markers" : "lines",
+  return { x: s.x, y: s.y, name: s.name, meta: s.name, type: "scatter", mode: s.x.length < 3 ? "lines+markers" : "lines",
     line: { width: on ? 2 : 1, color: on ? palette[colour++ % palette.length] : "#6d6f78" }, opacity: on ? 1 : 0.55,
     hovertemplate: "%{y:+.1f}%<extra>" + esc(s.name) + "</extra>" };
-}).concat((DATA.references || []).map((s, i) => ({ x: s.x, y: s.y, name: s.name, type: "scatter", mode: "lines",
+}).concat((DATA.references || []).map((s, i) => ({ x: s.x, y: s.y, name: s.name, meta: s.name, type: "scatter", mode: "lines",
   line: { width: 1.2, dash: i ? "dot" : "dash", color: i ? "#b5bac1" : "#80848e" },
   hovertemplate: "%{y:+.1f}%<extra>" + esc(s.name) + "</extra>" })));
 const xs = traces.flatMap((t) => [t.x[0], t.x[t.x.length - 1]]).filter(Boolean).sort();
@@ -473,6 +473,53 @@ else Plotly.newPlot(elId, traces, {
   yaxis: { gridcolor: "#2e2763", zerolinecolor: "#80848e", ticksuffix: "%" },
   legend: narrow ? { orientation: "h", y: -0.12, font: { size: 11 } } : { bgcolor: "rgba(0,0,0,0)" },
 }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] });
+if (window.Plotly) intervalLegend(elId, traces);
+}
+
+// Legend in the order of the lines (best result on top) with each one's result over the visible interval:
+// updated when the interval changes (zoom, drag, 1A/5A/10A/Tudo).
+function intervalLegend(elId, traces) {
+  const el = $(elId);
+  const day = (v) => String(v).slice(0, 10);
+  const fmtDay = (d) => d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(0, 4);
+  let busy = false;
+  const apply = (from, to) => {
+    const res = traces.map((t) => {
+      let i0 = -1, i1 = -1;
+      for (let i = 0; i < t.x.length; i++) {
+        const d = day(t.x[i]);
+        if (t.y[i] == null || (from && d < from) || (to && d > to)) continue;
+        if (i0 < 0) i0 = i;
+        i1 = i;
+      }
+      return i0 < 0 || i1 <= i0 ? null : ((1 + t.y[i1] / 100) / (1 + t.y[i0] / 100) - 1) * 100;
+    });
+    const order = res.map((r, i) => [r == null ? -Infinity : r, i]).sort((a, b) => b[0] - a[0]);
+    const rank = []; order.forEach(([, i], k) => { rank[i] = k + 1; });
+    const names = traces.map((t, i) => t.meta + (res[i] == null ? "" : " · " + (res[i] > 0 ? "+" : "") + fmtNum(res[i], 1) + "%"));
+    const xs = traces.flatMap((t) => t.x.length ? [day(t.x[0]), day(t.x[t.x.length - 1])] : []).sort();
+    const a = from && from > xs[0] ? from : xs[0], b = to && to < xs[xs.length - 1] ? to : xs[xs.length - 1];
+    const layout = { "legend.title.text": a && b ? "<b>" + fmtDay(a) + " → " + fmtDay(b) + "</b>" : "" };
+    if (from || to) {  // fit the vertical axis and the date labels to the visible interval
+      let lo = Infinity, hi = -Infinity;
+      traces.forEach((t) => t.x.forEach((x, i) => { const d = day(x); if (t.y[i] != null && (!from || d >= from) && (!to || d <= to)) { lo = Math.min(lo, t.y[i]); hi = Math.max(hi, t.y[i]); } }));
+      if (isFinite(lo)) { const pad = (hi - lo) * 0.06 || 1; layout["yaxis.range"] = [lo - pad, hi + pad]; }
+      const years = (Date.parse(b) - Date.parse(a)) / 3.15e10;
+      layout["xaxis.tickformat"] = years > 3 ? "%Y" : years > 0.4 ? "%m/%y" : "%d/%m";
+    } else {
+      layout["yaxis.autorange"] = true;
+    }
+    busy = true;
+    Plotly.update(el, { name: names, legendrank: rank }, layout)
+      .finally(() => { busy = false; });
+  };
+  apply(null, null);
+  el.on("plotly_relayout", (ev) => {
+    if (busy || !ev) return;
+    if (ev["xaxis.autorange"]) return apply(null, null);
+    const r = ev["xaxis.range"] || (ev["xaxis.range[0]"] !== undefined ? [ev["xaxis.range[0]"], ev["xaxis.range[1]"]] : null);
+    if (r) apply(day(r[0]), day(r[1]));
+  });
 }
 lineChart("chart", DATA);
 
@@ -485,7 +532,7 @@ $("chips").innerHTML = agents.map((a, i) =>
   '<button class="chip" data-i="' + i + '">' + esc(a.emoji + " " + a.name) + ' <span class="' + cls(headline(a)) + '">' +
   fmtPct(headline(a)) + '</span></button>').join("");
 $("chips").addEventListener("click", (e) => { const b = e.target.closest(".chip"); if (b) show(+b.dataset.i, true); });
-if (window.Plotly) $("chart").on("plotly_click", (ev) => { const a = byName[ev.points[0].data.name]; if (a) show(agents.indexOf(a), true); });
+if (window.Plotly) $("chart").on("plotly_click", (ev) => { const a = byName[ev.points[0].data.meta || ev.points[0].data.name]; if (a) show(agents.indexOf(a), true); });
 
 const GLOSS = {
   "Stage 2": "Fase de tendência de alta: preço acima da média de 50 dias, esta acima da de 200, e a de 200 a subir.",
