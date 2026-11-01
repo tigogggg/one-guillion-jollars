@@ -116,7 +116,48 @@ def load_constituents() -> list[dict]:
 
 
 def download_history(tickers: list[str], period: str = "1y") -> dict[str, pd.DataFrame]:
-    """Daily OHLCV per ticker; tickers Yahoo returns nothing for are left out."""
+    """Daily OHLCV per ticker; tickers Yahoo returns nothing for are left out.
+
+    With PRICE_CACHE_DIR set (local training), each ticker's history is kept on disk for the day, so several
+    strategies trained in parallel download the prices once.
+    """
+    import os
+    import pickle
+    from pathlib import Path
+
+    from datetime import date as _date
+
+    root = os.environ.get("PRICE_CACHE_DIR")
+    if not root and os.environ.get("PRETRAIN_SEED") and not os.environ.get("GITHUB_ACTIONS"):  # a local pre-training
+        root = str(Path(__file__).resolve().parents[1] / "out" / "local" / "precos" / _date.today().isoformat())
+    cache = Path(root) / period if root else None
+    out: dict[str, pd.DataFrame] = {}
+    if cache:
+        cache.mkdir(parents=True, exist_ok=True)
+        missing = []
+        for t in tickers:
+            f = cache / f"{t.replace('^', '_').replace('=', '_')}.pkl"
+            if f.exists():
+                try:
+                    df = pickle.loads(f.read_bytes())
+                    if df is not None:
+                        out[t] = df
+                    continue
+                except Exception:  # noqa: BLE001 - a broken file is downloaded again
+                    pass
+            missing.append(t)
+        fresh = _download(missing, period)
+        for t in missing:  # a ticker without data is remembered too (None), so it is not asked for again today
+            f = cache / f"{t.replace('^', '_').replace('=', '_')}.pkl"
+            tmp = f.with_suffix(f".{os.getpid()}.tmp")
+            tmp.write_bytes(pickle.dumps(fresh.get(t)))
+            os.replace(tmp, f)
+        out.update(fresh)
+        return out
+    return _download(tickers, period)
+
+
+def _download(tickers: list[str], period: str) -> dict[str, pd.DataFrame]:
     out: dict[str, pd.DataFrame] = {}
     for i in range(0, len(tickers), 100):
         chunk = tickers[i : i + 100]

@@ -161,6 +161,8 @@ def main() -> int:
     if "indexador" not in strategies:
         strategies.append("indexador")  # the benchmark the others are scored against
     work = REPO / "out" / "local"
+    # prices downloaded once a day and shared by the strategies trained in parallel
+    os.environ.setdefault("PRICE_CACHE_DIR", str(work / "precos" / datetime.now().strftime("%Y-%m-%d")))
     ctx = work / "context.csv"
     work.mkdir(parents=True, exist_ok=True)
     print("Contexto de mercado (uma vez)...", flush=True)
