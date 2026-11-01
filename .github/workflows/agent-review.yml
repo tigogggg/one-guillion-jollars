@@ -1,0 +1,45 @@
+name: Revisão dos agentes (Claude)
+run-name: "Revisão dos agentes pelo Claude"
+
+# Claude reads the last pre-training (agents/pretrain.json) and the live record, writes an
+# assessment per agent and proposes parameter sets with their hypotheses
+# (agents/claude_review.json). The next pre-training tests them like any other candidate:
+# nothing is applied because Claude says so. Also runs at the end of every pre-training.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agents-state
+  cancel-in-progress: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Instalar o Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Rever
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: uv run python scripts/agent_review.py
+      - name: Guardar as propostas
+        if: ${{ !cancelled() }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add agents/claude_review.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Agentes: revisão do Claude $(date -u +%F)"
+          git pull --rebase origin main
+          git push origin HEAD:main

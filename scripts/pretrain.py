@@ -349,6 +349,29 @@ def variants(strategy: str, n: int) -> list[dict]:
     return out
 
 
+REVIEW_PATH = agents.REPO_AGENTS / "claude_review.json"
+
+
+def claude_candidates(strategy: str, base: dict) -> list[dict]:
+    """Claude's proposals for this strategy (agent_review.py), on top of the parameters chosen last time.
+
+    They only join the candidates: they pass or fail the same tests as the random ones.
+    """
+    try:
+        review = json.loads(REVIEW_PATH.read_text())
+        previous = json.loads(REPORT_PATH.read_text()).get("strategies", {}).get(strategy, {}).get("chosen") or {}
+    except (OSError, ValueError):
+        return []
+    start = {**base, **{k: v for k, v in previous.items() if k in base}}
+    out = []
+    for prop in (review.get("estrategias", {}).get(strategy) or {}).get("propostas") or []:
+        params = {k: v for k, v in (prop.get("params") or {}).items() if k in base and k in PARAM_BOUNDS}
+        cand = {**start, **params}
+        if params and cand != start and all(cand != c["params"] for c in out):
+            out.append({"params": cand, "changes": params, "hipotese": prop.get("hipotese", ""), "espera": prop.get("espera", "")})
+    return out
+
+
 def nudge(params: dict, rng: random.Random, size: float = 0.10) -> dict:
     """A neighbour: every numeric parameter that is on moves by up to +/-size, within its bounds."""
     p = dict(params)
@@ -499,6 +522,9 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
         return [r["points"] for r in runs], sum(r["trades"] for r in runs)
 
     pool = variants(strategy, VARIANTS_LONG if len(blocks) > LONG_YEARS else VARIANTS)
+    n_random = len(pool)
+    claude = claude_candidates(strategy, pool[0]) if strategy != "indexador" else []
+    pool += [c["params"] for c in claude]
     scored = [run_years(p) for p in pool]
     base = scored[0][0]
     need = -(-3 * len(blocks) // 4)  # ceil(0.75 x years)
@@ -586,6 +612,16 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
             adopt = True
 
     importance = parameter_importance(strategy, chosen, train_mk, valid, chosen_valid["points"])
+    claude_log = []
+    for j, c in enumerate(claude):
+        i = n_random + j
+        years, trades = scored[i]
+        claude_log.append({
+            "changes": c["changes"], "hipotese": c["hipotese"], "espera": c["espera"],
+            "beats_years": sum(a > b for a, b in zip(years, base)), "years": len(years), "trades": trades,
+            "score": round(weighted(years), 1), "score_original": round(weighted(base), 1),
+            "consistent": ok(i), "picked": best_i == i, "adopted": adopt and best_i == i,
+        })
 
     print(f"{strategy}: {len(pool)} candidatos; anos {scored[best_i][0]} vs {base}; vizinhos {plateau.get(best_i)}; "
           f"crises {crashes.get(best_i)}; exame {best_valid['points']} vs {default_valid['points']}; "
@@ -599,7 +635,8 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
         "valid": {"default": strip(default_valid), "best": strip(chosen_valid if adopt else best_valid)},
         "crises": crashes.get(best_i if adopt else 0, crashes[0]),
         "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried, "importance": importance, "greedy": greedy_log,
-        "search": {"candidates": len(pool), "generation2": len(pool) - len(scored[:1]) - (VARIANTS_LONG if len(blocks) > LONG_YEARS else VARIANTS),
+        "claude": claude_log,
+        "search": {"candidates": len(pool), "generation2": len(pool) - n_random - len(claude), "claude": len(claude),
                    "plateau": plateau.get(best_i), "recency": RECENCY, "min_trades": MIN_TRADES},
         "year": strip(full), "curve": light_curve(full["curve"]),
     }
@@ -778,6 +815,16 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
             turned_on.append(f"{cfg['emoji']} {cfg['name']}: {', '.join(kept)}")
     fields.append(("🎛️ Fase final: regras ligadas (só se melhoram o treino sem piorar o exame nem as crises)",
                    "\n".join(turned_on) or "nenhuma passou os três testes"))
+    reviewed = []
+    for strategy, r in results["strategies"].items():
+        props = r.get("claude") or []
+        if props:
+            cfg = by_strategy.get(strategy, {"emoji": "🤖", "name": strategy})
+            marks = " ".join("✅" if p["adopted"] else "🟡" if p["consistent"] else "❌" for p in props)
+            reviewed.append(f"{cfg['emoji']} {cfg['name']}: {marks}")
+    if reviewed:
+        fields.append(("🤖 Propostas do Claude (✅ adotada · 🟡 consistente mas não escolhida · ❌ falhou os anos)",
+                       "\n".join(reviewed)[:1024]))
     summary = importance_summary(results)
     if summary:
         import strategy_docs
@@ -826,6 +873,8 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
                 "importance": r.get("importance") or {},
                 "zones": {z: {"kept": v["kept"], "diff": v["diff"]} for z, v in (r.get("zones") or {}).items()},
                 "greedy": r.get("greedy") or [],
+                "claude": r.get("claude") or [],
+                "review": review_for(strategy),
             },
         })
     link = interactive.publish(f"🧠 Pré-treino dos agentes: {years:g} anos", series, refs, top, agents=details, kind="pretreino",
@@ -837,6 +886,17 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
     if link:
         card["url"] = link  # the title opens the interactive chart too
     return [card], files
+
+
+def review_for(strategy: str) -> dict:
+    """Claude's assessment of this strategy, for the portal."""
+    try:
+        review = json.loads(REVIEW_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
+    r = review.get("estrategias", {}).get(strategy) or {}
+    return {k: r[k] for k in ("parecer", "fortes", "fracos", "manter", "regras_novas") if k in r} | (
+        {"date": review.get("date")} if r else {})
 
 
 REPORT_TITLE = "🧠 Pré-treino dos agentes"  # only the latest report stays in the channel

@@ -258,6 +258,17 @@ KV (`analysis-req:<id>`) and starts `portfolio-analysis.yml` with only the id;
 `scripts/portfolio_analysis.py` stores the answer under `analysis-res:<id>` and
 the page polls for it. At most 3 analyses per member per 24 hours.
 
+**Claude reviews the agents.** At the end of every pre-training (and by hand
+with `agent-review.yml`), `scripts/agent_review.py` gives Claude each
+strategy's results (20 years, exam, crises, Monte Carlo, what each parameter is
+worth, the final phase, zone parameters) and its live record. Claude writes an
+assessment per agent and up to 3 parameter sets per strategy, each with its
+hypothesis (`agents/claude_review.json`, validated: known parameters only,
+within bounds). The next pre-training adds them to the candidates on top of the
+last chosen parameters; they are adopted only if they pass the same tests as
+any other candidate. The report and the portal show each proposal's outcome.
+Claude proposes; the backtest decides.
+
 `/carteira` works only inside the server, so only its members get one: each
 member gets one private link (`/c/<token>`, KV `portfolio-user:<discord id>`
 and `portfolio:<token>`), `novo_link:True` replaces it.

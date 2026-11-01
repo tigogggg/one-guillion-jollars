@@ -512,6 +512,16 @@ function backtestHtml(a) {
       table(["Regra", "Nível", "Treino", "Exame", "Ficou?"], b.greedy.map((t) => ['<code>' + esc(t.param) + '</code>', esc(t.value),
         '<span class="' + cls(t.train_gain) + '">' + (t.train_gain > 0 ? "+" : "") + fmtNum(t.train_gain, 0) + '</span>',
         t.exam_gain == null ? "—" : '<span class="' + cls(t.exam_gain) + '">' + (t.exam_gain > 0 ? "+" : "") + fmtNum(t.exam_gain, 0) + '</span>', t.kept ? "✅" : "—"]), [2, 3]) : "") +
+    (b.review && b.review.parecer ? '<h3>🤖 Revisão do Claude' + (b.review.date ? ' <span class="muted small">' + esc(b.review.date) + '</span>' : '') + '</h3><p>' + esc(b.review.parecer) + '</p>' +
+      ((b.review.fortes || []).length ? '<p><b>Pontos fortes:</b> ' + b.review.fortes.map(esc).join(" · ") + '</p>' : "") +
+      ((b.review.fracos || []).length ? '<p><b>Pontos fracos:</b> ' + b.review.fracos.map(esc).join(" · ") + '</p>' : "") +
+      (b.review.manter === false ? '<p class="down">⚠️ O Claude sugere repensar esta estratégia.</p>' : "") +
+      ((b.review.regras_novas || []).length ? '<p><b>Regras novas sugeridas:</b> ' + b.review.regras_novas.map(esc).join(" · ") + '</p>' : "") : "") +
+    ((b.claude || []).length ? '<h3>🧪 Propostas do Claude no treino</h3><p class="muted small">O Claude propõe; o backtest decide. Cada proposta entrou como candidato e passou pelos mesmos testes: bater os originais em 3 de cada 4 anos, robustez, crises e exame.</p>' +
+      table(["Alterações", "Hipótese", "Anos ganhos", "Pontuação", "Resultado"], b.claude.map((c) => [
+        Object.entries(c.changes || {}).map(([k, v]) => '<code>' + esc(k) + ' ' + esc(v) + '</code>').join(" "), esc(c.hipotese || ""),
+        esc(c.beats_years) + "/" + esc(c.years), '<span class="' + cls(c.score - c.score_original) + '">' + fmtNum(c.score, 0) + '</span> vs ' + fmtNum(c.score_original, 0),
+        c.adopted ? "✅ adotada" : c.picked ? "🟡 escolhida, falhou o exame" : c.consistent ? "🟡 consistente, não foi a melhor" : "❌ falhou os anos"]), [2, 3]) : "") +
     (Object.keys(b.importance || {}).length ? '<h3>🔬 O que cada parâmetro vale</h3><p class="muted small">Cada parâmetro ligado/desligado com o resto igual: pontos que acrescenta (ou acrescentaria, se estiver desligado) nos anos de treino e no exame.</p>' +
       table(["Parâmetro", "Estado", "Valor", "Treino", "Exame"], Object.entries(b.importance).sort((x, y) => y[1].train - x[1].train).map(([k, v]) =>
         ['<code>' + esc(k) + '</code>', v.used ? "em uso" : "testado (desligado)", esc(v.value), '<span class="' + cls(v.train) + '">' + (v.train > 0 ? "+" : "") + fmtNum(v.train, 0) + '</span>',

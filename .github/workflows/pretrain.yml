@@ -37,6 +37,10 @@ on:
         description: "Publicar o relatório no canal 🧪-testes"
         type: boolean
         default: false
+      revisao_claude:
+        description: "No fim, o Claude revê os resultados e propõe parâmetros para o próximo treino"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -162,5 +166,23 @@ jobs:
           git add agents/
           git diff --cached --quiet && exit 0
           git commit -m "Agentes: pré-treino $(date -u +%F)"
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - name: Instalar o Claude Code
+        if: ${{ success() && inputs.revisao_claude != false }}
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Revisão do Claude (propostas para o próximo treino)
+        if: ${{ success() && inputs.revisao_claude != false }}
+        continue-on-error: true  # the training is already saved; a failed review only skips the proposals
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: |
+          git pull --rebase origin main
+          uv run python scripts/agent_review.py
+          git add agents/claude_review.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Agentes: revisão do Claude $(date -u +%F)"
           git pull --rebase origin main
           git push origin HEAD:main
