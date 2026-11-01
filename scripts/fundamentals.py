@@ -321,7 +321,11 @@ def download(symbols: list[str], pause: float = 0.12) -> pd.DataFrame:
     """Companyfacts for every symbol the SEC can map to a CIK; one request each (SEC limit: 10 per second)."""
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, deflate"})
-    tickers = session.get(TICKERS_URL, timeout=60).json()
+    resp = session.get(TICKERS_URL, timeout=60)
+    if resp.status_code != 200 or "json" not in resp.headers.get("Content-Type", ""):
+        raise RuntimeError(f"a SEC recusou o pedido ({resp.status_code}). Define o secret SEC_USER_AGENT com um nome e um email "
+                           "de contacto, como a SEC pede (ex.: 'OneGuillionJollars nome@exemplo.com').")
+    tickers = resp.json()
     cik_of = {v["ticker"].upper().replace(".", "-"): int(v["cik_str"]) for v in tickers.values()}
     frames, missing, failed = [], [], []
     for i, sym in enumerate(sorted(set(symbols))):
@@ -399,7 +403,13 @@ def main() -> int:
         except requests.RequestException as e:
             print(f"::warning title=Fundamentos::sem composição histórica ({e})")
         symbols = sorted(symbols)
-    df = download(symbols)
+    if "@" not in USER_AGENT:
+        print("::warning title=Fundamentos::sem email no SEC_USER_AGENT: a SEC costuma recusar pedidos sem contacto.")
+    try:
+        df = download(symbols)
+    except RuntimeError as e:
+        print(f"::error title=Fundamentos::{e}")
+        return 1
     if df.empty:
         print("::error title=Fundamentos::nada descarregado")
         return 1
