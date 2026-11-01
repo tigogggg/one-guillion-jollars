@@ -51,11 +51,11 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
   const latest = (await env.CONFIG.get("chart-latest:liga", "json")) || (await env.CONFIG.get("chart-latest:pretreino", "json"));
   const data = (latest && (await env.CONFIG.get(`chart:${latest}`, "json"))) ||
     { title: "Liga dos agentes", subtitle: "ainda sem dados", updated: new Date().toISOString(), series: [], agents: [] };
-  const [news, market, proposals, calendar, geo] = await Promise.all(["news", "market", "proposals", "calendar", "geo"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
+  const [news, market, proposals, calendar, geo, evolution] = await Promise.all(["news", "market", "proposals", "calendar", "geo", "evolution"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
   const ptId = await env.CONFIG.get("chart-latest:pretreino", "json");
   const pretrain = ptId && ptId !== latest ? await env.CONFIG.get(`chart:${ptId}`, "json") : null;
   const user = session ? { name: session.data.name || "membro", wallet: `/c/${session.tok}` } : null;
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo,
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution,
                                                                        manifest: token === null ? "/manifest.webmanifest" : `/p/${token}/manifest.webmanifest` }));
 }
 
@@ -261,6 +261,8 @@ ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pret
   <div id="pt-chart" class="chart"></div>
   <h2>📊 Desempenho por período</h2>
   <div id="pt-perf"></div>
+  <h2>📈 Evolução entre execuções do treino</h2>
+  <div id="evo"></div>
   <h2>🔎 Resultados do treino por agente</h2>
   <div id="pt-chips" class="chips"></div>
   <div id="pt-detail"></div>
@@ -306,6 +308,7 @@ const PROPOSALS = ${safeJson(extras.proposals || null)};
 const CALENDAR = ${safeJson(extras.calendar || null)};
 const PRETRAIN = ${safeJson(extras.pretrain || null)};
 const GEO = ${safeJson(extras.geo || null)};
+const EVOLUTION = ${safeJson(extras.evolution || null)};
 </script>
 <script src="${STATIC_PATHS.portal}"></script>
 ${portal ? `<script src="${STATIC_PATHS.extra}"></script>` : ""}`;
@@ -1190,7 +1193,41 @@ STATIC_PATHS.css = staticAsset("style", CSS, "css");
 STATIC_PATHS.portal = staticAsset("portal", CLIENT, "js");
 
 // Search, status and guide: a separate script, so they work even if a section above fails on odd data.
-const EXTRA = String.raw`// ---- the member's portfolio inside the portal (same site, so the frame grows to fit) ----
+const EXTRA = String.raw`// ---- evolution of the agents between pre-training runs ----
+(function evolutionChart() {
+  const box = $("evo"), E = EVOLUTION;
+  if (!box) return;
+  if (!E || !(E.runs || []).length) { box.innerHTML = '<p class="muted">O histórico aparece depois da próxima publicação do pré-treino.</p>'; return; }
+  const people = {};
+  ((PRETRAIN && PRETRAIN.agents) || []).concat(agents || []).forEach((a) => { if (a && a.id) people[a.id] = a; });
+  const label = (s) => people[s] ? people[s].emoji + " " + people[s].name : s;
+  const metrics = [["exam", "Pontos no exame (último ano, fora do treino)"], ["ret", "Rentabilidade em 20 anos (%)"], ["dd", "Queda máxima em 20 anos (%)"], ["sharpe", "Sharpe em 20 anos"]];
+  const fmtRun = (r, i) => (i + 1) + "ª · " + new Date(r.at).toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" }) + (r.source === "local" ? " 💻" : "");
+  box.innerHTML = '<p class="muted small">Cada ponto é uma execução do pré-treino (💻 = no PC). Uma execução só troca os parâmetros de um agente quando encontra melhores no treino e no exame em conjunto.</p>' +
+    '<div class="filters"><select id="evo-m">' + metrics.map(([k, l]) => '<option value="' + k + '">' + esc(l) + '</option>').join("") + '</select></div>' +
+    '<div id="evo-chart" class="chart" style="height:420px"></div><h3>🔧 O que mudou em cada agente</h3><div id="evo-changes"></div>';
+  const x = E.runs.map(fmtRun);
+  const draw = () => {
+    const m = $("evo-m").value;
+    const traces = Object.entries(E.series).filter(([s]) => s !== "indexador" || m !== "exam").map(([s, rows]) => ({
+      x, y: rows.map((r) => r ? r[m] : null), name: label(s), type: "scatter", mode: "lines+markers", connectgaps: true,
+      hovertemplate: "%{y}<extra>" + esc(label(s)) + "</extra>" }));
+    if (!window.Plotly) { $("evo-chart").innerHTML = '<p class="muted">Gráfico indisponível.</p>'; return; }
+    Plotly.newPlot("evo-chart", traces, { paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 11 },
+      margin: { l: 48, r: 10, t: 10, b: 60 }, xaxis: { gridcolor: "#2e2763", tickangle: -30 }, yaxis: { gridcolor: "#2e2763", zerolinecolor: "#80848e" },
+      legend: window.innerWidth < 640 ? { orientation: "h", y: -0.35 } : { bgcolor: "rgba(0,0,0,0)" } }, { responsive: true, displaylogo: false });
+  };
+  $("evo-m").addEventListener("input", draw);
+  draw();
+  const rows = Object.entries(E.changes || {}).flatMap(([s, list]) => list.slice(-3).map((c) => [c.run, s, c]))
+    .sort((a, b) => b[0] - a[0]).slice(0, 40);
+  $("evo-changes").innerHTML = rows.length ? table(["Execução", "Agente", "Ligou", "Desligou", "Ajustou"], rows.map(([run, s, c]) => [
+    esc(fmtRun(E.runs[run], run)), esc(label(s)), c.on.map((k) => '<code>' + esc(k) + '</code>').join(" ") || "—",
+    c.off.map((k) => '<code>' + esc(k) + '</code>').join(" ") || "—", c.moved.map((k) => '<code>' + esc(k) + '</code>').join(" ") || "—"])) :
+    '<p class="muted">Ainda sem mudanças registadas.</p>';
+})();
+
+// ---- the member's portfolio inside the portal (same site, so the frame grows to fit) ----
 (function walletFrame() {
   const f = $("wallet-frame");
   if (!f) return;

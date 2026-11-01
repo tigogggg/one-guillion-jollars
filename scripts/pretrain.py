@@ -1093,6 +1093,12 @@ REPORT_TITLE = "🧠 Pré-treino dos agentes"  # only the latest report stays in
 
 def post_report(results: dict, applied: list[str] | None, dry_run: bool, channel: str) -> int:
     """The report, with a button to its interactive chart, replacing the previous report in that channel."""
+    try:  # the evolution between runs, for the portal (needs the Worker's KV credentials)
+        import evolution
+
+        interactive.publish_section("evolution", evolution.compact(evolution.load()))
+    except Exception as e:  # noqa: BLE001 - the report matters more
+        print(f"WARN: evolução: {e!r}", file=sys.stderr)
     embeds, files = report(results, applied)
     buttons = [(interactive.BUTTON, embeds[0]["url"])] if embeds and embeds[0].get("url") else None
     return send(embeds, files, dry_run=dry_run, **route(channel), replace=REPORT_TITLE, buttons=buttons)
@@ -1104,6 +1110,9 @@ def finish(results: dict, today: date, apply_params: bool, dry_run: bool, partia
         previous = json.loads(REPORT_PATH.read_text())
         results = {**results, "strategies": {**previous.get("strategies", {}), **results["strategies"]}}
     REPORT_PATH.write_text(json.dumps(results, indent=1, default=str) + "\n")
+    import evolution
+
+    evolution.append(json.loads(REPORT_PATH.read_text()), SEED.lstrip("-"))
     applied = apply(results, today) if apply_params else None
     return post_report(results, applied, dry_run, "agentes")
 

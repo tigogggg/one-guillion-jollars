@@ -2094,6 +2094,9 @@ def main() -> int:
         interactive.publish_section("market", {**opportunities.build(mkt, holders, earnings.next_earnings_many),
                                                "context": dict(mkt.context), "sectors": sector_table(mkt)})
         interactive.publish_section("fundamentals", fundamentals_table(mkt))
+        import evolution
+
+        interactive.publish_section("evolution", evolution.compact(evolution.load()))
         return 0
     try:
         if a.mode == "daily":
