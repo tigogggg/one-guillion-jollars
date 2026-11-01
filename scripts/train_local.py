@@ -12,6 +12,7 @@ pretrain.yml does, on this machine:
 5. with --push, commits and pushes agents/ so the live agents use the new parameters.
 
     uv run python scripts/train_local.py --execucoes 3 --paralelo 2 --push
+    uv run python scripts/train_local.py --ate-convergir --paralelo 2 --push   # until no strategy improves
 
 Needs: git, uv and internet (Yahoo Finance, FRED, the Geopolitical Risk index). Discord posting is skipped
 unless DISCORD_WEBHOOK_URL / DISCORD_BOT_TOKEN are set in the environment.
@@ -71,6 +72,24 @@ def train_all(strategies: list[str], years: int, parallel: int, seed: str, ctx: 
     return failed
 
 
+def chosen_params() -> dict:
+    """{strategy: chosen parameters} from the saved pre-training (to see what a run changed)."""
+    path = REPO / "agents" / "pretrain.json"
+    if not path.exists():
+        return {}
+    return {s: r.get("chosen") for s, r in json.loads(path.read_text()).get("strategies", {}).items() if "year" in r}
+
+
+def push(a, i: int) -> None:
+    if not a.push:
+        return
+    run(["git", "add", "agents/"])
+    if subprocess.call(["git", "diff", "--cached", "--quiet"], cwd=REPO) != 0:
+        run(["git", "commit", "-m", f"Agentes: pré-treino local {datetime.now():%Y-%m-%d} (execução {i})"])
+        run(["git", "pull", "--rebase", "origin", "main"])
+        run(["git", "push", "origin", "HEAD:main"])
+
+
 def summary() -> None:
     report = json.loads((REPO / "agents" / "pretrain.json").read_text())
     rows = [(s, r) for s, r in report["strategies"].items() if "year" in r]
@@ -91,6 +110,9 @@ def main() -> int:
     os.environ.setdefault("PYTHONWARNINGS", "ignore")  # yfinance's pandas deprecation warnings flood the terminal
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--execucoes", type=int, default=3, help="Runs in a row, each with a new seed (default 3)")
+    parser.add_argument("--ate-convergir", action="store_true",
+                        help="Keep running until no strategy finds better parameters in PACIENCIA runs in a row (at most --execucoes)")
+    parser.add_argument("--paciencia", type=int, default=2, help="Runs without any improvement before stopping (default 2)")
     parser.add_argument("--paralelo", type=int, default=2, help="Strategies trained at the same time (default 2; ~4 GB each)")
     parser.add_argument("--anos", type=int, default=20)
     parser.add_argument("--estrategias", default=",".join(STRATEGIES), help="Comma-separated (default: all trainable)")
@@ -107,7 +129,11 @@ def main() -> int:
     if run(PY + ["scripts/context.py", "--guardar", str(ctx)]) != 0:
         return 1
     dry = [] if os.environ.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_BOT_TOKEN") else ["--dry-run"]
+    if a.ate_convergir and a.execucoes == 3:
+        a.execucoes = 12  # a ceiling; it usually stops much earlier
+    quiet = 0
     for i in range(1, a.execucoes + 1):
+        before = chosen_params()
         seed = datetime.now().strftime("%Y%m%d%H%M%S")
         out = work / f"run{i}-{seed}"
         print(f"\n=== Execução {i} de {a.execucoes} (semente {seed}) ===", flush=True)
@@ -118,14 +144,17 @@ def main() -> int:
             print(f"Não consegui juntar; ver {out / 'juntar.log'}", flush=True)
             return 1
         summary()
+        after = chosen_params()
+        changed = sorted(k for k in after if after.get(k) != before.get(k))
+        print(f"Estratégias com parâmetros melhores nesta execução: {', '.join(changed) or 'nenhuma'}", flush=True)
+        quiet = 0 if changed else quiet + 1
+        if a.ate_convergir and quiet >= a.paciencia:
+            print(f"Convergiu: {a.paciencia} execuções seguidas sem melhorias.", flush=True)
+            push(a, i)
+            break
         if a.revisao:
             run(PY + ["scripts/agent_review.py"] + (["--dry-run"] if dry else []))
-        if a.push:
-            run(["git", "add", "agents/"])
-            if subprocess.call(["git", "diff", "--cached", "--quiet"], cwd=REPO) != 0:
-                run(["git", "commit", "-m", f"Agentes: pré-treino local {datetime.now():%Y-%m-%d} (execução {i})"])
-                run(["git", "pull", "--rebase", "origin", "main"])
-                run(["git", "push", "origin", "HEAD:main"])
+        push(a, i)
     print("\nFeito." + ("" if a.push else " Para os agentes ao vivo usarem os parâmetros: git add agents/ && git commit -m pre-treino && git push"))
     return 0
 
