@@ -786,8 +786,10 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
         if previous != chosen:
             prev_exam = simulate(strategy, previous, valid)
             prev_obj = overall(run_years(previous)[0], prev_exam["points"])
-            if prev_obj > new_obj:
-                kept_previous = {"previous": round(prev_obj, 1), "new": round((kept_previous or {}).get("new", new_obj), 1)}
+            # the new choice must not be worse on the exam, nor overall (training and exam together)
+            if prev_exam["points"] > chosen_valid["points"] or prev_obj > new_obj:
+                kept_previous = {"previous": round(prev_obj, 1), "new": round((kept_previous or {}).get("new", new_obj), 1),
+                                 "exam_previous": prev_exam["points"], "exam_new": chosen_valid["points"]}
                 new_obj = prev_obj
                 chosen, chosen_valid, adopt = previous, prev_exam, True
                 full = simulate(strategy, chosen, markets)
