@@ -14,6 +14,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado, só leitura)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          persist-credentials: false
+          path: agents
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
       - name: Carregar o histórico de alertas

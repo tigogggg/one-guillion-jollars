@@ -17,6 +17,9 @@ Reply to him in **pt-PT**, short and clear; commit messages in English.
 - Data in git: `data/context/*.csv`, `data/fundamentals/fundamentals.csv.gz` (refreshed weekly by `context-data.yml`).
 - Agents state: `agents/config.json`, `agents/state.json`, `agents/pretrain.json` (latest pre-training),
   `agents/pretrain_history.json` (one entry per run), `agents/search.json` (search intensity: local 2×, Actions 0.5×).
+  `agents/` is NOT in this public repo: it is a clone of the private repo `tigogggg/one-guillion-jollars-dados`
+  (gitignored here; commit and push inside `agents/`). Workflows check it out with the deploy key `DADOS_DEPLOY_KEY`.
+  Pre-training artifacts are encrypted with `BACKUP_KEY`; Actions logs are public, so never print results there.
 
 ## Rules
 
@@ -31,7 +34,7 @@ Reply to him in **pt-PT**, short and clear; commit messages in English.
 
 Run on this PC (free, uses all cores the memory allows):
 
-    git pull
+    git pull && git -C agents pull
     uv run python scripts/train_local.py --ate-convergir --push
 
 It repeats runs until no strategy improves for 2 runs (max 12), merges, applies and pushes `agents/`.

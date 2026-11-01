@@ -17,7 +17,7 @@ virtual euros. Daily run, after the morning tips:
    their numeric parameters (+/-20%), the "training"; winners keep theirs.
 5. The strategy decides tomorrow's orders; the league is posted to Discord.
 
-State lives in agents/state.json, committed by the workflow.
+State lives in agents/state.json, committed by the workflow to the private repo checked out at agents/.
 
     uv run python scripts/agents.py daily --dry-run
     uv run python scripts/agents.py config '{"acao": "ver"}' --dry-run

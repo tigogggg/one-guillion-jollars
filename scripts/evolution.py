@@ -86,15 +86,15 @@ def compact(history: list[dict]) -> dict:
 
 
 def rebuild() -> list[dict]:
-    """Entries from every commit of agents/pretrain.json (oldest first)."""
-    repo = agents.REPO_AGENTS.parent
-    log = subprocess.run(["git", "log", "--reverse", "--format=%H %aI", "--", "agents/pretrain.json"], cwd=repo,
+    """Entries from every commit of pretrain.json in the private data repo checked out at agents/ (oldest first)."""
+    repo = agents.REPO_AGENTS
+    log = subprocess.run(["git", "log", "--reverse", "--format=%H %aI", "--", "pretrain.json"], cwd=repo,
                          capture_output=True, text=True, check=True).stdout.split("\n")
     out = []
     for line in filter(None, log):
         sha, at = line.split(" ", 1)
         try:
-            report = json.loads(subprocess.run(["git", "show", f"{sha}:agents/pretrain.json"], cwd=repo, capture_output=True,
+            report = json.loads(subprocess.run(["git", "show", f"{sha}:pretrain.json"], cwd=repo, capture_output=True,
                                                text=True, check=True).stdout)
         except (subprocess.CalledProcessError, ValueError):
             continue

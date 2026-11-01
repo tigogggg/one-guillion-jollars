@@ -5,11 +5,12 @@ run-name: "Revisão dos agentes pelo Claude"
 # assessment per agent and proposes parameter sets with their hypotheses
 # (agents/claude_review.json). The next pre-training tests them like any other candidate:
 # nothing is applied because Claude says so. Also runs at the end of every pre-training.
+# agents/ is a checkout of the private repo one-guillion-jollars-dados (this repo is public).
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: agents-state
@@ -21,6 +22,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -35,10 +42,11 @@ jobs:
         run: uv run python scripts/agent_review.py
       - name: Guardar as propostas
         if: ${{ !cancelled() }}
+        working-directory: agents
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add agents/claude_review.json
+          git add claude_review.json
           git diff --cached --quiet && exit 0
           git commit -m "Agentes: revisão do Claude $(date -u +%F)"
           git pull --rebase origin main

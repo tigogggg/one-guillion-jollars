@@ -9,15 +9,16 @@ pretrain.yml does, on this machine:
 3. merges the results, applies the parameters to the agents (agents/pretrain.json and agents/state.json);
 4. repeats for RUNS runs, each with a new seed: the best of the earlier runs always stays a candidate and a run
    only replaces a strategy's parameters with better ones (training and exam together);
-5. with --push, commits and pushes agents/ so the live agents use the new parameters.
+5. with --push, commits and pushes agents/ so the live agents use the new parameters. agents/ is a clone of the
+   private repo one-guillion-jollars-dados (this repo is public), so that is where the push goes.
 
     uv run python scripts/train_local.py --execucoes 3 --paralelo 2 --push
     uv run python scripts/train_local.py --ate-convergir --paralelo 2 --push   # until no strategy improves
 
 Needs: git, uv and internet (Yahoo Finance, FRED, the Geopolitical Risk index). Discord posting is skipped
 unless DISCORD_WEBHOOK_URL / DISCORD_BOT_TOKEN are set in the environment.
-To merge an Actions run whose last step did not run (e.g. no minutes left), download its artifacts first:
-    gh run download <run id> -p "pretrain-*" -D out/run   and   uv run python scripts/pretrain.py --juntar out/run --apply
+To merge an Actions run whose last step did not run, dispatch pretrain.yml with juntar_de=<run id> (its artifacts
+are encrypted with BACKUP_KEY, which only Actions and you have).
 """
 
 from __future__ import annotations
@@ -37,12 +38,15 @@ STRATEGIES = ["guardiao", "rotador", "foguetao", "analista", "quant", "monge", "
               "campeao", "pescador", "deriva", "kamikaze", "indexador"]
 
 
-def run(cmd: list[str], log: Path | None = None) -> int:
+AGENTS = REPO / "agents"  # clone of the private data repo
+
+
+def run(cmd: list[str], log: Path | None = None, cwd: Path = REPO) -> int:
     print("$", " ".join(cmd), flush=True)
     if log:
         with log.open("w", encoding="utf-8") as f:
-            return subprocess.call(cmd, cwd=REPO, stdout=f, stderr=subprocess.STDOUT)
-    return subprocess.call(cmd, cwd=REPO)
+            return subprocess.call(cmd, cwd=cwd, stdout=f, stderr=subprocess.STDOUT)
+    return subprocess.call(cmd, cwd=cwd)
 
 
 def memory_gb() -> float | None:
@@ -121,11 +125,11 @@ def chosen_params() -> dict:
 def push(a, i: int) -> None:
     if not a.push:
         return
-    run(["git", "add", "agents/"])
-    if subprocess.call(["git", "diff", "--cached", "--quiet"], cwd=REPO) != 0:
-        run(["git", "commit", "-m", f"Agentes: pré-treino local {datetime.now():%Y-%m-%d} (execução {i})"])
-        run(["git", "pull", "--rebase", "origin", "main"])
-        run(["git", "push", "origin", "HEAD:main"])
+    run(["git", "add", "-A"], cwd=AGENTS)
+    if subprocess.call(["git", "diff", "--cached", "--quiet"], cwd=AGENTS) != 0:
+        run(["git", "commit", "-m", f"Agentes: pré-treino local {datetime.now():%Y-%m-%d} (execução {i})"], cwd=AGENTS)
+        run(["git", "pull", "--rebase", "origin", "main"], cwd=AGENTS)
+        run(["git", "push", "origin", "HEAD:main"], cwd=AGENTS)
 
 
 def summary() -> None:
@@ -181,8 +185,9 @@ def main() -> int:
         a.execucoes = 12  # a ceiling; it usually stops much earlier
     quiet = 0
     for i in range(1, a.execucoes + 1):
-        if a.push and i > 1:  # picks up improvements to the training published meanwhile (scripts, data)
+        if a.push and i > 1:  # picks up improvements to the training published meanwhile (scripts, data, agents)
             run(["git", "pull", "--rebase", "origin", "main"])
+            run(["git", "pull", "--rebase", "origin", "main"], cwd=AGENTS)
         before = chosen_params()
         seed = datetime.now().strftime("%Y%m%d%H%M%S")
         out = work / f"run{i}-{seed}"
@@ -207,7 +212,7 @@ def main() -> int:
         if a.revisao:
             run(PY + ["scripts/agent_review.py"] + (["--dry-run"] if dry else []))
         push(a, i)
-    print("\nFeito." + ("" if a.push else " Para os agentes ao vivo usarem os parâmetros: git add agents/ && git commit -m pre-treino && git push"))
+    print("\nFeito." + ("" if a.push else " Para os agentes ao vivo usarem os parâmetros: cd agents && git add -A && git commit -m pre-treino && git push"))
     return 0
 
 

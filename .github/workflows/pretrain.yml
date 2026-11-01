@@ -5,6 +5,9 @@ name: Pré-treino dos agentes
 # machine in parallel; a final job merges the results, applies them (with
 # "aplicar") and posts the report. Started by the Worker on the first weekday
 # of each month, or by hand.
+# This repo is public: agents/ is a checkout of the private repo
+# one-guillion-jollars-dados (deploy key DADOS_DEPLOY_KEY), and each strategy's
+# results travel between jobs encrypted with BACKUP_KEY (artifacts are public too).
 on:
   workflow_dispatch:
     inputs:
@@ -47,7 +50,7 @@ on:
         default: true
 
 permissions:
-  contents: write
+  contents: read  # results are pushed to the private data repo with its deploy key
   actions: read  # juntar_de: artifacts of an earlier run
 
 concurrency:
@@ -61,6 +64,13 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          persist-credentials: false
+          path: agents
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -112,6 +122,13 @@ jobs:
         strategy: ${{ fromJson(needs.plan.outputs.strategies) }}
     steps:
       - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          persist-credentials: false
+          path: agents
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -126,11 +143,19 @@ jobs:
           ANOS: ${{ inputs.anos || '20' }}
           SEMENTE: ${{ inputs.semente || github.run_id }}
         run: uv run python scripts/pretrain.py --estrategias "$STRATEGY" --anos "$ANOS" --contexto ctx/context.csv --saida "out/$STRATEGY.json" --semente "$SEMENTE"
+      - name: Cifrar os resultados
+        env:
+          BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
+          STRATEGY: ${{ matrix.strategy }}
+        run: |
+          mkdir enc
+          tar czf - out | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:BACKUP_KEY -out "enc/$STRATEGY.tgz.enc"
       - uses: actions/upload-artifact@v4
         with:
           name: pretrain-${{ matrix.strategy }}
-          path: out/
+          path: enc/
           retention-days: 3
+          if-no-files-found: error
 
   merge:
     needs: train
@@ -139,6 +164,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -155,6 +186,15 @@ jobs:
           path: out
           run-id: ${{ inputs.juntar_de }}
           github-token: ${{ github.token }}
+      - name: Decifrar os resultados
+        env:
+          BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
+        run: |
+          shopt -s nullglob
+          for f in out/*/*.tgz.enc; do
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_KEY -in "$f" | tar xzf - -C "$(dirname "$f")" --strip-components=1
+            rm "$f"
+          done
       - name: Juntar, aplicar e publicar
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -165,10 +205,11 @@ jobs:
         run: uv run python scripts/pretrain.py --juntar out $APPLY
       - name: Guardar os resultados e os parâmetros
         if: ${{ !cancelled() }}  # also when posting the report failed
+        working-directory: agents
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add agents/
+          git add -A
           git diff --cached --quiet && exit 0
           git commit -m "Agentes: pré-treino $(date -u +%F)"
           git pull --rebase origin main
@@ -184,9 +225,10 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: |
-          git pull --rebase origin main
+          git -C agents pull --rebase origin main
           uv run python scripts/agent_review.py
-          git add agents/claude_review.json
+          cd agents
+          git add claude_review.json
           git diff --cached --quiet && exit 0
           git commit -m "Agentes: revisão do Claude $(date -u +%F)"
           git pull --rebase origin main

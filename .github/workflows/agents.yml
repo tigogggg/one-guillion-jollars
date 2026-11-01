@@ -4,7 +4,8 @@ run-name: "Agentes: ${{ inputs.mode || 'daily' }} ${{ inputs.args }}"
 # Daily: simulated agents trade on the latest data and the league is posted.
 # Config: /agentes and /agente from the Discord bot (Cloudflare Worker).
 # Portal: only refresh the portal's league page from the current state (no trading, no post).
-# The agents' state (agents/) is committed back to the repository.
+# The agents' state (agents/) is a checkout of the private repo one-guillion-jollars-dados
+# and is committed back there (deploy key DADOS_DEPLOY_KEY); this repo is public.
 # Daily runs are started by the Cloudflare Worker at the time set with
 # /horario (default 12:15 Lisbon on weekdays).
 on:
@@ -27,7 +28,7 @@ on:
         default: ""
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: agents-state
@@ -39,6 +40,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -70,10 +77,11 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           MODE: ${{ inputs.mode || 'daily' }}
+        working-directory: agents
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add agents/
+          git add -A
           git diff --cached --quiet && exit 0
           git commit -m "Agentes: $MODE $(date -u +%F)"
           git pull --rebase origin main

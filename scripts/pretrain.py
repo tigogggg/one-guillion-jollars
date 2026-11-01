@@ -810,11 +810,12 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
             "consistent": ok(i), "picked": best_i == i, "adopted": adopt and best_i == i,
         })
 
-    print(f"{strategy}: {len(pool)} candidatos; anos {scored[best_i][0]} vs {base}; vizinhos {plateau.get(best_i)}; "
-          f"crises {crashes.get(best_i)}; exame {best_valid['points']} vs {default_valid['points']}; "
-          f"fase final {[t['param'] for t in greedy_log if t.get('kept')]}; "
-          f"zonas {[(z, v['kept']) for z, v in zones_tried.items()]} → {'adotado' if adopt else 'mantém'}",
-          file=sys.stderr, flush=True)
+    if not os.environ.get("GITHUB_ACTIONS"):  # Actions logs of this public repo are public
+        print(f"{strategy}: {len(pool)} candidatos; anos {scored[best_i][0]} vs {base}; vizinhos {plateau.get(best_i)}; "
+              f"crises {crashes.get(best_i)}; exame {best_valid['points']} vs {default_valid['points']}; "
+              f"fase final {[t['param'] for t in greedy_log if t.get('kept')]}; "
+              f"zonas {[(z, v['kept']) for z, v in zones_tried.items()]} → {'adotado' if adopt else 'mantém'}",
+              file=sys.stderr, flush=True)
     return strategy, {
         "default": pool[0], "best": best, "adopted": adopt, "chosen": chosen,
         "train": {"default": {"points": sum(base), "years": base},

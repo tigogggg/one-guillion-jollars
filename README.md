@@ -132,7 +132,12 @@ gainers and losers, and how the alerts of the last 5 weeks did
 
 `scripts/agents.py` runs simulated agents with virtual euros on real prices
 (`agents/config.json` defines them, `agents/state.json` holds portfolios,
-trades, points and training history; the workflow commits both). Orders
+trades, points and training history; the workflow commits both). This repo is
+public, so `agents/` is not in it: it is a clone of the private repo
+`one-guillion-jollars-dados`, which the workflows check out with the deploy key
+`DADOS_DEPLOY_KEY` and push to. The pre-training's artifacts are encrypted with
+`BACKUP_KEY` and its logs print no results. Locally:
+`git clone https://github.com/tigogggg/one-guillion-jollars-dados agents`. Orders
 decided on the latest close fill at the next session's open with 0.1% costs;
 US stocks are bought in EUR at that day's EUR/USD rate, fractional shares
 allowed. Stops and targets are checked against each session's low and high.
