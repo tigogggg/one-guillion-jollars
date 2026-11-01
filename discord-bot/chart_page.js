@@ -183,11 +183,15 @@ ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pret
   <ol id="pt-board" class="board"></ol>
   <h2>📈 Gráfico</h2>
   <div id="pt-chart" class="chart"></div>
+  <h2>📊 Desempenho por período</h2>
+  <div id="pt-perf"></div>
   <h2>🔎 Resultados do treino por agente</h2>
   <div id="pt-chips" class="chips"></div>
   <div id="pt-detail"></div>
 </section>` : ""}
 <section id="agents-section" data-tab="agentes" hidden>
+  <h2>📊 Desempenho por período</h2>
+  <div id="perf"></div>
   <h2>🧾 Todos os agentes</h2>
   <div id="overview"></div>
   <details class="panel" id="compare-box"><summary><b>⚖️ Comparar dois agentes</b></summary><div class="filters"><select id="cmp-a"></select><select id="cmp-b"></select></div><div id="cmp"></div></details>
@@ -548,9 +552,73 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 // ---- glossary ----
 (function glossary() {
   if (!$("glossary")) return;
-  $("glossary").innerHTML = '<h2>❓ Glossário</h2><p class="muted small">Os termos que aparecem no portal. Nas caixas, os termos sublinhados abrem esta explicação ao tocar.</p>' +
-    '<div class="cards">' + Object.entries(GLOSS).map(([k, v]) => '<div class="opp"><b>' + esc(k) + '</b><p class="small">' + esc(v) + '</p></div>').join("") + '</div>';
+  const terms = Object.entries(GLOSS).sort(([a], [b]) => a.localeCompare(b, "pt", { sensitivity: "base" }));
+  const fold = (t) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  $("glossary").innerHTML = '<h2>❓ Glossário</h2><p class="muted small">Os termos que aparecem no portal, por ordem alfabética. Nas caixas, os termos sublinhados abrem esta explicação ao tocar.</p>' +
+    '<div class="filters"><input id="gl-q" type="search" placeholder="Procurar um termo ou palavra (ex.: stop, risco, VIX)" style="flex:1;min-width:240px"></div>' +
+    '<p class="muted small" id="gl-n"></p><div class="cards" id="gl-list"></div>';
+  const draw = () => {
+    const q = fold($("gl-q").value.trim());
+    const list = terms.filter(([k, v]) => !q || fold(k + " " + v).includes(q));
+    $("gl-n").textContent = list.length + " de " + terms.length + " termos";
+    $("gl-list").innerHTML = list.map(([k, v]) => '<div class="opp"><b>' + esc(k) + '</b><p class="small">' + esc(v) + '</p></div>').join("") ||
+      '<p class="muted">Nenhum termo com essa palavra.</p>';
+  };
+  $("gl-q").addEventListener("input", draw);
+  draw();
 })();
+
+// ---- performance by period ----
+const PERIODS = [["1D", 1], ["1S", 7], ["1M", 30], ["3M", 91], ["6M", 182], ["1A", 365]];
+function perfTable(boxId, data, people) {
+  const box = $(boxId);
+  if (!box) return;
+  const series = (data.series || []).filter((s) => s.x.length);
+  if (!series.length) { box.innerHTML = '<p class="muted">Ainda sem histórico.</p>'; return; }
+  const byName = Object.fromEntries((people || []).map((a) => [a.name, a]));
+  const last = series.reduce((m, s) => (s.x[s.x.length - 1] > m ? s.x[s.x.length - 1] : m), "");
+  const first = series.reduce((m, s) => (s.x[0] < m ? s.x[0] : m), "9999");
+  const shift = (day, days) => new Date(Date.parse(day + "T12:00:00Z") - days * 864e5).toISOString().slice(0, 10);
+  // the value (% since the agent started) on the last point on or before a date; null before it started
+  const at = (s, day) => { let v = null; for (let i = 0; i < s.x.length && s.x[i] <= day; i++) v = s.y[i]; return v; };
+  // return between two dates from the "since start" curve: (1 + end) / (1 + start) - 1
+  const between = (s, from, to, whole) => {
+    const end = at(s, to);
+    if (end == null) return { v: null };
+    const start = whole ? null : at(s, from);
+    const late = !whole && start == null;  // started after the period began: counted from its first day
+    const base = late ? 0 : start;
+    return { v: ((1 + end / 100) / (1 + base / 100) - 1) * 100, late };
+  };
+  let custom = { from: shift(last, 30), to: last };
+  // weekly data (the pre-training) cannot show one day: periods shorter than the spacing of the points are left out
+  const gaps = series[0].x.slice(1).map((d, i) => (Date.parse(d) - Date.parse(series[0].x[i])) / 864e5).sort((a, b) => a - b);
+  const step = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 1;
+  let sortCol = "all";
+  function draw() {
+    const cols = PERIODS.filter(([, d]) => d >= step).map(([k, d]) => ({ key: k, label: k, from: shift(last, d), to: last }))
+      .concat([{ key: "custom", label: "Personalizado", from: custom.from, to: custom.to }, { key: "all", label: "Desde o início", from: "0000-01-01", to: last }]);
+    const rows = series.map((s) => ({ s, a: byName[s.name], cells: Object.fromEntries(cols.map((c) => [c.key, between(s, c.from, c.to, c.key === "all")])) }));
+    const best = Object.fromEntries(cols.map((c) => [c.key, Math.max(...rows.map((r) => r.cells[c.key].v ?? -Infinity))]));
+    rows.sort((x, y) => (y.cells[sortCol].v ?? -Infinity) - (x.cells[sortCol].v ?? -Infinity));
+    box.innerHTML = '<div class="filters"><label class="small">Personalizado: de <input type="date" class="pf-from" value="' + custom.from + '" min="' + first + '" max="' + last + '"></label>' +
+      '<label class="small">a <input type="date" class="pf-to" value="' + custom.to + '" min="' + first + '" max="' + last + '"></label>' +
+      '<span class="muted small">Toca no título de uma coluna para ordenar. Dados até ' + esc(last) + '.</span></div>' +
+      '<div class="scroll"><table><tr><th>Agente</th>' + cols.map((c) => '<th class="num"><a href="#" class="pf-sort" data-k="' + c.key + '">' + esc(c.label) + (sortCol === c.key ? " ▼" : "") + '</a></th>').join("") + '</tr>' +
+      rows.map((r) => '<tr><td>' + esc((r.a ? r.a.emoji + " " : "") + r.s.name) + '</td>' + cols.map((c) => {
+        const x = r.cells[c.key];
+        if (x.v == null) return '<td class="num muted">—</td>';
+        return '<td class="num"><span class="' + cls(x.v) + '">' + (x.v === best[c.key] && rows.length > 1 ? "🏆 " : "") + fmtPct(x.v) + (x.late ? "*" : "") + '</span></td>';
+      }).join("") + '</tr>').join("") + '</table></div>' +
+      '<p class="muted small">Rentabilidade em cada período, com custos e impostos. * o agente começou depois do início do período: conta desde o primeiro dia dele.</p>';
+    box.querySelectorAll(".pf-sort").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); sortCol = a.dataset.k; draw(); }));
+    box.querySelector(".pf-from").addEventListener("change", (e) => { custom.from = e.target.value || custom.from; sortCol = "custom"; draw(); });
+    box.querySelector(".pf-to").addEventListener("change", (e) => { custom.to = e.target.value || custom.to; sortCol = "custom"; draw(); });
+  }
+  draw();
+}
+perfTable("perf", DATA, agents);
+if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
 
 // ---- compare two agents ----
 (function compare() {
