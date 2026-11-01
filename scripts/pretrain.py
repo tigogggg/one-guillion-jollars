@@ -687,16 +687,15 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     # Keep the last choice unless the new one is better overall (training years and exam together), so consecutive
     # runs can only keep or improve each strategy.
     kept_previous = None
-    if history and strategy != "indexador":
-        previous = {**pool[0], **history[0]["chosen"]}
+    new_obj = overall(run_years(chosen)[0], chosen_valid["points"]) if history and strategy != "indexador" else None
+    for h in history if new_obj is not None else []:  # the last choices (up to HISTORY_KEEP): the best one stays
+        previous = {**pool[0], **h["chosen"]}
         if previous != chosen:
-            prev_years = run_years(previous)[0]
             prev_exam = simulate(strategy, previous, valid)
-            new_years = run_years(chosen)[0]
-            prev_obj = overall(prev_years, prev_exam["points"])
-            new_obj = overall(new_years, chosen_valid["points"])
+            prev_obj = overall(run_years(previous)[0], prev_exam["points"])
             if prev_obj > new_obj:
-                kept_previous = {"previous": round(prev_obj, 1), "new": round(new_obj, 1)}
+                kept_previous = {"previous": round(prev_obj, 1), "new": round((kept_previous or {}).get("new", new_obj), 1)}
+                new_obj = prev_obj
                 chosen, chosen_valid, adopt = previous, prev_exam, True
                 full = simulate(strategy, chosen, markets)
                 mc = monte_carlo(full["daily"])
