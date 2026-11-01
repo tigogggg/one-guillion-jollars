@@ -2,6 +2,7 @@ import random
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -164,3 +165,14 @@ def test_new_strategies_trade_in_the_backtest():
             params.update(queda_min=0.05, qualidade_min=0, valor_min=0)
         r = pretrain.simulate(strategy, params, markets)
         assert r["trades"] > 0, strategy
+
+
+def test_rows_read_like_the_live_dicts():
+    hist = {"AAA": synthetic(400, seed=3)}
+    days = [d.date() for d in hist["AAA"].index[pretrain.WARMUP:]]
+    m = pretrain.snapshots(hist, days, {"AAA": {"sector": "Energy"}})[days[-1]]["AAA"]
+    assert isinstance(m["price"], float) and isinstance(m["sma200_rising"], bool) and isinstance(m["gap_age"], int)
+    assert m["sector"] == "Energy" and "stage2" in m and "trend_score" in m and m.get("nao_existe") is None
+    assert dict(m)["price"] == m["price"] and {**m}["sector"] == "Energy"
+    closes = pretrain.PriceRow(np.array([1.5, np.nan]), {"A": 0, "B": 1})
+    assert closes.get("A") == 1.5 and closes.get("B") is None and closes.get("C", 7) == 7 and list(closes) == ["A"]

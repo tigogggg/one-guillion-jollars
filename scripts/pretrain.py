@@ -19,6 +19,7 @@ because past earnings dates are not available.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping, MutableMapping
 import csv
 import io
 import json
@@ -132,39 +133,114 @@ def features(df: pd.DataFrame) -> pd.DataFrame:
     return f
 
 
+class Row(MutableMapping):
+    """One stock's metrics on one day, read from a shared numpy table instead of a dict per stock per day
+    (a dict of 50 floats costs ~3 KB; 20 years x 500 stocks of them did not fit next to each other in memory).
+    Reads like the live dict: floats, bools for sma200_rising, ints for gap_age, None for unknown fundamentals.
+    Keys added later (sector, stage2, trend_score) live in a small dict of their own."""
+
+    __slots__ = ("_v", "_cols", "_kinds", "_extra")
+
+    def __init__(self, values, cols: dict[str, int], kinds: dict[str, object], extra: dict | None = None):
+        self._v, self._cols, self._kinds, self._extra = values, cols, kinds, dict(extra or {})
+
+    def __getitem__(self, key):
+        if key in self._extra:
+            return self._extra[key]
+        x = float(self._v[self._cols[key]])
+        kind = self._kinds.get(key)
+        if kind is None:
+            return x
+        if kind is bool:
+            return bool(x)
+        if kind is int:
+            return int(x)
+        return None if x != x else x  # nullable: NaN is unknown
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __contains__(self, key) -> bool:
+        return key in self._extra or key in self._cols
+
+    def __setitem__(self, key, value) -> None:
+        self._extra[key] = value
+
+    def __delitem__(self, key) -> None:
+        del self._extra[key]
+
+    def __iter__(self):
+        yield from (k for k in self._cols if k not in self._extra)
+        yield from self._extra
+
+    def __len__(self) -> int:
+        return len(self._cols) + sum(1 for k in self._extra if k not in self._cols)
+
+
+class PriceRow(Mapping):
+    """The closes of every symbol on one day (forward-filled), as a read-only mapping; NaN = no price."""
+
+    __slots__ = ("_v", "_cols")
+
+    def __init__(self, values, cols: dict[str, int]):
+        self._v, self._cols = values, cols
+
+    def __getitem__(self, key):
+        x = float(self._v[self._cols[key]])
+        if x != x:
+            raise KeyError(key)
+        return x
+
+    def get(self, key, default=None):
+        i = self._cols.get(key)
+        if i is None:
+            return default
+        x = float(self._v[i])
+        return default if x != x else x
+
+    def __iter__(self):
+        return (k for k, i in self._cols.items() if self._v[i] == self._v[i])
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
 def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, dict] | None = None,
               member=None, frames: dict[str, pd.DataFrame] | None = None) -> dict[date, dict]:
     """{day: {symbol: metrics}} with trend_score ranked within the group that day.
 
-    `member(symbol, day)`, when given, keeps only the symbols in the index on that day.
+    `member(symbol, day)`, when given, keeps only the symbols in the index on that day. Each symbol's metrics are
+    one float32 table holding only the backtest's days, read through Row (much less memory than dicts).
     """
-    # Plain numpy rows per symbol: pandas row lookups are too slow for years x hundreds of symbols.
+    wanted = set(days)
     tables = {}
-    nullable = set()
     for s, df in hist.items():
         f = features(df)
+        nullable = []
         if frames and s in frames:  # point-in-time fundamentals (fundamentals.daily)
             f = f.join(frames[s])
-            nullable.update(frames[s].columns)
+            nullable = list(frames[s].columns)
         valid = f["valid"].to_numpy() & f["sma200"].notna().to_numpy() & f["ret_6m"].notna().to_numpy()
+        keep = [i for i, ts in enumerate(f.index) if ts.date() in wanted and valid[i]]
+        if not keep:
+            continue
         cols = [c for c in f.columns if c != "valid"]
-        rows = {ts.date(): i for i, ts in enumerate(f.index)}
-        tables[s] = (rows, f[cols].to_numpy(dtype=float), cols, valid)
+        values = f[cols].to_numpy(dtype=np.float32)[keep]
+        rows = {f.index[i].date(): k for k, i in enumerate(keep)}
+        kinds = {"sma200_rising": bool, "gap_age": int, **{c: "nullable" for c in nullable}}
+        tables[s] = (rows, values, {c: k for k, c in enumerate(cols)}, kinds, (extra or {}).get(s, {}))
     out = {}
     for d in days:
         today = {}
-        for s, (rows, values, cols, valid) in tables.items():
+        for s, (rows, values, cols, kinds, base) in tables.items():
             i = rows.get(d)
-            if i is None or not valid[i] or (member and not member(s, d)):
+            if i is None or (member and not member(s, d)):
                 continue
-            m = dict(zip(cols, values[i].tolist()))
-            m["sma200_rising"] = bool(m["sma200_rising"])
-            m["gap_age"] = int(m["gap_age"])
-            for k in nullable.intersection(m):
-                if m[k] != m[k]:  # NaN: unknown, never blocks a rule
-                    m[k] = None
-            m.update((extra or {}).get(s, {}))
-            if "sector" in m:
+            m = Row(values[i], cols, kinds, base)
+            if "sector" in base:
                 m["stage2"] = agents.is_stage2(m)
             today[s] = m
         agents.add_trend_scores(today)
@@ -271,14 +347,16 @@ def build_markets(years: int = YEARS, context_path: str | None = None) -> list[M
     etfs = snapshots(etf_hist, days, {s: {"name": names.get(s, s)} for s in etf_hist})
     hist = {**stock_hist, **etf_hist}
     closes = pd.DataFrame({s: df["Close"] for s, df in hist.items()}).sort_index().ffill()
+    close_cols = {c: k for k, c in enumerate(closes.columns)}
+    close_values = closes.to_numpy(dtype=float)
     markets = []
     for d in days:
         share = sum(m["stage2"] for m in stocks[d].values()) / max(len(stocks[d]), 1)
-        row = closes.loc[: pd.Timestamp(d)].iloc[-1]
+        at = closes.index.searchsorted(pd.Timestamp(d), side="right") - 1
         markets.append(Market(
             hist=hist, fx=fx, stocks=stocks[d], etfs=etfs[d], as_of=d,
             sessions=[x for x in sessions if x <= d], zone=zone_for(share), stage2_share=share,
-            closes={s: float(v) for s, v in row.items() if pd.notna(v)},
+            closes=PriceRow(close_values[at], close_cols),
             context=context.on(ctx_frame, d),
         ))
     return markets
