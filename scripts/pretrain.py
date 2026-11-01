@@ -431,6 +431,21 @@ def nudge(params: dict, rng: random.Random, size: float = 0.10) -> dict:
 RECENCY = 0.85  # each older training year counts 15% less
 GEN2_PARENTS, GEN2_CHILDREN = 6, 3
 GENERATIONS = 2  # rounds of mutations after the random variants
+
+
+def search_scale() -> float:
+    """agents/search.json: more candidates on a dedicated computer, fewer in GitHub Actions (minutes)."""
+    try:
+        cfg = json.loads((agents.REPO_AGENTS / "search.json").read_text())
+    except (OSError, ValueError):
+        return 1.0
+    where = "actions" if os.environ.get("GITHUB_ACTIONS") else "local"
+    return float(os.environ.get("PRETRAIN_SCALE") or (cfg.get(where) or {}).get("scale") or 1.0)
+
+
+SCALE = search_scale()
+VARIANTS, VARIANTS_LONG = max(8, round(VARIANTS * SCALE)), max(8, round(VARIANTS_LONG * SCALE))
+GEN2_PARENTS, GEN2_CHILDREN = max(3, round(GEN2_PARENTS * min(SCALE, 2) ** 0.5)), max(2, round(GEN2_CHILDREN * min(SCALE, 2) ** 0.5))
 # A candidate must beat the original parameters in this share of the training years (was 3 of 4: too strict to
 # let the search climb; the plateau, crisis, exam and Monte Carlo tests still guard against luck).
 CONSISTENCY = 0.65

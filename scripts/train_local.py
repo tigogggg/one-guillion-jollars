@@ -45,6 +45,44 @@ def run(cmd: list[str], log: Path | None = None) -> int:
     return subprocess.call(cmd, cwd=REPO)
 
 
+def memory_gb() -> float | None:
+    """Free physical memory in GB (Windows, Linux, macOS), or None."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class Status(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong), ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong), ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong), ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong), ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            st = Status()
+            st.dwLength = ctypes.sizeof(Status)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
+            return st.ullAvailPhys / 1e9
+        if hasattr(os, "sysconf"):
+            return os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 1e9
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def parallelism(requested: int, n: int) -> int:
+    """Strategies at once: the request, or (0 = auto) as many as free memory and cores allow (agents/search.json)."""
+    try:
+        cfg = json.loads((REPO / "agents" / "search.json").read_text()).get("local", {})
+    except (OSError, ValueError):
+        cfg = {}
+    if requested > 0:
+        return min(requested, n)
+    if cfg.get("parallel"):
+        return min(int(cfg["parallel"]), n)
+    cores = max(1, (os.cpu_count() or 2) - 1)
+    mem = memory_gb()
+    by_mem = int(mem // float(cfg.get("gb_per_strategy", 5))) if mem else 2
+    return max(1, min(n, cores, by_mem))
+
+
 def train_all(strategies: list[str], years: int, parallel: int, seed: str, ctx: Path, out: Path) -> list[str]:
     """Each strategy in its own process, `parallel` at a time; returns the ones that failed."""
     out.mkdir(parents=True, exist_ok=True)
@@ -113,7 +151,7 @@ def main() -> int:
     parser.add_argument("--ate-convergir", action="store_true",
                         help="Keep running until no strategy finds better parameters in PACIENCIA runs in a row (at most --execucoes)")
     parser.add_argument("--paciencia", type=int, default=2, help="Runs without any improvement before stopping (default 2)")
-    parser.add_argument("--paralelo", type=int, default=2, help="Strategies trained at the same time (default 2; ~4 GB each)")
+    parser.add_argument("--paralelo", type=int, default=0, help="Strategies trained at the same time (default 0 = auto: by free memory and cores)")
     parser.add_argument("--anos", type=int, default=20)
     parser.add_argument("--estrategias", default=",".join(STRATEGIES), help="Comma-separated (default: all trainable)")
     parser.add_argument("--push", action="store_true", help="Commit and push agents/ after each run")
@@ -139,7 +177,9 @@ def main() -> int:
         seed = datetime.now().strftime("%Y%m%d%H%M%S")
         out = work / f"run{i}-{seed}"
         print(f"\n=== Execução {i} de {a.execucoes} (semente {seed}) ===", flush=True)
-        failed = train_all(strategies, a.anos, a.paralelo, seed, ctx, out)
+        width = parallelism(a.paralelo, len(strategies))
+        print(f"{width} estratégias em paralelo ({os.cpu_count()} núcleos, {memory_gb() or 0:.0f} GB livres)", flush=True)
+        failed = train_all(strategies, a.anos, width, seed, ctx, out)
         if failed:
             print(f"Falharam: {failed} (as restantes são juntas na mesma)", flush=True)
         if run(PY + ["scripts/pretrain.py", "--juntar", str(out), "--apply"] + dry, out / "juntar.log") != 0:
