@@ -483,7 +483,7 @@ def test_reactive_agent_trades_open_markets_now_and_plans_the_closed_ones():
     cfg = {"id": "r", "name": "R", "emoji": "R", "strategy": "x", "params": {}}
     seen_cash = []
 
-    def fake_decide(c, p, m, params, live=True):
+    def fake_decide(c, p, m, params, live=True):  # noqa: ARG001
         seen_cash.append(p["cash"])
         return [agents.order_buy("EU1.DE", 200, "sinal"), agents.order_buy("US1", 200, "sinal")], []
 

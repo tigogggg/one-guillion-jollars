@@ -1,0 +1,74 @@
+name: Laboratório intradiário (Alpaca)
+
+# Is reacting during the day worth it? The agents' stock strategies replayed over the last years on US stocks with
+# Alpaca's 30-minute bars, once with decisions every 30 minutes (the reactive rounds) and once a day (the
+# pre-training's engine), same parameters and prices. Run by hand.
+# This repo is public: the results go to the private repo one-guillion-jollars-dados (agents/lab/, deploy key
+# DADOS_DEPLOY_KEY) and to Discord; the log only shows progress.
+on:
+  workflow_dispatch:
+    inputs:
+      anos:
+        description: "Anos a reproduzir (o Alpaca tem dados desde 2016)"
+        required: false
+        default: "5"
+      estrategias:
+        description: "Só estas estratégias, separadas por vírgulas (vazio = todas as de ações)"
+        required: false
+        default: ""
+      testes:
+        description: "Publicar o relatório no canal 🧪-testes"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: intraday-lab
+  cancel-in-progress: false
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Mês (para a cache das barras)
+        id: mes
+        run: echo "month=$(date +%Y-%m)" >> "$GITHUB_OUTPUT"
+      - name: Barras de 30 minutos já descarregadas
+        uses: actions/cache@v4
+        with:
+          path: out/lab/bars
+          key: alpaca-bars-${{ inputs.anos }}-${{ steps.mes.outputs.month }}
+      - name: Correr o laboratório
+        env:
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_TESTES: ${{ inputs.testes && '1' || '' }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: uv run python scripts/intraday_lab.py --anos "${{ inputs.anos }}" --estrategias "${{ inputs.estrategias }}"
+      - name: Guardar os resultados (repositório privado)
+        if: ${{ success() }}
+        working-directory: agents
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A lab
+          git diff --cached --quiet && exit 0
+          git commit -m "Laboratório intradiário $(date -u +%F)"
+          git pull --rebase origin main
+          git push origin HEAD:main

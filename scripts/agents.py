@@ -2430,7 +2430,7 @@ def live_exits(port: dict, mkt: Market, now: datetime) -> list[dict]:
     return done
 
 
-def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime) -> tuple[list[dict], list[str]]:
+def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime, live: bool = True) -> tuple[list[dict], list[str]]:
     """One reactive decision: the strategy runs with the prices of this moment. Orders in markets that are open are
     traded now, at the current price; the others join the plan of pending orders for the next open (at the open
     price, with the gap rule). The money of pending buys stays reserved, a symbol already pending is left to its
@@ -2441,7 +2441,7 @@ def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime) -> tu
     reserved = sum(o["eur"] for o in port["pending"] if o["side"] == "buy")
     port["cash"] -= reserved
     try:
-        orders, notes = decide(cfg, port, mkt, params)
+        orders, notes = decide(cfg, port, mkt, params, live=live)
     finally:
         port["cash"] += reserved
     done = []

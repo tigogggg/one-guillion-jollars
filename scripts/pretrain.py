@@ -211,7 +211,8 @@ class PriceRow(Mapping):
 
 
 def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, dict] | None = None,
-              member=None, frames: dict[str, pd.DataFrame] | None = None) -> dict[date, dict]:
+              member=None, frames: dict[str, pd.DataFrame] | None = None,
+              featured: dict[str, pd.DataFrame] | None = None) -> dict[date, dict]:
     """{day: {symbol: metrics}} with trend_score ranked within the group that day.
 
     `member(symbol, day)`, when given, keeps only the symbols in the index on that day. Each symbol's metrics are
@@ -220,7 +221,7 @@ def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, 
     wanted = set(days)
     tables = {}
     for s, df in hist.items():
-        f = features(df)
+        f = featured[s] if featured is not None else features(df)  # featured: precomputed (intraday lab)
         nullable = []
         if frames and s in frames:  # point-in-time fundamentals (fundamentals.daily)
             f = f.join(frames[s])
