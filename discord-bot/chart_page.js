@@ -236,10 +236,12 @@ export function chartPage(data, upcoming, newer, extras = {}) {
   const body = `
 ${banner}
 <header>
+  <div class="topbar">
+  <h1>${portal ? '<img class="logo" src="/logo-256.png?v=1" alt="" width="120" height="120">One Guillion Jollars' : esc(data.title)}</h1>
   ${portal ? `<div class="userbar">${extras.user
     ? `<span>👤 <b>${esc(extras.user.name)}</b></span><a class="btn alt" href="#carteira" data-go="carteira">💼 A MINHA CARTEIRA</a><a class="btn alt" href="/sair">SAIR</a>`
     : `<a class="btn" href="/entrar">🔑 ENTRAR</a>`}</div>` : ""}
-  <h1>${portal ? '<img class="logo" src="/icon-192.png?v=1gj" alt="" width="48" height="48">One Guillion Jollars' : esc(data.title)}</h1>
+  </div>
   <p class="muted">${esc(portal ? data.title + " · " + (data.subtitle || "") : data.subtitle || "")}</p>
   <p class="muted small">Dados da liga de <span id="updated"></span> (hora de Lisboa) · simulação com dinheiro fictício e preços reais · ferramenta educativa, não é recomendação de compra</p>
 </header>
@@ -346,7 +348,10 @@ const CSS = `
 body { margin:0; background:radial-gradient(circle at 50% -20%,#2a1a6b 0,var(--bg) 60%) fixed; color:var(--fg); font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
 body::after { content:""; position:fixed; inset:0; pointer-events:none; background:repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px); }
 h1, h2, .pixel { font-family:var(--pixel); letter-spacing:.5px; } h1 { color:var(--gold); text-shadow:0 0 8px rgba(255,225,77,.6); line-height:1.5; }
-h1 .logo { width:2.4em; height:2.4em; vertical-align:middle; margin-right:.5em; border-radius:8px; }
+.topbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 24px; margin-right:52px; }
+.topbar h1 { display:flex; align-items:center; margin:0; }
+h1 .logo { width:6em; height:6em; margin-right:.4em; flex:none; }
+@media (max-width:640px) { h1 .logo { width:3.5em; height:3.5em; } .topbar { margin-right:48px; } }
 h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem !important; line-height:1.6; }
 .marquee { overflow:hidden; white-space:nowrap; border:2px solid var(--accent); border-radius:6px; background:#12002a; box-shadow:0 0 12px rgba(255,46,136,.5); margin:8px 0; }
 .marquee span { display:inline-block; padding:8px 0 8px 100%; font-family:var(--pixel); font-size:.75rem; color:var(--gold); animation:scroll 14s linear infinite; }
@@ -421,7 +426,7 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .chip { background:var(--card); border:1px solid var(--line); color:var(--fg); border-radius:999px; padding:6px 10px; cursor:pointer; font:inherit; font-size:.88rem; }
 .chip.on { border-color:var(--accent); background:#3a0f45; box-shadow:0 0 8px rgba(255,46,136,.5); }
 .panel { background:var(--card); border:2px solid var(--neon); box-shadow:0 0 12px rgba(0,229,255,.25); border-radius:10px; padding:14px; margin-top:12px; }
-.userbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; margin:0 52px 0 0; font-size:.9rem; }
+.userbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; font-size:.9rem; }
 .userbar .btn { text-decoration:none; display:inline-block; }
 .wallet-frame { width:100%; min-height:900px; border:0; display:block; background:transparent; }
 body.embed .tabs { position:static !important; } body.embed main { padding-top:4px; padding-bottom:12px; } body.embed .embed-hide { display:none !important; }
