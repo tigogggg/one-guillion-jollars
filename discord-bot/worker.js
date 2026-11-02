@@ -323,7 +323,8 @@ async function runSchedule(env, ctx, now) {
 
     for (const [job, time] of jobs) {
       const late = now.minutes - toMinutes(time);
-      if (late < 0 || late >= LATE_LIMIT_MIN) continue;
+      // a round is only worth starting near its time: the next one is minutes away (no burst of missed rounds)
+      if (late < 0 || late >= (job === "ronda" ? 5 : LATE_LIMIT_MIN)) continue;
       const key = `started:${job}:${now.date}:${time}`;
       if (await env.CONFIG.get(key)) continue;
       // Marked as started only once GitHub accepts it: a refused dispatch (GitHub down, token expired) is retried
