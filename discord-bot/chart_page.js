@@ -52,7 +52,7 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
     return new Response(JSON.stringify({
       name: "One Guillion Jollars", short_name: "OGJ", start_url: home, scope: home, display: "standalone",
       background_color: "#0b0820", theme_color: "#0b0820",
-      icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" }],
+      icons: [{ src: "/icon-192.png?v=1gj", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png?v=1gj", sizes: "512x512", type: "image/png" }],
     }), { headers: { "Content-Type": "application/manifest+json" } });
   }
   // the latest league page; until there is one, the latest pre-training race
@@ -215,7 +215,7 @@ export function page(title, body, head = "", opts = {}) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>${esc(title)}</title>
-<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="icon" type="image/png" href="/favicon.png?v=1gj">
 <link rel="stylesheet" href="${STATIC_PATHS.css}">
 ${head}
 </head>
@@ -239,7 +239,7 @@ ${banner}
   ${portal ? `<div class="userbar">${extras.user
     ? `<span>👤 <b>${esc(extras.user.name)}</b></span><a class="btn alt" href="#carteira" data-go="carteira">💼 A MINHA CARTEIRA</a><a class="btn alt" href="/sair">SAIR</a>`
     : `<a class="btn" href="/entrar">🔑 ENTRAR</a>`}</div>` : ""}
-  <h1>${portal ? '<img class="logo" src="/icon-192.png" alt="" width="48" height="48">One Guillion Jollars' : esc(data.title)}</h1>
+  <h1>${portal ? '<img class="logo" src="/icon-192.png?v=1gj" alt="" width="48" height="48">One Guillion Jollars' : esc(data.title)}</h1>
   <p class="muted">${esc(portal ? data.title + " · " + (data.subtitle || "") : data.subtitle || "")}</p>
   <p class="muted small">Dados da liga de <span id="updated"></span> (hora de Lisboa) · simulação com dinheiro fictício e preços reais · ferramenta educativa, não é recomendação de compra</p>
 </header>
@@ -334,7 +334,7 @@ const EVOLUTION = ${safeJson(extras.evolution || null)};
 </script>
 <script src="${STATIC_PATHS.portal}"></script>
 ${portal ? `<script src="${STATIC_PATHS.extra}"></script>` : ""}`;
-  return page(portal ? "One Guillion Jollars" : data.title, body, `${extras.manifest ? `<link rel="manifest" href="${esc(extras.manifest)}"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png">` : ""}
+  return page(portal ? "One Guillion Jollars" : data.title, body, `${extras.manifest ? `<link rel="manifest" href="${esc(extras.manifest)}"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png?v=1gj">` : ""}
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script src="${PLOTLY}"></script>`);

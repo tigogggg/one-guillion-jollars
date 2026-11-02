@@ -229,7 +229,7 @@ function manifest(data, tok) {
   return new Response(JSON.stringify({
     name: `Carteira de ${data.name || "membro"}`, short_name: "Carteira", start_url: `/c/${tok}`, scope: `/c/${tok}`,
     display: "standalone", background_color: "#0b0820", theme_color: "#0b0820",
-    icons: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png", sizes: "512x512", type: "image/png" }],
+    icons: [{ src: "/icon-192.png?v=1gj", sizes: "192x192", type: "image/png" }, { src: "/icon-512.png?v=1gj", sizes: "512x512", type: "image/png" }],
   }), { headers: { "Content-Type": "application/manifest+json" } });
 }
 
@@ -830,7 +830,7 @@ function portfolioPage(data, tok, opts = {}) {
 const TOKEN = ${safeJson(tok)};
 </script>
 <script src="${CLIENT_PATH}"></script>`;
-  return page(`Carteira de ${data.name || "membro"}`, body, `${opts.embed ? '<base target="_top">' : ""}<link rel="manifest" href="/c/${tok}/manifest.webmanifest"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png">
+  return page(`Carteira de ${data.name || "membro"}`, body, `${opts.embed ? '<base target="_top">' : ""}<link rel="manifest" href="/c/${tok}/manifest.webmanifest"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png?v=1gj">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 <style>.form { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; align-items:end; }

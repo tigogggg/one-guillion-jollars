@@ -198,7 +198,7 @@ async function loginPage(env, request, reason, next = "/") {
     ? `<a class="btn big ${cls}" href="${href}">${label}</a>`
     : `<span class="btn big off">${label} · em breve</span>`;
   return html(page("One Guillion Jollars", `<div class="door">
-  <img class="door-logo" src="/icon-512.png" alt="1GJ" width="160" height="160">
+  <img class="door-logo" src="/icon-512.png?v=1gj" alt="1GJ" width="160" height="160">
   <h1 class="door-title">One Guillion Jollars</h1>
   <p class="door-sub">Agentes de investimento treinados em 20 anos de mercado, notícias lidas por IA e a tua carteira, num só sítio.</p>
   ${REASONS[reason] ? `<p class="panel">${esc(REASONS[reason])}</p>` : ""}
