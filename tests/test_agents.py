@@ -571,3 +571,17 @@ def test_live_bars_project_whole_number_volumes():
     now = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)  # Xetra half-way through its session
     out = agents.live_bars({"SAP.DE": df}, now)
     assert out["SAP.DE"]["Volume"].iloc[-1] > 50
+
+
+def test_a_rebalance_whose_buys_were_all_blocked_is_tried_again():
+    hist = {"AAA.DE": frame([10, 10], [10, 10], [10, 10], [10, 12])}
+    mkt = market(hist, DATES[1].date(), etfs={"AAA.DE": {"price": 12, "sma200": 10, "trend_score": 90, "ret_3m": 0.1,
+                                                         "ret_6m": 0.1}})
+    mkt.context = {"vix": 40}
+    cfg = {"id": "r", "strategy": "rotador", "params": {"n": 1, "cada": 5, "vix_max": 30}}
+    port = new_portfolio(1000, DATES[0].date())
+    orders, notes = agents.decide(cfg, port, mkt, cfg["params"], live=False)
+    assert orders == [] and notes and port["last_rebalance"] is None  # VIX too high: blocked, not "done for 5 sessions"
+    mkt.context = {"vix": 20}
+    orders, _ = agents.decide(cfg, port, mkt, cfg["params"], live=False)
+    assert orders and port["last_rebalance"] == DATES[1].date().isoformat()

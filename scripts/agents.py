@@ -1771,6 +1771,7 @@ def trail_stops(port: dict, mkt: Market, p: dict) -> None:
 def decide(cfg: dict, port: dict, mkt: Market, params: dict, live: bool = True) -> tuple[list[dict], list[str]]:
     """The strategy's orders after the shared rules: earnings (live only), bad news, risk. Same live and in backtests."""
     params = effective(params, mkt.zone, cfg["strategy"])
+    rebalanced_before = port.get("last_rebalance")
     orders = STRATEGIES[cfg["strategy"]][0](cfg, port, mkt, params)
     notes = []
     if cfg["strategy"] != "indexador":
@@ -1786,6 +1787,10 @@ def decide(cfg: dict, port: dict, mkt: Market, params: dict, live: bool = True) 
         orders, skipped = risk_filter(orders, port, mkt)
         notes += skipped
     orders = [o for o in orders if o["side"] == "sell" or o["eur"] >= MIN_ORDER_EUR]
+    if notes and not any(o["side"] == "buy" for o in orders) and port.get("last_rebalance") != rebalanced_before:
+        # every buy of this rebalance was blocked by a rule: it is not counted as done, so the agent tries again at the
+        # next decision instead of waiting a whole cycle ("cada" sessions) in cash
+        port["last_rebalance"] = rebalanced_before
     gap = params.get("gap_max") if cfg["strategy"] != "indexador" else 0
     if gap:  # the close the buy was decided on, to cancel it if the next open is too far from it (fill_pending)
         orders = [{**o, "ref": last_close(mkt, o["symbol"]), "gap_max": gap} if o["side"] == "buy" else o for o in orders]
@@ -2522,6 +2527,9 @@ def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime, live:
     price, with the gap rule). The money of pending buys stays reserved, a symbol already pending is left to its
     order, and a stock sold today is not bought back the same day."""
     today = mkt.as_of.isoformat()
+    if not port["positions"] and not port["pending"]:
+        # all in cash: a reactive agent looks for entries in every round, not only every "cada" sessions
+        port["last_rebalance"] = None
     sold = {t["symbol"] for t in port["trades"] if t["side"] == "venda" and t["date"] == today}
     pending = {o["symbol"] for o in port["pending"]}
     reserved = sum(o["eur"] for o in port["pending"] if o["side"] == "buy")
