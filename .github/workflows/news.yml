@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read  # least privilege: these jobs never push
+  contents: read  # least privilege: nothing is pushed here (the archive goes to the private repo with its deploy key)
 
 jobs:
   news:
@@ -29,12 +29,11 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
-      - name: Dados dos agentes (repositório privado, só leitura)
+      - name: Dados dos agentes (repositório privado; o arquivo de notícias é guardado lá)
         uses: actions/checkout@v4
         with:
           repository: tigogggg/one-guillion-jollars-dados
           ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
-          persist-credentials: false
           path: agents
       - uses: astral-sh/setup-uv@v6
         with:
@@ -78,3 +77,14 @@ jobs:
         with:
           path: state/news
           key: news-${{ github.run_id }}
+      - name: Guardar o arquivo de notícias (repositório privado)
+        if: ${{ !cancelled() }}
+        working-directory: agents
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A arquivo 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -m "Arquivo: notícias $(date -u +%F)"
+          for i in 1 2 3; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 5; done
+          exit 1

@@ -404,6 +404,12 @@ def geo_risk(now: datetime, force: bool = False) -> dict | None:
            "headlines": [{"title": i["title"], "publisher": i["publisher"], "url": i["url"]} for i in items[:12]]}
     NEWS_DIR.mkdir(parents=True, exist_ok=True)
     GEO_PATH.write_text(json.dumps(geo, ensure_ascii=False, indent=1))
+    try:  # kept for future training (private repo); it cannot be downloaded later
+        import market_archive
+
+        market_archive.news([], now, geo)
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN: arquivo (geopolítica): {e!r}", file=sys.stderr)
     try:
         import interactive
 
@@ -494,6 +500,12 @@ def main() -> int:
     merged = merge_signals(previous, rated, now)
     SIGNALS_PATH.write_text(json.dumps(merged, indent=1, ensure_ascii=False))
     publish_portal(merged, constituents, now, rated)
+    try:  # Claude's reading of each headline, kept for future training (private repo)
+        import market_archive
+
+        market_archive.news(rated, now)
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN: arquivo (notícias): {e!r}", file=sys.stderr)
     SEEN_PATH.write_text(json.dumps((seen_list + [i for i in by_id if i not in seen])[-SEEN_KEPT:]))
 
     log(f"{len(rated)} títulos analisados ({source}), {sum(i['importancia'] >= 2 and i['sentimento'] != 0 for i in rated)} importantes")

@@ -2499,6 +2499,19 @@ def reactive_round(config: dict, state: dict, mkt: Market, now: datetime) -> tup
     return moves, avoided
 
 
+def archive(config: dict, state: dict, mkt: Market | None = None) -> None:
+    """Keep what cannot be downloaded later (market_archive: decisions; with a daily market, closes and earnings)."""
+    try:
+        import market_archive
+
+        market_archive.decisions(config, state)
+        if mkt is not None:
+            market_archive.closes(mkt)
+            market_archive.earnings(mkt)
+    except Exception as e:  # the archive never stops the league
+        print(f"WARN: arquivo: {e!r}", file=sys.stderr)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("mode", choices=["daily", "config", "portal", "stops"])
@@ -2519,6 +2532,7 @@ def main() -> int:
         if not moves and not twins:
             return 0
         save(config, state)
+        archive(config, state)
         try:  # the portal at the prices of this moment
             league(config, state, mkt, f"🤖 Liga dos agentes · {mkt.as_of.isoformat()} às {now.astimezone(timezone.utc):%H:%M} UTC")
         except Exception as e:
@@ -2552,6 +2566,7 @@ def main() -> int:
             ensure_twins(config, state, mkt.as_of)
             moves, training, avoided, events = run_day(config, state, mkt)
             save(config, state)  # bankruptcies retire agents and add their replacements
+            archive(config, state, mkt)
             embeds, files = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}",
                                    moves, training, avoided, events)
             ended = month_changed(state)
