@@ -265,8 +265,9 @@ jobs:
           git add -A
           git diff --cached --quiet && exit 0
           git commit -m "Agentes: pré-treino $(date -u +%F)"
-          git pull --rebase origin main
-          git push origin HEAD:main
+          # the intraday rounds push the agents' state every 10 minutes: retry on a race
+          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 10; done
+          exit 1
       - name: Instalar o Claude Code
         if: ${{ success() && inputs.revisao_claude != false && !inputs.ensaio }}
         run: npm install -g @anthropic-ai/claude-code
@@ -284,8 +285,8 @@ jobs:
           git add claude_review.json
           git diff --cached --quiet && exit 0
           git commit -m "Agentes: revisão do Claude $(date -u +%F)"
-          git pull --rebase origin main
-          git push origin HEAD:main
+          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 10; done
+          exit 1
       # A series of runs (repetir, or a run another run of the series dispatched): dispatch the next one, or, when
       # the series ends (converged, no runs left, or this one failed), say so in 🤖-agentes.
       - name: Encadear a próxima execução ou avisar no fim
