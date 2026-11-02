@@ -29,6 +29,8 @@ Reply to him in **pt-PT**, short and clear; commit messages in English.
 - The repo is public: no secrets in code; GitHub secrets hold tokens (Discord, Cloudflare, Claude OAuth, SEC user agent,
   Google/Discord OAuth).
 - Results must not be faked: report what tests/runs actually show.
+- Study results and figures (pre-training scores, returns, notes) go only to `agents/` (private repo): never in
+  this repo's files, commit messages or Actions logs.
 
 ## Pre-training (finding the best parameters for each agent)
 
@@ -45,9 +47,7 @@ training + exam together improve by at least 5% (`CHANGE_MARGIN`, weekly runs on
 After a run is pushed, the portal shows it once GitHub Actions republishes: dispatch
 `pretrain.yml` with `so_relatorio=true` (report + evolution chart) and `agents.yml` with `mode=portal`.
 
-## State on 2026-11-01
+## Current state
 
-- Local run 1 applied (results in the private repo, agents/NOTES.md). Campeão, Pêndulo,
-  Caçador regressed under the old rule; the new exam rule (commit 36f2d00) should recover them on the next local run.
-- Next: run `train_local.py --ate-convergir --push` again, then compare runs (`agents/pretrain_history.json`) and
-  publish to the portal.
+Results, run figures and the study's working notes are in the private repo: `agents/NOTES.md`. Read it there;
+add new state and results there, never here.
