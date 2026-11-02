@@ -29,8 +29,10 @@ import multiprocessing
 import os
 import pickle
 import sys
+import threading
 import time
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -48,6 +50,7 @@ BARS_URL = "https://data.alpaca.markets/v2/stocks/bars"
 TIMEFRAME = "30Min"
 SLOTS = 13  # 09:30-16:00 in 30-minute bars; checkpoint j sees bars 0..j (it is taken at 10:00 + 30 min x j)
 CALLS_PER_MIN = 180  # Alpaca's free plan allows 200 historical calls a minute
+DOWNLOADS = 6  # chunks of 50 symbols downloaded at the same time
 CACHE = Path(__file__).resolve().parents[1] / "out" / "lab" / "bars"
 LAB_DIR = agents.REPO_AGENTS / "lab"
 # Strategies of US stocks (the ETF ones and the live-only ones are left out)
@@ -57,6 +60,28 @@ ETF_STRATEGIES = {"indexador", "guardiao", "rotador", "pendulo"}
 # --------------------------------------------------------------------------
 # Alpaca bars
 # --------------------------------------------------------------------------
+
+
+class _NoSip(Exception):
+    """The account has no access to the SIP feed (use IEX)."""
+
+
+class _RateLimit:
+    """At most `per_min` calls in any minute, across threads."""
+
+    def __init__(self, per_min: int):
+        self.per_min, self.calls, self.lock = per_min, [], threading.Lock()
+
+    def wait(self) -> None:
+        while True:
+            with self.lock:
+                now = time.monotonic()
+                self.calls = [t for t in self.calls if now - t < 60]
+                if len(self.calls) < self.per_min:
+                    self.calls.append(now)
+                    return
+                pause = 60 - (now - self.calls[0])
+            time.sleep(max(pause, 0.05))
 
 
 def alpaca_symbol(symbol: str) -> str:
@@ -95,28 +120,25 @@ def _fetch_chunk(symbols: list[str], start: date, end: date, tag: str, feed: str
     headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
     end_ts = min(datetime.combine(end, datetime.min.time(), timezone.utc) + timedelta(days=1),
                  datetime.now(timezone.utc) - timedelta(minutes=20))  # the free plan has no data for the last 15 minutes
-    calls, window = 0, time.monotonic()
-    for i in range(0, len(missing), 50):
-        chunk = missing[i: i + 50]
+    limiter = _RateLimit(CALLS_PER_MIN)
+
+    def download(chunk: list[str]) -> dict[str, pd.DataFrame | None]:
+        """One request series (pages) for up to 50 symbols; each symbol's year is cached as soon as it is complete."""
         names = {alpaca_symbol(s): s for s in chunk}
         rows: dict[str, list] = {s: [] for s in chunk}
         token = None
         while True:
-            if calls >= CALLS_PER_MIN:  # stay under the rate limit
-                time.sleep(max(0.0, 60 - (time.monotonic() - window)))
-                calls, window = 0, time.monotonic()
+            limiter.wait()
             params = {"symbols": ",".join(names), "timeframe": TIMEFRAME, "start": f"{start.isoformat()}T00:00:00Z",
                       "end": end_ts.strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": 10000, "adjustment": "all", "feed": feed}
             if token:
                 params["page_token"] = token
-            resp = requests.get(BARS_URL, params=params, headers=headers, timeout=60)
-            calls += 1
+            resp = requests.get(BARS_URL, params=params, headers=headers, timeout=120)
             if resp.status_code == 429:
                 time.sleep(30)
                 continue
             if resp.status_code == 403 and feed == "sip":
-                print("::notice title=Alpaca::sem acesso ao feed SIP; uso o IEX", flush=True)
-                return _fetch_chunk(symbols, start, end, tag, "iex")
+                raise _NoSip
             resp.raise_for_status()
             data = resp.json()
             for sym, bars in (data.get("bars") or {}).items():
@@ -125,6 +147,7 @@ def _fetch_chunk(symbols: list[str], start: date, end: date, tag: str, feed: str
             token = data.get("next_page_token")
             if not token:
                 break
+        got = {}
         for s in chunk:
             df = None
             if rows[s]:
@@ -133,9 +156,21 @@ def _fetch_chunk(symbols: list[str], start: date, end: date, tag: str, feed: str
                 df = df[["Open", "High", "Low", "Close", "Volume"]].sort_index()
                 df = df[~df.index.duplicated(keep="last")]
             (CACHE / f"{s}_{tag}.pkl").write_bytes(pickle.dumps(df))
-            if df is not None:
-                out[s] = df
-        print(f"Alpaca {tag}: {min(i + 50, len(missing))}/{len(missing)} ações", flush=True)
+            got[s] = df
+        return got
+
+    # Each request is slow (a page is up to 10 000 bars), far below the rate limit: several chunks at a time.
+    chunks = [missing[i: i + 50] for i in range(0, len(missing), 50)]
+    done = 0
+    try:
+        with ThreadPoolExecutor(max_workers=DOWNLOADS) as pool:
+            for got in pool.map(download, chunks):
+                out.update({s: df for s, df in got.items() if df is not None})
+                done += len(got)
+                print(f"Alpaca {tag}: {done}/{len(missing)} ações", flush=True)
+    except _NoSip:
+        print("::notice title=Alpaca::sem acesso ao feed SIP; uso o IEX", flush=True)
+        return _fetch_chunk(symbols, start, end, tag, "iex")
     return out
 
 
@@ -422,10 +457,9 @@ def lab_strategies(only: set[str] | None) -> dict[str, dict]:
     return out
 
 
-def build_lab(years: int) -> Lab:
-    import context
-    import fundamentals
-    from rankings import download_history, load_constituents
+def universe(years: int):
+    """(symbols with their sectors, the membership test or None, first day, last day) of the lab."""
+    from rankings import load_constituents
 
     constituents = load_constituents()
     sector_of = {c["symbol"]: c["sector"] for c in constituents}
@@ -443,11 +477,20 @@ def build_lab(years: int) -> Lab:
         spans = membership.get(symbol)
         return True if not spans else any(a <= day and (e is None or day <= e) for a, e in spans)
 
+    return sector_of, (member if membership else None), start, end
+
+
+def build_lab(years: int) -> Lab:
+    import context
+    import fundamentals
+    from rankings import download_history
+
+    sector_of, member, start, end = universe(years)
     intraday = fetch_bars(sorted(sector_of) + ["SPY"], start, end)
     fx = download_history(["EURUSD=X"], period="max")["EURUSD=X"]["Close"]
     spy_daily = download_history(["SPY"], period="max")["SPY"]
     ctx = context.download("max", spy_daily, fx)
-    return Lab(intraday, sector_of, member if membership else None, years * 252, fx, ctx, fundamentals.load())
+    return Lab(intraday, sector_of, member, years * 252, fx, ctx, fundamentals.load())
 
 
 def report_embed(results: dict, years: int) -> dict:
@@ -484,7 +527,13 @@ def main() -> int:
     parser.add_argument("--estrategias", default="")
     parser.add_argument("--dry-run", action="store_true",
                         help="Save the report to out/lab/report.json instead of posting it (never printed: public logs)")
+    parser.add_argument("--so-barras", action="store_true",
+                        help="Only download the 30-minute bars into the cache (a job of its own: the download takes hours)")
     a = parser.parse_args()
+    if a.so_barras:
+        sector_of, _, start, end = universe(a.anos)
+        fetch_bars(sorted(sector_of) + ["SPY"], start, end)
+        return 0
     only = {s.strip() for s in a.estrategias.split(",") if s.strip()} or None
     jobs = list(lab_strategies(only).items())
     if not jobs:
@@ -492,12 +541,19 @@ def main() -> int:
         return 1
     LAB = build_lab(a.anos)
     workers = min(len(jobs), os.cpu_count() or 1, 3)  # the tables are shared by fork; each worker adds its own days
+    results = {}
+
+    def keep(done) -> None:  # saved after each strategy: a run stopped by the time limit keeps what it finished
+        for s, r in done:
+            results[s] = r
+            save_results(results, a.anos)
+            print(f"Laboratório: {len(results)}/{len(jobs)} estratégias", flush=True)
+
     if workers > 1:
         with multiprocessing.get_context("fork").Pool(workers) as pool:
-            results = dict(pool.map(_job, jobs))
+            keep(pool.imap_unordered(_job, jobs))
     else:
-        results = dict(map(_job, jobs))
-    save_results(results, a.anos)
+        keep(map(_job, jobs))
     print("Laboratório: resultados guardados no repositório privado (agents/lab)", flush=True)
     if a.dry_run:
         out = CACHE.parent / "report.json"

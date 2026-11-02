@@ -3,6 +3,8 @@ name: Laboratório intradiário (Alpaca)
 # Is reacting during the day worth it? The agents' stock strategies replayed over the last years on US stocks with
 # Alpaca's 30-minute bars, once with decisions every 30 minutes (the reactive rounds) and once a day (the
 # pre-training's engine), same parameters and prices. Run by hand.
+# Two jobs, each with its own time limit: the download (hours the first time; the bars stay in the Actions cache even
+# when it stops at its limit, so the next run carries on) and the lab itself, which saves after each strategy.
 # This repo is public: the results go to the private repo one-guillion-jollars-dados (agents/lab/, deploy key
 # DADOS_DEPLOY_KEY) and to Discord; the log only shows progress.
 on:
@@ -29,9 +31,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  lab:
+  bars:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 330
+    outputs:
+      complete: ${{ steps.fetch.outcome == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Barras já descarregadas
+        uses: actions/cache/restore@v4
+        with:
+          path: out/lab/bars
+          key: alpaca-bars-${{ github.run_id }}
+          restore-keys: alpaca-bars-
+      - name: Descarregar as barras de 30 minutos que faltam
+        id: fetch
+        timeout-minutes: 300
+        continue-on-error: true
+        env:
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: uv run python scripts/intraday_lab.py --anos "${{ inputs.anos }}" --so-barras
+      - name: Guardar as barras (também as de uma descarga a meio)
+        if: ${{ always() }}
+        uses: actions/cache/save@v4
+        with:
+          path: out/lab/bars
+          key: alpaca-bars-${{ github.run_id }}
+      - name: Descarga incompleta
+        if: ${{ steps.fetch.outcome != 'success' }}
+        run: |
+          echo "::warning title=Alpaca::A descarga não terminou; o que já veio fica na cache. Voltar a correr o laboratório continua daí."
+          exit 1
+
+  lab:
+    needs: bars
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
       - name: Dados dos agentes (repositório privado)
@@ -44,13 +84,14 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync
-      - name: Barras de 30 minutos já descarregadas
-        uses: actions/cache@v4
+      - name: Barras de 30 minutos
+        uses: actions/cache/restore@v4
         with:
           path: out/lab/bars
           key: alpaca-bars-${{ github.run_id }}
-          restore-keys: alpaca-bars-
+          fail-on-cache-miss: true
       - name: Correr o laboratório
+        timeout-minutes: 320
         env:
           ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
@@ -59,8 +100,8 @@ jobs:
           DISCORD_TESTES: ${{ inputs.testes && '1' || '' }}
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
         run: uv run python scripts/intraday_lab.py --anos "${{ inputs.anos }}" --estrategias "${{ inputs.estrategias }}"
-      - name: Guardar os resultados (repositório privado)
-        if: ${{ !cancelled() }}
+      - name: Guardar os resultados (repositório privado), também os de uma execução a meio
+        if: ${{ always() }}
         working-directory: agents
         run: |
           git config user.name "github-actions[bot]"
@@ -68,5 +109,5 @@ jobs:
           git add -A lab
           git diff --cached --quiet && exit 0
           git commit -m "Laboratório intradiário $(date -u +%F)"
-          git pull --rebase origin main
-          git push origin HEAD:main
+          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; git rebase --abort 2>/dev/null; sleep 10; done
+          exit 1
