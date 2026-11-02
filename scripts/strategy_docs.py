@@ -36,6 +36,7 @@ PARAMS = {
     "min_tecnico": "score técnico mínimo para comprar: tendência, volatilidade e distância ao máximo, 0-60 (0 = desligado)",
     "max_ext": "não compra se o preço estiver mais do que isto acima da média de 50 dias (0 = desligado)",
     "gap_max": "cancela a compra se a ação abrir mais do que isto acima ou abaixo do fecho em que decidiu (0 = desligado)",
+    "regiao": "onde compra ações: 0 = EUA e Europa, 1 = só EUA, 2 = só Europa (escolhido pelo treino)",
     "peso_noticias": "não compra se o score das notícias estiver neste valor negativo ou pior",
     "vix_max": "não compra quando o VIX (medo no mercado) está acima deste valor (0 = desligado)",
     "vix_meio": "compra metade do tamanho quando o VIX está acima deste valor (0 = desligado)",

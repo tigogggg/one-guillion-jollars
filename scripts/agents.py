@@ -91,6 +91,52 @@ NEWS_VETO = 3  # no agent buys a stock whose 36 h news score is at or below -NEW
 NEWS_VETO_DEFAULT = NEWS_VETO
 # Strategies that cannot be replayed on past data (no history of fundamentals, news or other agents):
 # they learn by monthly mutation; the rest are re-trained every Sunday by pretrain.py.
+# Investor profiles. The pre-training picks each strategy's parameters for one profile at a time, scoring every
+# training year by the growth of the capital (log of 1 + the year's return): a losing year counts `loss` times, and
+# the depth of the fall beyond `dd_cap` costs `dd_cost` per unit. So the conservative profile prefers parameters that
+# rarely lose and fall little, the aggressive one the most growth whatever the path. The league has one agent per
+# strategy and profile (the balanced one keeps the original name).
+PROFILES = {
+    "conservador": {"label": "Conservador", "emoji": "🛡️", "loss": 3.0, "dd_cap": 0.15, "dd_cost": 3.0},
+    "equilibrado": {"label": "Equilibrado", "emoji": "⚖️", "loss": 2.0, "dd_cap": 0.25, "dd_cost": 2.0},
+    "arrojado": {"label": "Arrojado", "emoji": "🔥", "loss": 1.0, "dd_cap": 0.40, "dd_cost": 1.0},
+}
+DEFAULT_PROFILE = "equilibrado"
+
+
+def profile_of(cfg: dict) -> str:
+    return cfg.get("perfil", DEFAULT_PROFILE)
+
+
+def profile_score(ret: float, years: float, max_dd: float, profile: str = DEFAULT_PROFILE) -> float:
+    """The profile's grade of a result: yearly log growth (x1000), losses weighted and deep falls penalised."""
+    p = PROFILES[profile]
+    growth = math.log(max(1 + ret, 0.01)) / max(years, 1 / 252)
+    if growth < 0:
+        growth *= p["loss"]
+    growth -= p["dd_cost"] * max(0.0, max_dd - p["dd_cap"])
+    return round(growth * 1000, 1)
+
+
+# Where a strategy buys stocks (a trained parameter, regiao): 0 both, 1 only the US, 2 only Europe.
+REGIONS = {0: "EUA e Europa", 1: "só EUA", 2: "só Europa"}
+
+
+def in_region(mkt: "Market", region: int) -> "Market":
+    """The market with only the stocks of that region (kept per market, so a backtest builds each view once)."""
+    if not region:
+        return mkt
+    cache = mkt.__dict__.setdefault("_regions", {})
+    if region not in cache:
+        from dataclasses import replace
+
+        keep = is_us if region == 1 else (lambda s: not is_us(s))
+        view = replace(mkt, stocks={s: m for s, m in mkt.stocks.items() if keep(s)})
+        view.league, view.earnings, view.news = mkt.league, mkt.earnings, mkt.news  # shared, not copied
+        cache[region] = view
+    return cache[region]
+
+
 # How an agent trades. Reactive (the default): decides in every intraday round with the price of that moment and
 # trades at once in the markets that are open, while its plan for the next opens waits as pending orders. Daily: the
 # twin of each reactive agent, deciding once a day before the opens (07:30), as in the 20-year pre-training.
@@ -128,6 +174,7 @@ PARAM_BOUNDS = {
     "min_tecnico": (20.0, 55.0, float),
     "max_ext": (0.05, 0.35, float),
     "gap_max": (0.02, 0.15, float),
+    "regiao": (1, 2, int),  # 0 (off) = both regions
     "peso_noticias": (1, 6, int),
     # market context (context.py), shared too; 0 = off
     "vix_max": (18.0, 45.0, float),
@@ -167,13 +214,13 @@ PARAM_BOUNDS = {
 # Variables every strategy (but the Indexador) has, on top of its own. The defaults keep the original
 # behaviour; the training (pre-training, monthly mutation and the shadow copies) switches them on and tunes them.
 # gap_max is on from the start (8%): a buy is cancelled when the stock opens that far from the close it was decided on.
-COMMON = {"stop_atr": 0, "trail_atr": 0, "tempo_max": 0, "min_tecnico": 0, "max_ext": 0, "gap_max": 0.08,
+COMMON = {"stop_atr": 0, "trail_atr": 0, "tempo_max": 0, "min_tecnico": 0, "max_ext": 0, "gap_max": 0.08, "regiao": 0,
           "peso_noticias": NEWS_VETO_DEFAULT,
           "vix_max": 0, "vix_meio": 0, "epu_max": 0, "credito_max": 0, "juros_max": 0, "usd_max": 0, "filtro_spy": 0,
           "gpr_max": 0, "petroleo_max": 0, "ouro_max": 0, "filtro_setor": 0, "ema_filtro": 0, "stop_suporte": 0,
           "qualidade_fund_min": 0, "valor_fund_min": 0,
           "dias_resultados": EARNINGS_AVOID_DAYS_DEFAULT, "evita_macro": 0, "evita_geo": 0}
-OFFABLE = {"stop_atr", "trail_atr", "tempo_max", "min_tecnico", "max_ext", "gap_max", "vix_max", "vix_meio", "epu_max", "credito_max",
+OFFABLE = {"stop_atr", "trail_atr", "tempo_max", "min_tecnico", "max_ext", "gap_max", "regiao", "vix_max", "vix_meio", "epu_max", "credito_max",
            "juros_max", "usd_max", "filtro_spy", "gpr_max", "petroleo_max", "ouro_max", "filtro_setor", "ema_filtro", "stop_suporte",
            "qualidade_fund_min", "valor_fund_min", "evita_macro", "evita_geo"}
 CONTEXT_RULES = {"vix_max", "vix_meio", "epu_max", "credito_max", "juros_max", "usd_max", "filtro_spy", "gpr_max", "petroleo_max", "ouro_max"}
@@ -1772,7 +1819,7 @@ def decide(cfg: dict, port: dict, mkt: Market, params: dict, live: bool = True) 
     """The strategy's orders after the shared rules: earnings (live only), bad news, risk. Same live and in backtests."""
     params = effective(params, mkt.zone, cfg["strategy"])
     rebalanced_before = port.get("last_rebalance")
-    orders = STRATEGIES[cfg["strategy"]][0](cfg, port, mkt, params)
+    orders = STRATEGIES[cfg["strategy"]][0](cfg, port, in_region(mkt, int(params.get("regiao") or 0)), params)
     notes = []
     if cfg["strategy"] != "indexador":
         orders, skipped = shared_rules(orders, port, mkt, params)
@@ -1855,6 +1902,7 @@ def spawn_child(config: dict, state: dict, leader: dict, replaced: dict, mkt: Ma
         "id": f"{base_id}-{n}", "name": f"{base_name} {ROMAN[n] if n < len(ROMAN) else n}", "emoji": leader["emoji"],
         "strategy": leader["strategy"], "capital": 1000, "params": params, "lineage": base_id, "lineage_name": base_name,
         **({"modo": mode_of(replaced)} if mode_of(replaced) != REACTIVE else {}),
+        **({"perfil": profile_of(replaced)} if profile_of(replaced) != DEFAULT_PROFILE else {}),
         "description": f"Filho de {leader['name']}, nasceu a {mkt.as_of.isoformat()} no lugar de {replaced['name']} "
                        f"(falência). Mutação: {', '.join(changes) or 'nenhuma'}.",
     }
@@ -1968,7 +2016,8 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
             training.append(f"{cfg['emoji']} **{cfg['name']}** {note}")
     for dead in bankrupt:
         alive = [(c, state["agents"][c["id"]]) for c in active_agents(config)
-                 if c["strategy"] not in META | {"indexador"} and mode_of(c) == mode_of(dead)]
+                 if c["strategy"] not in META | {"indexador"} and mode_of(c) == mode_of(dead)
+                 and profile_of(c) == profile_of(dead)]
         if not alive:
             continue
         leader, _ = max(alive, key=lambda cp: cp[1]["points"])
@@ -2006,6 +2055,21 @@ def with_now(port: dict, eq: float, mkt: Market) -> list[tuple[str, float]]:
     return points
 
 
+def best_by_profile(rows: list[tuple[dict, dict, float]]) -> list[str]:
+    """For each investor profile, the reactive agent of that profile with the best grade so far (its return since it
+    started, losses and the deepest fall weighted the profile's way)."""
+    out = []
+    for name, p in PROFILES.items():
+        graded = [(profile_score(eq / port["deposits"] - 1, 1, port.get("max_dd", 0.0), name), cfg, eq / port["deposits"] - 1)
+                  for cfg, port, eq in rows
+                  if port.get("deposits") and mode_of(cfg) == REACTIVE and profile_of(cfg) == name
+                  and cfg["strategy"] != "indexador" and port.get("history")]
+        if graded:
+            _, cfg, ret = max(graded, key=lambda g: g[0])
+            out.append(f"{p['emoji']} {p['label']}: {cfg['emoji']} **{cfg['name']}** ({pct(ret)})")
+    return out
+
+
 def league(config: dict, state: dict, mkt: Market, title: str, moves=(), training=(), avoided=(), events=()) -> tuple[list[dict], dict]:
     rows = []
     for cfg in active_agents(config):
@@ -2023,6 +2087,9 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
             f" · hoje {pct(day_change(port, eq, mkt))} · ⭐ **{port['points']}** · {len(port['positions'])} pos."
         )
     fields = [("🧭 Mercado", f"{ZONE_ICON[mkt.zone]} zona **{mkt.zone}** · {mkt.stage2_share * 100:.0f}% das ações do S&P 500 em tendência de alta")]
+    best = best_by_profile(rows)
+    if best:
+        fields.append(("🎯 Melhor agente por perfil de investidor", "\n".join(best)))
     if moves:
         move_lines = []
         for cfg, t in list(moves)[:15]:
@@ -2335,6 +2402,7 @@ def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
             max_dd = max(max_dd, 1 - ratio / peak if peak else 0.0)
         out.append({
             "id": cfg["id"], "name": cfg["name"], "emoji": cfg["emoji"], "strategy": strategy_info(cfg, params),
+            "perfil": profile_of(cfg), "modo": mode_of(cfg),
             "started": port.get("started"), "generation": port.get("generation", 1),
             "lineage": cfg.get("lineage_name"), "points": port["points"],
             "deposits": round(port["deposits"], 2), "cash": round(port["cash"], 2), "equity": round(eq, 2),
@@ -2495,7 +2563,8 @@ def ensure_twins(config: dict, state: dict, start: date) -> list[dict]:
     twinned = {a.get("twin_of") for a in config["agents"] if mode_of(a) == DAILY}
     created = []
     for cfg in list(active_agents(config)):
-        if mode_of(cfg) == DAILY or cfg["strategy"] == "indexador" or cfg["id"] in twinned:
+        if (mode_of(cfg) == DAILY or cfg["strategy"] == "indexador" or cfg["id"] in twinned
+                or profile_of(cfg) != DEFAULT_PROFILE):  # one twin per strategy is enough for the comparison
             continue
         twin = {**{k: v for k, v in cfg.items() if k not in ("id", "name", "description", "lineage", "lineage_name")},
                 "id": f"{cfg['id']}-diario", "name": f"{cfg['name']} · diário", "modo": DAILY, "twin_of": cfg["id"],
@@ -2506,6 +2575,31 @@ def ensure_twins(config: dict, state: dict, start: date) -> list[dict]:
         config["agents"].append(twin)
         state["agents"][twin["id"]] = port
         created.append(twin)
+    return created
+
+
+def ensure_profiles(config: dict, state: dict, start: date) -> list[dict]:
+    """For every trainable strategy, a reactive agent per investor profile (PROFILES): the balanced one is the
+    original agent; the conservative and aggressive ones start with its parameters until their own pre-training."""
+    have = {(a.get("profile_base"), profile_of(a)) for a in config["agents"]}
+    created = []
+    for cfg in list(active_agents(config)):
+        if (mode_of(cfg) != REACTIVE or profile_of(cfg) != DEFAULT_PROFILE or cfg["strategy"] in LIVE_ONLY
+                or cfg["strategy"] == "indexador" or cfg.get("lineage")):
+            continue
+        for name, p in PROFILES.items():
+            if name == DEFAULT_PROFILE or (cfg["id"], name) in have:
+                continue
+            agent = {**{k: v for k, v in cfg.items() if k not in ("id", "name", "description", "lineage", "lineage_name")},
+                     "id": f"{cfg['id']}-{name}", "name": f"{cfg['name']} {p['emoji']}", "perfil": name,
+                     "profile_base": cfg["id"],
+                     "description": f"{cfg['name']} para um investidor {p['label'].lower()}: a mesma estratégia, com os "
+                                    f"parâmetros que o pré-treino escolhe para esse perfil."}
+            port = new_portfolio(cfg["capital"], start)
+            port["params"] = dict((state["agents"].get(cfg["id"]) or {}).get("params", cfg["params"]))
+            config["agents"].append(agent)
+            state["agents"][agent["id"]] = port
+            created.append(agent)
     return created
 
 
@@ -2647,7 +2741,7 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             print(f"WARN: arquivo intradiário: {e!r}", file=sys.stderr)
         before = json.dumps(state, sort_keys=True, default=str)
-        twins = ensure_twins(config, state, mkt.as_of)
+        twins = ensure_twins(config, state, mkt.as_of) + ensure_profiles(config, state, mkt.as_of)
         earnings_cache = PRICE_CACHE / f"earnings-{mkt.as_of.isoformat()}.json"
         try:  # earnings dates looked up once a day, not every round
             mkt.earnings = {s: (date.fromisoformat(d) if d else None)
@@ -2697,6 +2791,7 @@ def main() -> int:
         if a.mode == "daily":
             mkt = load_market()
             ensure_twins(config, state, mkt.as_of)
+            ensure_profiles(config, state, mkt.as_of)
             moves, training, avoided, events = run_day(config, state, mkt)
             save(config, state)  # bankruptcies retire agents and add their replacements
             archive(config, state, mkt)

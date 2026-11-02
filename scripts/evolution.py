@@ -61,12 +61,15 @@ def append(report: dict, seed: str = "") -> None:
               "actions" if os.environ.get("GITHUB_ACTIONS") else "local", seed)
     if not e:
         return
+    e["perfil"] = report.get("perfil", "equilibrado")
     history = load() + [e]
     HISTORY_PATH.write_text(json.dumps(history[-KEEP:], ensure_ascii=False, indent=1) + "\n")
 
 
 def compact(history: list[dict]) -> dict:
-    """For the portal: per run its date and source; per strategy its series and what changed between runs."""
+    """For the portal: per run its date and source; per strategy its series and what changed between runs.
+    Only the balanced profile's runs (the others train for other investors and are not one series)."""
+    history = [h for h in history if h.get("perfil", "equilibrado") == "equilibrado"]
     runs = [{"at": h["at"], "source": h.get("source", "")} for h in history]
     series: dict[str, list] = {}
     changes: dict[str, list] = {}

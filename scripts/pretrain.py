@@ -94,7 +94,11 @@ SKIP = {
     "conselho": "depende das carteiras dos outros agentes ao vivo",
     "maestro": "depende dos resultados dos outros agentes ao vivo",
 }
-REPORT_PATH = agents.REPO_AGENTS / "pretrain.json"
+# The investor profile this run trains for (agents.PROFILES); the balanced one keeps pretrain.json.
+PROFILE = os.environ.get("PRETRAIN_PERFIL") or agents.DEFAULT_PROFILE
+if PROFILE not in agents.PROFILES:
+    raise SystemExit(f"Perfil desconhecido: {PROFILE} ({', '.join(agents.PROFILES)})")
+REPORT_PATH = agents.REPO_AGENTS / ("pretrain.json" if PROFILE == agents.DEFAULT_PROFILE else f"pretrain-{PROFILE}.json")
 
 
 # --------------------------------------------------------------------------
@@ -467,6 +471,25 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
 # --------------------------------------------------------------------------
 
 
+_INDEX_SCORES: dict[tuple, float] = {}
+
+
+def index_score(markets: list[Market], years: float) -> float:
+    """The profile's grade of buying the index (agents.BENCHMARK, in euros) over these days, once per period."""
+    key = (markets[0].as_of, markets[-1].as_of, len(markets), PROFILE)
+    if key not in _INDEX_SCORES:
+        df = markets[-1].hist.get(agents.BENCHMARK)
+        score = 0.0
+        if df is not None and len(df):
+            close = df["Close"].loc[pd.Timestamp(markets[0].as_of): pd.Timestamp(markets[-1].as_of) + pd.Timedelta(hours=23)]
+            if len(close) > 1:
+                ret = float(close.iloc[-1] / close.iloc[0] - 1)
+                dd = float((1 - close / close.cummax()).max())
+                score = agents.profile_score(ret, years, dd, PROFILE)
+        _INDEX_SCORES[key] = score
+    return _INDEX_SCORES[key]
+
+
 def simulate(strategy: str, params: dict, markets: list[Market], capital: float = 1000.0) -> dict:
     """Replay one strategy with the live rules (agents.decide), taxes and bankruptcy, from `capital` euros."""
     cfg = {"id": "bt", "name": strategy, "strategy": strategy, "params": params}
@@ -487,11 +510,18 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
             orders, _ = agents.decide(cfg, port, mkt, port["params"], live=False)
             port["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders]
     final = equity(port, markets[-1])
+    years = len(markets) / SESSIONS_PER_YEAR
     equities = pd.Series([h["equity"] for h in port["history"]], dtype=float)
     daily = equities.pct_change().dropna()
     sharpe = float(daily.mean() / daily.std() * SESSIONS_PER_YEAR ** 0.5) if len(daily) > 20 and daily.std() > 0 else 0.0
+    # "points", what every choice of the training compares, is the profile's grade of this run against buying the
+    # index over the same days (agents.profile_score of each: growth of the capital, losses and deep falls penalised
+    # alike), so a choice is good when it beats the index the way this kind of investor cares about.
+    own = agents.profile_score(final / capital - 1, years, port.get("max_dd", 0.0), PROFILE)
     return {
-        "points": port["points"],
+        "points": round(own - index_score(markets, years), 1),
+        "profile_score": own,
+        "league_points": port["points"],
         "return": final / capital - 1,
         "max_drawdown": port.get("max_dd", 0.0),
         "sharpe": round(sharpe, 2),
@@ -1106,7 +1136,7 @@ def apply(results: dict, today: date) -> list[str]:
     changed = []
     for cfg in agents.active_agents(config):
         r = results["strategies"].get(cfg["strategy"], {})
-        if "chosen" not in r:  # not trained (live-only) or not part of this run
+        if "chosen" not in r or agents.profile_of(cfg) != PROFILE:  # not trained here, or another profile's agent
             continue
         port = state["agents"].setdefault(cfg["id"], new_portfolio(cfg["capital"], today))
         old = port.get("params", cfg["params"])
@@ -1148,7 +1178,7 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
         lines.append(
             f"{cfg['emoji']} **{cfg['name']}** · período* {pct(y['return'])} · queda máx. {pct(-y['max_drawdown'])}"
             f" · Sharpe {y.get('sharpe', 0):.1f}" + (f" · 💀 faliu {y['bankrupt']}" if y.get("bankrupt") else "") +
-            f" · exame: {v['best']['points']} vs {v['default']['points']} pts · {verdict}"
+            f" · exame: {v['best']['points']:+g} vs {v['default']['points']:+g} · {verdict}"
         )
     fields = [("🧪 Como foi feito",
                f"Treino {results['train'][0]} a {results['train'][1]} · exame {results['valid'][0]} a {results['valid'][1]}.\n"
@@ -1156,7 +1186,8 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
                "não caem mais do que eles nas crises (2008, 2011, 2020, 2022) e passam o exame. Pontos da liga (face ao S&P 500, com penalização das quedas). Composição "
                "histórica do S&P 500, ordens à abertura seguinte, custos, câmbio e 28% de imposto, sem ver o futuro.\n"
                "*O período inclui os anos em que os parâmetros foram escolhidos, por isso é otimista; "
-               "o que conta é o exame (pontos com os parâmetros escolhidos vs os originais).")]
+               "o que conta é o exame: a nota do perfil contra o índice no último ano (crescimento do capital com as perdas e "
+               "as quedas pesadas à maneira do perfil, menos a do S&P 500), com os parâmetros escolhidos vs os originais.")]
     crash_lines, mc_lines = [], []
     for strategy, r in results["strategies"].items():
         cfg = by_strategy.get(strategy, {"emoji": "🤖", "name": strategy})
@@ -1197,7 +1228,7 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
         import strategy_docs
 
         top = [f"`{r['param']}` · ajuda em {r['helps']} de {r['tested']} ({', '.join(r['where'][:4])}) · "
-               f"treino {r['train']:+d} · exame {r['exam']:+d} pts" for r in summary if r["helps"]][:8]
+               f"treino {r['train']:+d} · exame {r['exam']:+d}" for r in summary if r["helps"]][:8]
         flop = [f"`{r['param']}`" for r in summary if not r["helps"]]
         fields.append(("🔬 Que parâmetros contam (cada um ligado/desligado, o resto igual)",
                        ("\n".join(top) or "nenhum ajuda de forma consistente")
@@ -1247,10 +1278,11 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
                 "review": review_for(strategy),
             },
         })
-    link = interactive.publish(f"🧠 Pré-treino dos agentes: {years:g} anos", series, refs, top, agents=details, kind="pretreino",
+    link = interactive.publish(f"{REPORT_TITLE}: {years:g} anos", series, refs, top, agents=details,
+                               kind="pretreino" if PROFILE == agents.DEFAULT_PROFILE else f"pretreino-{PROFILE}",
                                subtitle=f"Treino {results['train'][0]} a {results['train'][1]} · exame {results['valid'][0]} "
                                         f"a {results['valid'][1]} · parâmetros escolhidos, custos e impostos incluídos")
-    card = embed(f"🧠 Pré-treino dos agentes: {years:g} anos, dia a dia", "\n".join(lines), color=BLUE,
+    card = embed(f"{REPORT_TITLE}: {years:g} anos, dia a dia", "\n".join(lines), color=BLUE,
                  fields=fields, image="pretreino.png",
                  footer="Backtest: resultados passados simulados, não garantem resultados futuros.")
     if link:
@@ -1269,7 +1301,8 @@ def review_for(strategy: str) -> dict:
         {"date": review.get("date")} if r else {})
 
 
-REPORT_TITLE = "🧠 Pré-treino dos agentes"  # only the latest report stays in the channel
+PROFILE_INFO = agents.PROFILES[PROFILE]
+REPORT_TITLE = f"🧠 Pré-treino dos agentes · {PROFILE_INFO['emoji']} {PROFILE_INFO['label']}"  # the latest per profile stays
 
 
 def post_report(results: dict, applied: list[str] | None, dry_run: bool, channel: str) -> int:
@@ -1290,6 +1323,7 @@ def finish(results: dict, today: date, apply_params: bool, dry_run: bool, partia
     if partial and REPORT_PATH.exists():
         previous = json.loads(REPORT_PATH.read_text())
         results = {**results, "strategies": {**previous.get("strategies", {}), **results["strategies"]}}
+    results["perfil"] = PROFILE
     REPORT_PATH.write_text(json.dumps(results, indent=1, default=str) + "\n")
     import evolution
 

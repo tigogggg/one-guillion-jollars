@@ -1,4 +1,5 @@
 name: Pré-treino dos agentes
+run-name: "Pré-treino ${{ inputs.perfil || 'equilibrado' }}${{ inputs.so_relatorio && ' (só relatório)' || '' }}"
 
 # Walk-forward backtest of every strategy on the last 20 years (the last one is
 # the exam), with crash tests and Monte Carlo. Each strategy trains on its own
@@ -64,6 +65,17 @@ on:
         description: "Intensidade da pesquisa só nesta execução (vazio = a do agents/search.json)"
         required: false
         default: ""
+      perfil:
+        description: "Perfil de investidor para que se treina (cada um tem os seus agentes e o seu relatório)"
+        type: choice
+        options: [equilibrado, conservador, arrojado]
+        default: equilibrado
+
+# The profile reaches every job (scripts/pretrain.py reads PRETRAIN_PERFIL); its report is agents/pretrain.json
+# (balanced) or agents/pretrain-<profile>.json.
+env:
+  PRETRAIN_PERFIL: ${{ inputs.perfil || 'equilibrado' }}
+  PRETRAIN_REPORT: ${{ (inputs.perfil == '' || inputs.perfil == 'equilibrado') && 'pretrain.json' || format('pretrain-{0}.json', inputs.perfil) }}
 
 permissions:
   contents: read  # results are pushed to the private data repo with its deploy key
@@ -73,7 +85,7 @@ permissions:
 # its own. Only the merge job, which writes agents/, waits for the agents' daily run (agents-state): the hours of
 # training no longer hold up the daily league or the /agentes commands.
 concurrency:
-  group: ${{ inputs.ensaio && format('ensaio-{0}', github.run_id) || 'pretrain' }}
+  group: ${{ inputs.ensaio && format('ensaio-{0}', github.run_id) || format('pretrain-{0}', inputs.perfil || 'equilibrado') }}
   cancel-in-progress: false
 
 jobs:
@@ -215,7 +227,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: ${{ inputs.ensaio && format('ensaio-merge-{0}', github.run_id) || 'agents-state' }}
+      group: ${{ inputs.ensaio && format('ensaio-merge-{0}', github.run_id) || format('agents-state-pretrain-{0}', inputs.perfil || 'equilibrado') }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -254,7 +266,7 @@ jobs:
             rm "$f"
           done
       - name: Parâmetros escolhidos antes desta execução
-        run: jq -c '.strategies | map_values(.chosen)' agents/pretrain.json > "$RUNNER_TEMP/antes.json" || echo '{}' > "$RUNNER_TEMP/antes.json"
+        run: jq -c '.strategies | map_values(.chosen)' "agents/$PRETRAIN_REPORT" > "$RUNNER_TEMP/antes.json" || echo '{}' > "$RUNNER_TEMP/antes.json"
       - name: Juntar, aplicar e publicar
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -284,10 +296,10 @@ jobs:
           for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 10; done
           exit 1
       - name: Instalar o Claude Code
-        if: ${{ success() && inputs.revisao_claude != false && !inputs.ensaio }}
+        if: ${{ success() && inputs.revisao_claude != false && !inputs.ensaio && (inputs.perfil == '' || inputs.perfil == 'equilibrado') }}
         run: npm install -g @anthropic-ai/claude-code
       - name: Revisão do Claude (propostas para o próximo treino)
-        if: ${{ success() && inputs.revisao_claude != false && !inputs.ensaio }}
+        if: ${{ success() && inputs.revisao_claude != false && !inputs.ensaio && (inputs.perfil == '' || inputs.perfil == 'equilibrado') }}
         continue-on-error: true  # the training is already saved; a failed review only skips the proposals
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -321,7 +333,8 @@ jobs:
           sys.path.insert(0, "scripts")
           from discord_post import GREEN, RED, embed, route, send
           ok = os.environ["AVISO"] == "ok"
-          title = "✅ Preparação concluída: tudo operacional" if ok else "⚠️ Preparação interrompida"
+          perfil = os.environ.get("PRETRAIN_PERFIL", "equilibrado")
+          title = (f"✅ Pré-treino {perfil} concluído" if ok else f"⚠️ Pré-treino {perfil} interrompido")
           text = (f"O pré-treino dos agentes terminou: {os.environ['MOTIVO']}. Os parâmetros escolhidos estão guardados e "
                   "aplicados; os agentes usam-nos a partir da próxima sessão. O relatório do pré-treino tem os detalhes."
                   if ok else f"O pré-treino dos agentes parou: {os.environ['MOTIVO']}. Os agentes continuam com os "
@@ -331,12 +344,12 @@ jobs:
           EOF
           }
           if [ "$ESTADO" != success ]; then avisar falhou "uma execução não correu bem (ver o Actions)"; exit 0; fi
-          jq -c '.strategies | map_values(.chosen)' agents/pretrain.json > "$RUNNER_TEMP/depois.json"
+          jq -c '.strategies | map_values(.chosen)' "agents/$PRETRAIN_REPORT" > "$RUNNER_TEMP/depois.json"
           changed=$(jq -rn --slurpfile a "$RUNNER_TEMP/antes.json" --slurpfile b "$RUNNER_TEMP/depois.json" \
             '[$b[0] | to_entries[] | select($a[0][.key] != .value) | .key] | join(", ")')
           echo "Estratégias com parâmetros novos: ${changed:-nenhuma}"
           if [ -n "$changed" ]; then quiet=0; else quiet=$((SEM_MUDANCAS + 1)); fi
           if [ "$quiet" -ge 2 ]; then avisar ok "convergiu, 2 execuções seguidas sem melhorias"; exit 0; fi
           if [ "$REPETIR" -le 0 ]; then avisar ok "fez todas as execuções pedidas"; exit 0; fi
-          gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f repetir=$((REPETIR - 1)) -f sem_mudancas=$quiet
+          gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f repetir=$((REPETIR - 1)) -f sem_mudancas=$quiet -f perfil="$PRETRAIN_PERFIL"
           echo "Pedi a próxima execução (depois dela ainda faltam $((REPETIR - 1)))."

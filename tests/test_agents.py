@@ -595,3 +595,34 @@ def test_league_series_and_today_include_the_value_of_this_round():
     assert agents.day_change(port, 1050.0, mkt) == pytest.approx(0.05)
     port["history"].append({"date": "2026-10-30", "equity": 1050.0, "deposits": 1000})
     assert len(agents.with_now(port, 1050.0, mkt)) == 2  # the close of today is already there
+
+
+def test_profiles_grade_losses_and_falls_differently():
+    calm = agents.profile_score(0.08, 1, 0.10, "conservador")
+    wild = agents.profile_score(0.25, 1, 0.35, "conservador")
+    assert calm > wild  # a conservative investor prefers +8% with a 10% fall to +25% with a 35% fall
+    assert agents.profile_score(0.25, 1, 0.35, "arrojado") > agents.profile_score(0.08, 1, 0.10, "arrojado")
+    loss = agents.profile_score(-0.10, 1, 0.12, "conservador")
+    assert loss == pytest.approx(3 * 1000 * __import__("math").log(0.9), rel=1e-3)  # losses weigh 3x
+
+
+def test_region_parameter_limits_where_a_strategy_buys():
+    stocks = {"AAPL": {"x": 1}, "SAP.DE": {"x": 2}}
+    mkt = market({}, DATES[0].date(), stocks=stocks)
+    assert set(agents.in_region(mkt, 1).stocks) == {"AAPL"} and set(agents.in_region(mkt, 2).stocks) == {"SAP.DE"}
+    assert agents.in_region(mkt, 0) is mkt and agents.in_region(mkt, 1) is agents.in_region(mkt, 1)  # built once
+
+
+def test_each_trainable_strategy_gets_a_conservative_and_an_aggressive_agent():
+    config = {"agents": [
+        {"id": "foguetao", "name": "Foguetão", "emoji": "🚀", "strategy": "foguetao", "capital": 1000, "params": {"n": 5}},
+        {"id": "jornalista", "name": "Jornalista", "emoji": "📰", "strategy": "jornalista", "capital": 1000, "params": {}},
+        {"id": "foguetao-diario", "name": "Foguetão · diário", "emoji": "🚀", "strategy": "foguetao", "capital": 1000,
+         "params": {}, "modo": "diario", "twin_of": "foguetao"}]}
+    state = {"agents": {"foguetao": {**new_portfolio(1000, DATES[0].date()), "params": {"n": 7}}}}
+    made = agents.ensure_profiles(config, state, DATES[0].date())
+    assert sorted(a["id"] for a in made) == ["foguetao-arrojado", "foguetao-conservador"]
+    assert state["agents"]["foguetao-conservador"]["params"] == {"n": 7}
+    assert agents.ensure_profiles(config, state, DATES[0].date()) == []
+    twins = agents.ensure_twins(config, state, DATES[0].date())
+    assert [t["twin_of"] for t in twins] == ["jornalista"]  # none for the profile agents
