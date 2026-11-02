@@ -198,7 +198,8 @@ async function loginPage(env, request, reason, next = "/") {
     ? `<a class="btn big ${cls}" href="${href}">${label}</a>`
     : `<span class="btn big off">${label} · em breve</span>`;
   return html(page("One Guillion Jollars", `<div class="door">
-  <h1 class="door-title">🏟️ One Guillion Jollars</h1>
+  <img class="door-logo" src="/icon-512.png" alt="1GJ" width="160" height="160">
+  <h1 class="door-title">One Guillion Jollars</h1>
   <p class="door-sub">Agentes de investimento treinados em 20 anos de mercado, notícias lidas por IA e a tua carteira, num só sítio.</p>
   ${REASONS[reason] ? `<p class="panel">${esc(REASONS[reason])}</p>` : ""}
   <div class="panel door-box">
@@ -219,6 +220,7 @@ async function loginPage(env, request, reason, next = "/") {
   ${on.discord && on.google ? "" : `<p class="muted small">Endereços de retorno a registar: <code>${esc(origin)}/entrar/discord/callback</code> e <code>${esc(origin)}/entrar/google/callback</code>.</p>`}
 </div>`, `<style>
 .door { max-width:760px; margin:6vh auto 0; text-align:center; }
+.door-logo { display:block; width:clamp(110px,28vw,160px); height:auto; margin:0 auto .4rem; border-radius:18px; box-shadow:0 0 24px rgba(255,180,60,.35); }
 .door-title { font-size:clamp(1.3rem,4.5vw,2.2rem); margin:.2em 0; } .door-sub { color:var(--muted); font-size:1.05rem; }
 .door-box { text-align:center; padding:22px 16px; } .door-box h2 { margin:0 0 14px; animation:blink 1.2s steps(2) infinite; }
 @keyframes blink { 50% { opacity:.35; } }
