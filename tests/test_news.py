@@ -96,3 +96,33 @@ def test_headlines_fall_back_to_rss_then_google(monkeypatch):
     assert [i["title"] for i in items] == ["Everpure surges after earnings"]
     assert queries[1]["q"] == '"Everpure" when:2d'
     assert news.short_name("Alphabet Inc. (Class A)") == "Alphabet"
+
+
+def test_important_8k_items_become_rated_news(monkeypatch):
+    import fundamentals
+
+    recent = {
+        "form": ["8-K", "10-Q", "8-K", "8-K"],
+        "acceptanceDateTime": ["2026-11-02T13:05:00.000Z", "2026-11-02T12:00:00.000Z", "2026-11-01T20:00:00.000Z",
+                               "2026-10-20T20:00:00.000Z"],
+        "items": ["4.02,9.01", "", "2.02,7.01", "1.03"],
+        "accessionNumber": ["0000320193-26-000101", "0000320193-26-000100", "0000320193-26-000099", "0000320193-26-000090"],
+    }
+
+    class Session:
+        def get(self, url, timeout=0):
+            return type("R", (), {"raise_for_status": lambda self: None, "json": lambda self: {"filings": {"recent": recent}}})()
+
+    monkeypatch.setattr(fundamentals, "sec_session", lambda: (Session(), {"AAPL": 320193}))
+    items = news.sec_filings(["AAPL", "SAP"], NOW, pause=0)
+    assert [(i["title"], i["sentimento"], i["importancia"]) for i in items] == [("8-K item 4.02", -2, 3), ("8-K item 2.02", 0, 2)]
+    assert items[0]["id"] == "sec-0000320193-26-000101-4.02" and "000032019326000101" in items[0]["url"]
+    signals = news.merge_signals({}, items, NOW)
+    assert signals["AAPL"]["score"] == -6  # feeds the agents' bad-news veto (score <= -3)
+
+
+def test_without_the_sec_contact_the_filings_are_skipped(monkeypatch):
+    import fundamentals
+
+    monkeypatch.setattr(fundamentals, "sec_session", lambda: (_ for _ in ()).throw(RuntimeError("403")))
+    assert news.sec_filings(["AAPL"], NOW, pause=0) == []

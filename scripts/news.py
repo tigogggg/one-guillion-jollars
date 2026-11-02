@@ -277,6 +277,71 @@ def analyse_finbert(items: list[dict]) -> list[dict] | None:
     return ratings
 
 
+# --------------------------------------------------------------------------
+# SEC 8-K filings: what the company itself told the regulator
+# --------------------------------------------------------------------------
+
+# 8-K items that move a stock, with a rating like Claude's (sentiment -2..2, importance 0..3). They need no
+# reading: the item number says what happened. The negative ones feed the agents' bad-news veto.
+SEC_ITEMS = {
+    "1.03": ("pediu falência ou insolvência", -2, 3),
+    "4.02": ("avisou que as contas anteriores deixam de ser fiáveis (vão ser refeitas)", -2, 3),
+    "3.01": ("recebeu aviso de exclusão da bolsa ou deixou de cumprir as regras de cotação", -2, 3),
+    "2.06": ("registou uma imparidade relevante (perda de valor de ativos)", -1, 2),
+    "5.02": ("anunciou a saída ou a entrada de administradores ou diretores", -1, 1),
+    "2.02": ("publicou resultados trimestrais", 0, 2),
+}
+SEC_FILING_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{acc_dashed}-index.htm"
+
+
+def sec_filings(symbols: list[str], now: datetime, pause: float = 0.12) -> list[dict]:
+    """The important 8-K items filed in the last 36 hours by these companies, as rated news items."""
+    import fundamentals
+    import time
+
+    try:
+        session, cik_of = fundamentals.sec_session()
+    except (RuntimeError, requests.RequestException) as e:
+        log(f"8-K da SEC ignorados: {e}", "warning")
+        return []
+    out = []
+    for sym in symbols:
+        cik = cik_of.get(sym.upper())
+        if not cik:
+            continue
+        try:
+            resp = session.get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json", timeout=30)
+            resp.raise_for_status()
+            recent = resp.json().get("filings", {}).get("recent", {})
+        except (requests.RequestException, ValueError):
+            continue
+        finally:
+            time.sleep(pause)
+        rows = zip(recent.get("form", []), recent.get("acceptanceDateTime", []), recent.get("items", []),
+                   recent.get("accessionNumber", []))
+        for form, accepted, items, acc in rows:
+            if form != "8-K":
+                continue
+            try:
+                when = datetime.fromisoformat(accepted.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if now - when > MAX_AGE:
+                break  # newest first: the rest are older
+            for item in str(items or "").split(","):
+                if item not in SEC_ITEMS:
+                    continue
+                text, sentiment, importance = SEC_ITEMS[item]
+                out.append({
+                    "id": f"sec-{acc}-{item}", "symbol": sym, "title": f"8-K item {item}", "summary": "",
+                    "publisher": "SEC EDGAR", "published": when.astimezone(timezone.utc).isoformat(),
+                    "url": SEC_FILING_URL.format(cik=cik, acc=acc.replace("-", ""), acc_dashed=acc),
+                    "sentimento": sentiment, "importancia": importance, "surpresa": False,
+                    "resumo": f"{text} (8-K entregue à SEC)", "fonte": "SEC",
+                })
+    return out
+
+
 def clamp_int(x, lo: int, hi: int) -> int:
     try:
         return max(lo, min(hi, int(x)))
@@ -324,7 +389,8 @@ def digest(rated: list[dict], source: str, now: datetime, names: dict[str, str] 
         f"📰 Notícias que importam · {lisbon:%d/%m %H:%M}",
         "\n".join(lines)[:4096],
         color=BLUE,
-        footer=f"Análise automática ({source}) dos títulos do Yahoo Finance: pode errar. Não é recomendação de compra.",
+        footer=f"Análise automática ({source}) dos títulos do Yahoo Finance e dos 8-K entregues à SEC: pode errar. "
+               "Não é recomendação de compra.",
     )]
 
 
@@ -471,13 +537,15 @@ def main() -> int:
     fetched = [i for s in symbols for i in headlines(s, now=now, name=names.get(s))]
     items = [i for i in fetched if i["id"] not in seen]
     items = list({i["id"]: i for i in items}.values())[:MAX_HEADLINES]
+    filings = [i for i in sec_filings([s for s in symbols if "." not in s], now) if i["id"] not in seen]
     by_source = ", ".join(f"{k}: {v}" for k, v in SOURCE_COUNTS.items()) or "nenhuma fonte respondeu"
-    log(f"{len(symbols)} ações, {len(fetched)} títulos das últimas 36 h ({by_source}), {len(items)} novos ({len(seen)} já vistos)")
-    if not items:
+    log(f"{len(symbols)} ações, {len(fetched)} títulos das últimas 36 h ({by_source}), {len(items)} novos ({len(seen)} já vistos); "
+        f"{len(filings)} 8-K importantes novos na SEC")
+    if not items and not filings:
         return 0
 
-    ratings, source = (None, "")
-    if not args.finbert:
+    ratings, source = ([], "SEC") if not items else (None, "")
+    if items and not args.finbert:
         ratings, source = analyse_claude(items), "Claude"
     if ratings is None:
         ratings, source = analyse_finbert(items), "FinBERT"
@@ -485,8 +553,8 @@ def main() -> int:
         print("Nem Claude nem FinBERT disponíveis.", file=sys.stderr)
         return NO_ANALYSIS
 
-    by_id = {i["id"]: i for i in items}
-    rated = []
+    by_id = {i["id"]: i for i in items + filings}
+    rated = list(filings)
     for r in ratings:
         item = by_id.get(str(r["id"]))
         if item:
