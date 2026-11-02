@@ -193,7 +193,6 @@ OMV.VI,OMV,Energy,Áustria
 VER.VI,Verbund,Utilities,Áustria
 VOE.VI,voestalpine,Materials,Áustria
 NESN.SW,Nestlé,Consumer Staples,Suíça
-ROG.SW,Roche,Health Care,Suíça
 NOVN.SW,Novartis,Health Care,Suíça
 UBSG.SW,UBS,Financials,Suíça
 ZURN.SW,Zurich Insurance,Financials,Suíça
@@ -243,7 +242,6 @@ VOD.L,Vodafone,Communication Services,Reino Unido
 TSCO.L,Tesco,Consumer Staples,Reino Unido
 HLN.L,Haleon,Consumer Staples,Reino Unido
 IMB.L,Imperial Brands,Consumer Staples,Reino Unido
-AHT.L,Ashtead,Industrials,Reino Unido
 STAN.L,Standard Chartered,Financials,Reino Unido
 LGEN.L,Legal & General,Financials,Reino Unido
 AV.L,Aviva,Financials,Reino Unido
@@ -269,7 +267,7 @@ KGF.L,Kingfisher,Consumer Discretionary,Reino Unido
 SN.L,Smith & Nephew,Health Care,Reino Unido
 SVT.L,Severn Trent,Utilities,Reino Unido
 UU.L,United Utilities,Utilities,Reino Unido
-BDEV.L,Barratt Redrow,Consumer Discretionary,Reino Unido
+BTRW.L,Barratt Redrow,Consumer Discretionary,Reino Unido
 PSN.L,Persimmon,Consumer Discretionary,Reino Unido
 LAND.L,Land Securities,Real Estate,Reino Unido
 SGRO.L,Segro,Real Estate,Reino Unido
