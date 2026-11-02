@@ -74,6 +74,13 @@ jobs:
           uv pip install torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install "transformers>=4.44,<5"
           uv run --no-sync python scripts/news.py --finbert
+      - name: Negócios declarados no Congresso dos EUA (Câmara, PTR)
+        if: ${{ !inputs.republicar && !cancelled() }}
+        continue-on-error: true  # never fails the news run
+        timeout-minutes: 5
+        run: |
+          command -v pdftotext >/dev/null || sudo apt-get install -y -qq poppler-utils >/dev/null
+          uv run python scripts/congress.py
       - name: Guardar as notícias analisadas
         if: ${{ !cancelled() && hashFiles('state/news/*.json') != '' }}
         uses: actions/cache/save@v4

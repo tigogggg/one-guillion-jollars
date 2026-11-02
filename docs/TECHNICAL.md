@@ -428,6 +428,15 @@ How the agents trade, live and in the pre-training alike:
   `NO_BUYS_BEFORE_CLOSE`, `DAY_LOSS_STOP`; never for exits, nor with
   `ignora_risco`).
 
+## Congress trades
+
+`scripts/congress.py` (with each news run) reads the US House Clerk's index of
+Periodic Transaction Reports, the stock trades members must disclose under the
+STOCK Act, and posts the new ones to the alerts channel: who, buy or sell,
+stock, amount range, owner and how many days it took to disclose (up to 45 by
+law, so the trades are days or weeks old). The PDFs are read with `pdftotext`;
+scanned reports are linked. The reader is adapted from day-trader-skill (MIT).
+
 ## Earnings calendar
 
 `scripts/earnings.py` looks up each stock's next earnings date on Yahoo

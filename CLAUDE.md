@@ -11,7 +11,8 @@ Reply to him in **pt-PT**, short and clear; commit messages in English.
 - `scripts/`: Python (run with `uv run python scripts/...`). Agents league (`agents.py`), pre-training / backtest
   (`pretrain.py`), market context (`context.py`: VIX, policy uncertainty, credit, rates, dollar, geopolitical risk,
   oil, gold, sector ETFs), SEC fundamentals point-in-time (`fundamentals.py`), opportunities (`opportunities.py`),
-  proposals (`proposals.py`), news + Claude geopolitics (`news.py`), Claude agent review (`agent_review.py`),
+  proposals (`proposals.py`), news + Claude geopolitics + SEC 8-Ks (`news.py`), US House members' disclosed trades
+  (`congress.py`), Claude agent review (`agent_review.py`),
   platform update notes (`updates.py`), evolution history (`evolution.py`), local training (`train_local.py`).
 - Tests: `uv run pytest -q tests` (must pass before pushing).
 - Data in git: `data/context/*.csv`, `data/fundamentals/fundamentals.csv.gz` (refreshed weekly by `context-data.yml`).
