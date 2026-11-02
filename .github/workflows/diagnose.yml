@@ -1,0 +1,68 @@
+name: Diagnóstico do pré-treino
+
+# The parameters each agent trades with, replayed on the same 20 years with and without the European stocks and with
+# and without the gap rule, to see what moved a strategy's result. Run by hand. This repo is public: the results go to
+# the private repo (agents/lab/) and to Discord; the log only shows progress.
+on:
+  workflow_dispatch:
+    inputs:
+      estrategias:
+        description: "Estratégias, separadas por vírgulas"
+        required: true
+        default: "sniper,cacador,pescador,monge,deriva,abutre,foguetao,campeao"
+      testes:
+        description: "Publicar no canal 🧪-testes"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Dia (Lisboa)
+        id: dia
+        run: echo "day=$(TZ=Europe/Lisbon date +%F)" >> "$GITHUB_OUTPUT"
+      - name: Preços e contexto do pré-treino de hoje
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            precos/
+            ctx/
+          key: pretrain-data-${{ steps.dia.outputs.day }}-20-${{ hashFiles('data/universe/europe.csv') }}
+      - name: Contexto (se a cache não existir)
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: uv run python scripts/context.py --guardar ctx/context.csv
+      - name: Diagnóstico
+        env:
+          PRICE_CACHE_DIR: precos
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_TESTES: ${{ inputs.testes && '1' || '' }}
+        run: uv run python scripts/diagnose.py --estrategias "${{ inputs.estrategias }}" --contexto ctx/context.csv
+      - name: Guardar os resultados (repositório privado)
+        if: ${{ !cancelled() }}
+        working-directory: agents
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A lab 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -m "Diagnóstico do pré-treino $(date -u +%F)"
+          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 10; done
+          exit 1
