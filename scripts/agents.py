@@ -371,13 +371,30 @@ def us_breadth(stocks: dict[str, dict]) -> float:
 
 
 def market_open(symbol: str, now: datetime) -> bool:
-    """Whether the symbol's exchange is in session right now (started, and not over)."""
+    """Whether the symbol's exchange is in session right now (started, and before its close)."""
     from zoneinfo import ZoneInfo
 
-    if exchange_of(symbol) == "=X":
+    ex = exchange_of(symbol)
+    if ex == "=X":
         return True
-    local_today = now.astimezone(ZoneInfo(EXCHANGE_CLOSE[exchange_of(symbol)][0])).date()
-    return session_started(symbol, now) and last_complete_day(symbol, now) < local_today
+    tz, hour, minute = EXCHANGE_CLOSE[ex]
+    local = now.astimezone(ZoneInfo(tz))
+    return session_started(symbol, now) and local < local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def trading_now(mkt: Market, symbol: str, now: datetime) -> bool:
+    """In session now and with a bar for today already in the data: on an exchange holiday, or while Yahoo has not
+    yet published today's first prices (European quotes come with a delay), the latest price is yesterday's close,
+    and trading at it would use a price the market no longer offers."""
+    from zoneinfo import ZoneInfo
+
+    if not market_open(symbol, now):
+        return False
+    df = mkt.hist.get(symbol)
+    if df is None or not len(df):
+        return False
+    tz = EXCHANGE_CLOSE[exchange_of(symbol)][0]
+    return df.index[-1].date() == now.astimezone(ZoneInfo(tz)).date()
 
 
 def session_fraction(symbol: str, now: datetime) -> float:
@@ -442,20 +459,51 @@ def round_history(tickers: list[str], now: datetime) -> dict[str, pd.DataFrame]:
             base = None
     if base is None:
         base = download_history(tickers)
+        # the year up to yesterday: today's bar comes fresh every round
+        base = {t: df[df.index < pd.Timestamp(day)] for t, df in base.items()}
         PRICE_CACHE.mkdir(parents=True, exist_ok=True)
         for old in PRICE_CACHE.glob("base-*.pkl"):
             if not old.name.startswith(f"base-{day}-"):
                 old.unlink()
-        path.write_bytes(pickle.dumps(base))
+        if len(base) >= 0.95 * len(tickers):  # a download with holes is used, not kept for the rest of the day
+            path.write_bytes(pickle.dumps(base))
     fresh = download_history(tickers, period="5d")
     out = {}
     for t in tickers:
         b, f = base.get(t), fresh.get(t)
         if f is None or not len(f):
-            if b is not None:
-                out[t] = b
+            if b is not None:  # no fresh prices this round: only the complete days
+                out[t] = b[b.index < pd.Timestamp(day)]
             continue
         out[t] = f if b is None else pd.concat([b[b.index < f.index[0]], f])
+    return out
+
+
+STALE_SESSIONS = 3
+FX_LAST_PATH = REPO_AGENTS / "fx_last.json"  # the last rate seen per currency, for a day Yahoo misses one
+
+
+def with_last_rates(rates: dict[str, pd.Series]) -> dict[str, pd.Series]:
+    """Every currency of FX_SYMBOLS: Yahoo's series, or (when Yahoo did not answer for one) the last rate seen, so a
+    held position can still be valued. The latest rates are remembered for next time."""
+    try:
+        saved = json.loads(FX_LAST_PATH.read_text()) if FX_LAST_PATH.exists() else {}
+    except ValueError:
+        saved = {}
+    out = dict(rates)
+    for ccy in FX_SYMBOLS:
+        if ccy == "USD":
+            continue
+        if ccy in rates and len(rates[ccy]):
+            saved[ccy] = float(rates[ccy].iloc[-1])
+        elif ccy in saved:
+            print(f"WARN: sem câmbio EUR/{ccy} do Yahoo; uso o último conhecido ({saved[ccy]})", file=sys.stderr)
+            out[ccy] = pd.Series([saved[ccy]], index=[pd.Timestamp("2000-01-01")])
+    try:
+        FX_LAST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        FX_LAST_PATH.write_text(json.dumps(saved, sort_keys=True))
+    except OSError:
+        pass
     return out
 
 
@@ -490,35 +538,44 @@ def load_market(now: datetime | None = None, live: bool = False) -> Market:
         fx_hist = complete_bars(download_history(list(FX_SYMBOLS.values())), now, as_of)
     if "EURUSD=X" not in fx_hist:
         raise RuntimeError("Sem dados do Yahoo Finance (EUR/USD).")
-    fx_rates = {c: fx_hist[t]["Close"] for c, t in FX_SYMBOLS.items() if c != "USD" and t in fx_hist}
+    fx_rates = with_last_rates({c: fx_hist[t]["Close"] for c, t in FX_SYMBOLS.items() if c != "USD" and t in fx_hist})
     missing = [s for s in sector_of if s not in stock_hist]
     if missing:
         print(f"WARN: {len(missing)} ações sem dados do Yahoo: {', '.join(missing[:40])}", file=sys.stderr)
     # Europe: only stocks whose currency can be converted, and only the most traded part of the list.
     probe = Market(hist={}, fx=fx_hist["EURUSD=X"]["Close"], stocks={}, etfs={}, as_of=as_of, sessions=[],
                    zone="Neutra", stage2_share=0.0, fx_rates=fx_rates)
+    # A stock with no bar in the last STALE_SESSIONS sessions (stopped trading, delisted) is not bought.
+    recent = [d.date() for d in stock_hist["SPY"].index if d.date() <= as_of][-STALE_SESSIONS:]
+    fresh = {sym for sym, df in stock_hist.items() if len(df) and df.index[-1].date() >= recent[0]}
     traded = {}
     for sym, df in stock_hist.items():
-        if sym == "SPY" or is_us(sym) or fx_series(probe, currency_of(sym)) is None and not is_eur(sym):
+        if sym == "SPY" or is_us(sym) or sym not in fresh or fx_series(probe, currency_of(sym)) is None and not is_eur(sym):
             continue
         tail = df.iloc[-LIQUIDITY_DAYS:]
-        traded[sym] = to_eur(probe, sym, float((tail["Close"] * tail["Volume"]).mean()), as_of)
+        value = tail["Close"] * tail["Volume"]
+        if (value > 0).sum() < 20:  # as the backtest: at least 20 days with trading in the window
+            continue
+        traded[sym] = to_eur(probe, sym, float(value[value > 0].mean()), as_of)
     in_play = liquid_europe(traded)
 
     stocks = {}
     for sym, df in stock_hist.items():
-        if sym not in sector_of or (not is_us(sym) and sym not in in_play):
+        if sym not in sector_of or sym not in fresh or (not is_us(sym) and sym not in in_play):
             continue
         m = trend_metrics(df)
         if m:
             stocks[sym] = {**m, **extra_metrics(df), "sector": sector_of[sym], "name": name_of.get(sym, ""),
-                            "stage2": is_stage2(m)}
+                            "stage2": is_stage2(m), "currency": currency_of(sym)}
+            if not is_us(sym):  # trading volume in US dollars, like the US stocks (opportunities, safety score)
+                usd = float(probe.fx.iloc[-1]) if len(probe.fx) else 1.0
+                stocks[sym]["dollar_volume"] = to_eur(probe, sym, stocks[sym]["dollar_volume"], as_of) * usd
     add_trend_scores(stocks)
     try:  # fundamentals as of today (SEC filings in data/fundamentals, today's price)
         import fundamentals
 
         funds = fundamentals.load()
-        today = stock_hist["SPY"].index[-1].date()
+        today = as_of
         for sym, m in stocks.items():
             m.update(fundamentals.latest(funds.get(sym), m["price"], today))
     except Exception as e:  # missing fundamentals only switch those rules off
@@ -540,7 +597,9 @@ def load_market(now: datetime | None = None, live: bool = False) -> Market:
         stocks=stocks,
         etfs=etfs,
         as_of=as_of,
-        sessions=sorted({d.date() for d in spy.index} | ({as_of} if live and now.astimezone(ZoneInfo("Europe/Lisbon")).weekday() < 5 else set())),
+        sessions=sorted({d.date() for d in spy.index}
+                        | ({as_of} if live and any(len(df) and df.index[-1].date() == as_of for df in stock_hist.values())
+                           else set())),
         zone=zone_for(share),
         stage2_share=share,
     )
@@ -595,7 +654,8 @@ CURRENCY_LABEL = {"USD": "USD", "GBp": "GBp", "CHF": "CHF", "SEK": "SEK", "DKK":
 # that country: French FTT 0.4%, Italian FTT 0.1%, Spanish FTT 0.2%, UK stamp duty 0.5%, Irish stamp duty 1%.
 # ETFs and companies registered elsewhere (BUY_TAX_EXEMPT) pay none.
 BUY_TAX = {".PA": 0.004, ".MI": 0.001, ".MC": 0.002, ".L": 0.005, ".IR": 0.01}
-BUY_TAX_EXEMPT = {"STMPA.PA", "AIR.PA", "RACE.MI", "STLAM.MI", "TEN.MI", "FER.MC", "GLEN.L"}
+BUY_TAX_EXEMPT = {"STMPA.PA", "AIR.PA", "ERF.PA", "RACE.MI", "STLAM.MI", "TEN.MI", "CPR.MI", "FER.MC", "GLEN.L",
+                  "EXPN.L", "WPP.L", "IAG.L"}  # registered in NL, LU, Jersey or Spain
 
 
 def currency_of(symbol: str) -> str:
@@ -633,18 +693,18 @@ def to_eur(mkt: Market, symbol: str, price: float, on: date) -> float:
 
 
 def fix_pence(df: pd.DataFrame) -> pd.DataFrame:
-    """London quotes from Yahoo sometimes switch a day between pence and pounds (100x jumps): put them back in pence."""
-    close = df["Close"]
-    ref = close.rolling(11, center=True, min_periods=3).median()
-    ratio = close / ref
-    low, high = ratio < 0.02, ratio > 50
-    if not (low.any() or high.any()):
-        return df
-    df = df.copy()
+    """London quotes from Yahoo sometimes switch a value between pence and pounds (100x jumps), a whole day or only
+    its high or low: put each one back in pence (checked against the median close around it)."""
+    ref = df["Close"].rolling(11, center=True, min_periods=3).median()
+    out = None
     for col in ("Open", "High", "Low", "Close"):
-        df.loc[low, col] = df.loc[low, col] * 100
-        df.loc[high, col] = df.loc[high, col] / 100
-    return df
+        ratio = df[col] / ref
+        low, high = ratio < 0.02, ratio > 50
+        if low.any() or high.any():
+            out = df.copy() if out is None else out
+            out.loc[low, col] = df.loc[low, col] * 100
+            out.loc[high, col] = df.loc[high, col] / 100
+    return df if out is None else out
 
 
 def bars_between(df: pd.DataFrame, after: date, until: date) -> pd.DataFrame:
@@ -757,26 +817,43 @@ def buy(port: dict, mkt: Market, order: dict, price: float, on: date) -> dict | 
     return trade
 
 
-def fill_pending(port: dict, mkt: Market) -> list[dict]:
-    """Execute the previous run's orders at the open of the next session."""
+PENDING_MAX_SESSIONS = 5  # an order that found no price in this many sessions (stale or delisted stock) expires
+
+
+def cancel(port: dict, entry: dict) -> None:
+    port["cancelled"] = (port.get("cancelled", []) + [entry])[-50:]
+
+
+def cancel_text(c: dict) -> str:
+    gap = f" {c['gap']:+.1%}" if "gap" in c else ""
+    return f"{c['symbol']} ({c.get('reason', 'gap na abertura')}{gap})"
+
+
+def fill_pending(port: dict, mkt: Market, partial_day: date | None = None) -> list[dict]:
+    """Execute the previous run's orders at the open of the next session.
+
+    partial_day: a session still under way (the intraday rounds): an order fills there only at a real open, never at
+    the price of the moment. An order whose stock has no data stays pending; after PENDING_MAX_SESSIONS it expires.
+    """
     done, still = [], []
     # sells first, so their cash is available to the buys
     for order in sorted(port["pending"], key=lambda o: o["side"] != "sell"):
         df = mkt.hist.get(order["symbol"])
-        if df is None:
-            continue
-        after = bars_between(df, date.fromisoformat(order["created"]), mkt.as_of)
-        if after.empty:
-            still.append(order)
-            continue
+        after = None if df is None else bars_between(df, date.fromisoformat(order["created"]), mkt.as_of)
         on, price = None, None
-        for idx, bar in after.iterrows():  # the first session with a valid price (data can have broken bars)
-            price = next((float(bar[c]) for c in ("Open", "Close") if pd.notna(bar[c]) and float(bar[c]) > 0), None)
+        for idx, bar in (after.iterrows() if after is not None else ()):  # the first session with a valid price
+            day = idx.date()
+            cols = ("Open",) if day == partial_day else ("Open", "Close")  # broken bars: the close, on complete days
+            price = next((float(bar[c]) for c in cols if pd.notna(bar[c]) and float(bar[c]) > 0), None)
             if price is not None:
-                on = idx.date()
+                on = day
                 break
         if price is None:
-            still.append(order)
+            if sessions_since(mkt, order["created"]) > PENDING_MAX_SESSIONS:
+                cancel(port, {"date": mkt.as_of.isoformat(), "symbol": order["symbol"], "side": order["side"],
+                              "reason": "sem preço há mais de 5 sessões"})
+            else:
+                still.append(order)
             continue
         if order["side"] == "sell":
             if order["symbol"] in port["positions"]:
@@ -785,9 +862,8 @@ def fill_pending(port: dict, mkt: Market) -> list[dict]:
         else:
             ref, limit = order.get("ref"), order.get("gap_max")
             if ref and limit and abs(price / ref - 1) > limit:  # opened too far from the decision's close: cancel
-                port["cancelled"] = (port.get("cancelled", []) + [{
-                    "date": on.isoformat(), "symbol": order["symbol"], "gap": round(price / ref - 1, 4),
-                    "limit": limit}])[-50:]
+                cancel(port, {"date": on.isoformat(), "symbol": order["symbol"], "gap": round(price / ref - 1, 4),
+                              "limit": limit, "reason": "gap na abertura"})
                 continue
             t = buy(port, mkt, order, price, on)
             if t:
@@ -799,8 +875,9 @@ def fill_pending(port: dict, mkt: Market) -> list[dict]:
 def check_exits(port: dict, mkt: Market, open_day: date | None = None) -> list[dict]:
     """Stops and targets, bar by bar since each position was last checked.
 
-    open_day: a session still under way (the intraday stop round). Its low and high so far can trigger an exit,
-    at the same price the daily check would use, but it is not marked as checked: the full day is checked again.
+    open_day: a session still under way (the intraday rounds). Its low so far can trigger the stop, at the price
+    the daily check would use; targets wait for the full day (the backtest checks the stop first when both are hit
+    the same day). The day is not marked as checked: the full day is checked again by the daily run.
     """
     done = []
     for symbol, pos in list(port["positions"].items()):
@@ -814,7 +891,7 @@ def check_exits(port: dict, mkt: Market, open_day: date | None = None) -> list[d
                 done.append(sell(port, mkt, symbol, min(float(bar["Open"]), pos["stop"]), on, "stop",
                                  ctx={"stop": round(pos["stop"], 4), "entry": round(pos["entry"], 4), "low": round(float(bar["Low"]), 4)}))
                 break
-            if pos.get("tp") and bar["High"] >= pos["tp"]:
+            if pos.get("tp") and bar["High"] >= pos["tp"] and on != open_day:
                 done.append(sell(port, mkt, symbol, max(float(bar["Open"]), pos["tp"]), on, "alvo",
                                  ctx={"tp": round(pos["tp"], 4), "entry": round(pos["entry"], 4), "high": round(float(bar["High"]), 4)}))
                 break
@@ -1849,19 +1926,21 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
     for cfg in agents_today:
         port = state["agents"][cfg["id"]]
         params = port.setdefault("params", dict(cfg["params"]))
-        cancelled = len(port.get("cancelled", []))
+        cancelled = list(port.get("cancelled", []))
         for t in fill_pending(port, mkt) + check_exits(port, mkt) + [x for x in [pay_taxes(port, mkt)] if x]:
             moves.append((cfg, t))
-        gaps = port.get("cancelled", [])[cancelled:]
-        if gaps:
-            avoided.append(f"{cfg['emoji']} {cfg['name']}: compra cancelada por gap na abertura: "
-                           + ", ".join(f"{g['symbol']} ({g['gap']:+.1%})" for g in gaps))
+        gone = [c for c in port.get("cancelled", []) if c not in cancelled]
+        if gone:
+            avoided.append(f"{cfg['emoji']} {cfg['name']}: ordens canceladas: " + ", ".join(map(cancel_text, gone)))
         trail_stops(port, mkt, effective(params, mkt.zone, cfg["strategy"]))
         score_day(port, mkt)
         if cfg["strategy"] != "indexador" and is_bankrupt(port, mkt):
             moves += [(cfg, t) for t in liquidate(port, mkt, "falência")]
             cfg["active"], cfg["retired"] = False, mkt.as_of.isoformat()
             state.get("shadows", {}).pop(cfg["id"], None)
+            for twin in config["agents"]:  # its daily twin compared with it: it goes too (the child gets a new one)
+                if twin.get("twin_of") == cfg["id"] and twin.get("active", True):
+                    twin["active"], twin["retired"] = False, mkt.as_of.isoformat()
             mkt.league.pop(cfg["id"], None)
             bankrupt.append(cfg)
             continue
@@ -1869,6 +1948,8 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
         if note:
             training.append(f"{cfg['emoji']} **{cfg['name']}** {note}")
         if mode_of(cfg) == REACTIVE:  # it decides in the intraday rounds (reactive_round)
+            # shadow copies replay the daily engine: they tune the daily twin, whose parameters the pre-training shares
+            state.get("shadows", {}).pop(cfg["id"], None)
             continue
         if port["last_decision"] != mkt.as_of.isoformat() and not port["pending"]:
             orders, notes = decide(cfg, port, mkt, params)
@@ -1965,8 +2046,9 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
         color=GREEN if leader >= 0 else RED,
         fields=fields,
         image="agentes.png",
-        footer="Simulação com dinheiro fictício e preços reais: ordens à abertura seguinte, 0,1% de custos (+0,15% câmbio "
-        "nas ações dos EUA), 28% de imposto sobre as mais-valias de cada ano. Pontos: ±1 por cada 0,1% acima/abaixo do "
+        footer="Simulação com dinheiro fictício e preços reais: os agentes reativos negoceiam ao preço de cada ronda nos "
+        "mercados abertos; os diários, à abertura seguinte. 0,1% de custos (+0,15% câmbio fora do euro; imposto de bolsa "
+        "na compra em FR, IT, ES, UK e IE), 28% de imposto sobre as mais-valias de cada ano. Pontos: ±1 por cada 0,1% acima/abaixo do "
         "S&P 500 no dia, +2 por dia em lucro, penalização acima de 10% de queda desde o máximo. Falência a -50%: o lugar "
         "passa para um filho do líder. Não é recomendação de compra.",
     )
@@ -2399,7 +2481,7 @@ def ensure_twins(config: dict, state: dict, start: date) -> list[dict]:
     for cfg in list(active_agents(config)):
         if mode_of(cfg) == DAILY or cfg["strategy"] == "indexador" or cfg["id"] in twinned:
             continue
-        twin = {**{k: v for k, v in cfg.items() if k not in ("id", "name", "description")},
+        twin = {**{k: v for k, v in cfg.items() if k not in ("id", "name", "description", "lineage", "lineage_name")},
                 "id": f"{cfg['id']}-diario", "name": f"{cfg['name']} · diário", "modo": DAILY, "twin_of": cfg["id"],
                 "description": f"Gémeo diário de {cfg['name']}: a mesma estratégia, mas decide uma vez por dia antes "
                                "das aberturas (07:30), como no pré-treino. Serve de comparação com o modo reativo."}
@@ -2411,17 +2493,20 @@ def ensure_twins(config: dict, state: dict, start: date) -> list[dict]:
     return created
 
 
-def live_exits(port: dict, mkt: Market, now: datetime) -> list[dict]:
-    """Stops and targets of positions bought during today's session: today's low and high may come from before the
-    purchase, so these are checked against the price of each round instead (and sold at it)."""
+def live_exits(port: dict, mkt: Market, now: datetime, targets: bool = False) -> list[dict]:
+    """Exits at the price of the round (and sold at it). Stops of positions bought during today's session (today's
+    low may come from before the purchase); with `targets` (reactive agents), every target the price has reached
+    now: the price is really there, so a reactive agent takes it the same day."""
     done = []
+    today = mkt.as_of.isoformat()
     for symbol, pos in list(port["positions"].items()):
-        if pos.get("checked", "") < mkt.as_of.isoformat() or not market_open(symbol, now):
+        bought_today = pos.get("checked", "") >= today
+        if not (bought_today or targets) or not trading_now(mkt, symbol, now):
             continue
         price = last_close(mkt, symbol)
         if price is None:
             continue
-        if pos.get("stop") and price <= pos["stop"]:
+        if bought_today and pos.get("stop") and price <= pos["stop"]:
             done.append(sell(port, mkt, symbol, price, mkt.as_of, "stop",
                              ctx={"stop": round(pos["stop"], 4), "entry": round(pos["entry"], 4), "price": round(price, 4)}))
         elif pos.get("tp") and price >= pos["tp"]:
@@ -2449,7 +2534,7 @@ def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime, live:
         sym = o["symbol"]
         if sym in pending or (o["side"] == "buy" and sym in sold):
             continue
-        if market_open(sym, now):
+        if trading_now(mkt, sym, now):
             price = last_close(mkt, sym)
             if price is None:
                 continue
@@ -2465,11 +2550,11 @@ def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime, live:
             df = mkt.hist.get(sym)
             if df is not None and len(df):  # fills at the first open after its last bar (later today or tomorrow)
                 port["pending"].append({**o, "created": df.index[-1].date().isoformat()})
-    port["last_decision"] = now.isoformat(timespec="minutes")
     return done, notes
 
 
-def reactive_round(config: dict, state: dict, mkt: Market, now: datetime) -> tuple[list[tuple[dict, dict]], list[str]]:
+def reactive_round(config: dict, state: dict, mkt: Market, now: datetime,
+                   live: bool = True) -> tuple[list[tuple[dict, dict]], list[str]]:
     """An intraday round (every 30 minutes during the sessions), with the market up to now (load_market(live=True)).
     Every agent: pending orders whose market opened today fill at that open, stops and targets reached so far are
     executed. Reactive agents then decide again with the prices of this moment (react). Daily twins only do the
@@ -2487,9 +2572,19 @@ def reactive_round(config: dict, state: dict, mkt: Market, now: datetime) -> tup
         if not port:
             continue
         params = port.setdefault("params", dict(cfg["params"]))
-        done = fill_pending(port, mkt) + check_exits(port, mkt, open_day=mkt.as_of) + live_exits(port, mkt, now)
-        if mode_of(cfg) == REACTIVE:
-            traded, notes = react(cfg, port, mkt, params, now)
+        cancelled = list(port.get("cancelled", []))
+        reactive = mode_of(cfg) == REACTIVE
+        done = (fill_pending(port, mkt, partial_day=mkt.as_of) + check_exits(port, mkt, open_day=mkt.as_of)
+                + live_exits(port, mkt, now, targets=reactive))
+        gone = [c for c in port.get("cancelled", []) if c not in cancelled]
+        if gone:
+            avoided.append(f"{cfg['emoji']} {cfg['name']}: ordens canceladas: " + ", ".join(map(cancel_text, gone)))
+        if reactive:
+            try:
+                traded, notes = react(cfg, port, mkt, params, now, live=live)
+            except Exception as e:  # one agent's error never stops the others
+                print(f"WARN: {cfg['id']}: {e!r}", file=sys.stderr)
+                traded, notes = [], []
             done += traded
             if notes:
                 avoided.append(f"{cfg['emoji']} {cfg['name']}: " + ", ".join(notes))
@@ -2532,10 +2627,23 @@ def main() -> int:
             market_archive.intraday(mkt, now)
         except Exception as e:  # noqa: BLE001
             print(f"WARN: arquivo intradiário: {e!r}", file=sys.stderr)
+        before = json.dumps(state, sort_keys=True, default=str)
         twins = ensure_twins(config, state, mkt.as_of)
-        moves, _ = reactive_round(config, state, mkt, now)
+        earnings_cache = PRICE_CACHE / f"earnings-{mkt.as_of.isoformat()}.json"
+        try:  # earnings dates looked up once a day, not every round
+            mkt.earnings = {s: (date.fromisoformat(d) if d else None)
+                            for s, d in json.loads(earnings_cache.read_text()).items()}
+        except (OSError, ValueError):
+            pass
+        moves, avoided = reactive_round(config, state, mkt, now)
+        try:
+            PRICE_CACHE.mkdir(parents=True, exist_ok=True)
+            earnings_cache.write_text(json.dumps({s: (d.isoformat() if d else None) for s, d in mkt.earnings.items()}))
+        except OSError:
+            pass
+        changed = json.dumps(state, sort_keys=True, default=str) != before
         print(f"Ronda: decisões feitas em {(datetime.now(timezone.utc) - now).total_seconds():.0f} s desde o início")
-        if not moves and not twins:
+        if not changed and not twins:
             return 0
         save(config, state)
         archive(config, state)
@@ -2543,11 +2651,11 @@ def main() -> int:
             league(config, state, mkt, f"🤖 Liga dos agentes · {mkt.as_of.isoformat()} às {now.astimezone(timezone.utc):%H:%M} UTC")
         except Exception as e:
             print(f"WARN: portal: {e!r}", file=sys.stderr)
-        if not moves:
+        if not moves and not avoided:
             return 0
         lines = [f"{cfg['emoji']} **{cfg['name']}** {'comprou' if t['side'] == 'compra' else 'vendeu'} {t['symbol']} "
                  f"({eur(t['eur'])}{', ' + t['reason'] if t['side'] == 'venda' and t.get('reason') else ''}) · às {t['hora']}"
-                 for cfg, t in moves]
+                 for cfg, t in moves] + [f"⛔ {a}" for a in avoided]
         where = route("agentes") or {"thread_id": discord_bot.todays_thread()}
         return send([embed("⏱️ Ronda dos agentes", "\n".join(lines)[:4000], color=BLUE)], {}, dry_run=a.dry_run, **where)
     if a.mode == "portal":  # the portal's league page from the current state: no trading, no post

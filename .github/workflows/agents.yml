@@ -32,8 +32,10 @@ on:
 permissions:
   contents: read
 
+# The rounds (every 10 minutes) have their own queue: a queue keeps only its newest waiting run, so they must not
+# push out a waiting daily league or a /agente command.
 concurrency:
-  group: agents-state
+  group: agents-${{ inputs.mode == 'stops' && 'rounds' || 'state' }}
   cancel-in-progress: false
 
 jobs:

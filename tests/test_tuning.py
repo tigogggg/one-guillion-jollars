@@ -138,7 +138,7 @@ def test_a_broken_bar_does_not_fill_the_order():
                        "Volume": [1, 1, 1]}, index=idx)
     port = agents.new_portfolio(1000, idx[0].date())
     port["pending"] = [{"side": "buy", "symbol": "AAA.DE", "eur": 100, "created": idx[0].date().isoformat()}]
-    mkt = SimpleNamespace(hist={"AAA.DE": df}, as_of=idx[1].date(), fx=pd.Series([1.1]))
+    mkt = SimpleNamespace(hist={"AAA.DE": df}, as_of=idx[1].date(), fx=pd.Series([1.1]), sessions=[])
     assert agents.fill_pending(port, mkt) == [] and len(port["pending"]) == 1
     mkt.as_of = idx[2].date()
     done = agents.fill_pending(port, mkt)

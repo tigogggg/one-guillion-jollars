@@ -210,14 +210,64 @@ class PriceRow(Mapping):
         return sum(1 for _ in self)
 
 
+EU_HOLIDAY_DAYS = 5  # how long a European stock keeps its last session on days its exchange is closed
+
+
 def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, dict] | None = None,
               member=None, frames: dict[str, pd.DataFrame] | None = None,
-              featured: dict[str, pd.DataFrame] | None = None) -> dict[date, dict]:
+              featured: dict[str, pd.DataFrame] | None = None, lazy: bool = False) -> Mapping:
     """{day: {symbol: metrics}} with trend_score ranked within the group that day.
 
     `member(symbol, day)`, when given, keeps only the symbols in the index on that day. Each symbol's metrics are
     one float32 table holding only the backtest's days, read through Row (much less memory than dicts).
+    lazy: each day's dict is built when asked for (LazySnapshots), not all at once (the intraday lab's 14 sets).
     """
+    tables = snapshot_tables(hist, days, extra, frames, featured)
+    if lazy:
+        return LazySnapshots(tables, days, member)
+    return {d: day_snapshot(tables, d, member) for d in days}
+
+
+class LazySnapshots(Mapping):
+    """Days of snapshots built on demand from the float32 tables (the last few kept)."""
+
+    def __init__(self, tables: dict, days: list[date], member=None):
+        self.tables, self.days, self.member, self._recent = tables, set(days), member, {}
+
+    def __getitem__(self, d):
+        if d not in self.days:
+            raise KeyError(d)
+        if d not in self._recent:
+            if len(self._recent) >= 4:
+                self._recent.pop(next(iter(self._recent)))
+            self._recent[d] = day_snapshot(self.tables, d, self.member)
+        return self._recent[d]
+
+    def __iter__(self):
+        return iter(sorted(self.days))
+
+    def __len__(self):
+        return len(self.days)
+
+
+def day_snapshot(tables: dict, d: date, member=None) -> dict:
+    today = {}
+    for s, (rows, values, cols, kinds, base) in tables.items():
+        i = rows.get(d)
+        if i is None or (member and not member(s, d)):
+            continue
+        m = Row(values[i], cols, kinds, base)
+        if "sector" in base:
+            m["stage2"] = agents.is_stage2(m)
+        today[s] = m
+    agents.add_trend_scores(today)
+    return today
+
+
+def snapshot_tables(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, dict] | None = None,
+                    frames: dict[str, pd.DataFrame] | None = None,
+                    featured: dict[str, pd.DataFrame] | None = None) -> dict:
+    """Each symbol's metrics on the wanted days, as one float32 table (see snapshots)."""
     wanted = set(days)
     tables = {}
     for s, df in hist.items():
@@ -233,22 +283,16 @@ def snapshots(hist: dict[str, pd.DataFrame], days: list[date], extra: dict[str, 
         cols = [c for c in f.columns if c != "valid"]
         values = f[cols].to_numpy(dtype=np.float32)[keep]
         rows = {f.index[i].date(): k for k, i in enumerate(keep)}
+        if not agents.is_us(s):  # a European holiday on a US trading day: the last session, as live (load_market)
+            last = None
+            for d in sorted(wanted):
+                if d in rows:
+                    last = (d, rows[d])
+                elif last and (d - last[0]).days <= EU_HOLIDAY_DAYS:
+                    rows[d] = last[1]
         kinds = {"sma200_rising": bool, "gap_age": int, **{c: "nullable" for c in nullable}}
         tables[s] = (rows, values, {c: k for k, c in enumerate(cols)}, kinds, (extra or {}).get(s, {}))
-    out = {}
-    for d in days:
-        today = {}
-        for s, (rows, values, cols, kinds, base) in tables.items():
-            i = rows.get(d)
-            if i is None or (member and not member(s, d)):
-                continue
-            m = Row(values[i], cols, kinds, base)
-            if "sector" in base:
-                m["stage2"] = agents.is_stage2(m)
-            today[s] = m
-        agents.add_trend_scores(today)
-        out[d] = today
-    return out
+    return tables
 
 
 def splice(target: pd.DataFrame | None, proxies: list[pd.DataFrame], fx: pd.Series) -> pd.DataFrame | None:
@@ -301,7 +345,8 @@ def europe_liquidity(stock_hist: dict[str, pd.DataFrame], fx_rates: dict[str, pd
         if agents.is_us(s):
             continue
         ccy = agents.currency_of(s)
-        traded = (df["Close"] * df["Volume"]).rolling(agents.LIQUIDITY_DAYS, min_periods=20).mean()
+        daily_value = df["Close"] * df["Volume"]
+        traded = daily_value.where(daily_value > 0).rolling(agents.LIQUIDITY_DAYS, min_periods=20).mean()  # trading days
         if ccy != "EUR":
             series = agents.fx_series(probe, ccy)
             if series is None:
@@ -357,8 +402,17 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
     # for the whole period (survivorship bias, stated in the report).
     eu_liquid = europe_liquidity(stock_hist, fx_rates, fx)
 
+    liquid_days = sorted(eu_liquid)
+
     def member(symbol: str, day: date) -> bool:
         if not agents.is_us(symbol):
+            if day not in eu_liquid:  # a European holiday: the last trading day's ranking (as live)
+                import bisect
+
+                i = bisect.bisect_right(liquid_days, day) - 1
+                if i < 0 or (day - liquid_days[i]).days > EU_HOLIDAY_DAYS:
+                    return False
+                return symbol in eu_liquid[liquid_days[i]]
             return symbol in eu_liquid.get(day, ())
         spans = membership.get(symbol)
         return True if not spans else any(start <= day and (end is None or day <= end) for start, end in spans)

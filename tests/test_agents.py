@@ -531,3 +531,32 @@ def test_rounds_download_the_year_once_a_day_and_add_the_latest_days(tmp_path, m
     assert list(out["AAA"]["Close"]) == [1, 2, 3, 7, 8.5]  # the fresh days replace the cached ones from their start
     agents.round_history(["AAA"], now)
     assert calls == ["1y", "5d", "5d"]
+
+
+def test_orders_without_data_wait_and_then_expire():
+    hist = {"AAA.DE": frame([10, 10], [10, 10], [10, 10], [10, 10])}
+    port = new_portfolio(1000, DATES[0].date())
+    port["pending"] = [{"side": "buy", "symbol": "GONE.DE", "eur": 100, "created": "2026-10-26"}]
+    mkt = market(hist, DATES[1].date())
+    assert fill_pending(port, mkt) == [] and len(port["pending"]) == 1  # no data today: it waits
+    old = market(hist, DATES[4].date())
+    old.sessions = [d.date() for d in pd.bdate_range("2026-10-26", periods=12)]
+    fill_pending(port, old)
+    assert port["pending"] == [] and port["cancelled"][-1]["symbol"] == "GONE.DE"
+
+
+def test_rounds_fill_only_at_a_real_open():
+    hist = {"AAA.DE": frame([10, float("nan")], [10, 11], [10, 9], [10, 10.5])}
+    port = new_portfolio(1000, DATES[0].date())
+    port["pending"] = [{"side": "buy", "symbol": "AAA.DE", "eur": 100, "created": "2026-10-26"}]
+    mkt = market(hist, DATES[1].date())
+    assert fill_pending(port, mkt, partial_day=DATES[1].date()) == [] and port["pending"]  # no open yet: waits
+    assert fill_pending(port, mkt)[0]["price"] == pytest.approx(10.5 * 1.001)  # a complete day: its close
+
+
+def test_a_missing_rate_uses_the_last_one_seen(tmp_path, monkeypatch):
+    monkeypatch.setattr(agents, "FX_LAST_PATH", tmp_path / "fx.json")
+    idx = pd.to_datetime(["2026-10-30"])
+    agents.with_last_rates({"GBP": pd.Series([0.85], index=idx)})
+    rates = agents.with_last_rates({})
+    assert float(rates["GBP"].iloc[-1]) == 0.85 and "SEK" not in rates

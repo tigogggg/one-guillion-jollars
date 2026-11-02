@@ -1072,7 +1072,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
   const signals = (r) => '<span class="score ' + (r.severity >= 3 ? "Baixa" : "Média") + '">⚠️ ' + r.warnings.length + ' sina' + (r.warnings.length === 1 ? "l" : "is") + '</span>';
   const card = (r, kind) => '<div class="opp' + (kind === "sell" ? " sellcard" : kind === "watch" ? " watchcard" : "") + '"><div class="top"><span class="sym">' + esc(r.symbol) + '</span><span class="muted">' + esc(r.name || "") +
     (r.sector ? " · " + esc(r.sector) : "") + '</span>' + (kind === "buy" ? badge(r) : signals(r)) + '</div>' + (kind === "buy" ? '<div class="bar"><i style="width:' + r.safety + '%"></i></div>' : '') +
-    '<p class="small">' + fmtNum(r.price) + (r.etf ? " €" : " $") + ' · dia <span class="' + cls(r.ret_1d) + '">' + fmtPct(r.ret_1d) + '</span> · semana <span class="' + cls(r.ret_1w) + '">' +
+    '<p class="small">' + fmtNum(r.price) + " " + (({ EUR: "€", USD: "$", GBp: "p", CHF: "CHF", SEK: "kr", DKK: "kr", NOK: "kr" })[r.currency || (r.etf ? "EUR" : "USD")] || r.currency) + ' · dia <span class="' + cls(r.ret_1d) + '">' + fmtPct(r.ret_1d) + '</span> · semana <span class="' + cls(r.ret_1w) + '">' +
     fmtPct(r.ret_1w) + '</span> · 3 meses <span class="' + cls(r.ret_3m) + '">' + fmtPct(r.ret_3m) + '</span> · tendência ' + r.trend_score + '/100</p>' +
     '<p>' + (kind === "buy" ? r.reasons : r.warnings).map((x) => '<span class="tag">' + esc(x) + '</span>').join("") + '</p>' +
     (r.fund && r.fund.fund_q != null ? '<p class="small">💰 ' + [r.fund.pe ? "P/E " + fmtNum(r.fund.pe, 0) : null,

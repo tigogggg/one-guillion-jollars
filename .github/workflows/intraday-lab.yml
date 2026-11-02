@@ -44,14 +44,12 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync
-      - name: Mês (para a cache das barras)
-        id: mes
-        run: echo "month=$(date +%Y-%m)" >> "$GITHUB_OUTPUT"
       - name: Barras de 30 minutos já descarregadas
         uses: actions/cache@v4
         with:
           path: out/lab/bars
-          key: alpaca-bars-${{ inputs.anos }}-${{ steps.mes.outputs.month }}
+          key: alpaca-bars-${{ github.run_id }}
+          restore-keys: alpaca-bars-
       - name: Correr o laboratório
         env:
           ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
@@ -62,7 +60,7 @@ jobs:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
         run: uv run python scripts/intraday_lab.py --anos "${{ inputs.anos }}" --estrategias "${{ inputs.estrategias }}"
       - name: Guardar os resultados (repositório privado)
-        if: ${{ success() }}
+        if: ${{ !cancelled() }}
         working-directory: agents
         run: |
           git config user.name "github-actions[bot]"

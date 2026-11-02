@@ -196,3 +196,15 @@ def test_europe_liquidity_is_point_in_time_and_in_euros():
     liq = pretrain.europe_liquidity(hist, {"GBP": gbp}, fx, share=0.5)
     assert liq[idx[30].date()] == {"AAA.DE", "BBB.L"}
     assert "CCC.PA" in liq[idx[-1].date()] and "AAPL" not in liq[idx[-1].date()]
+
+
+def test_european_stock_keeps_its_last_session_on_its_holidays():
+    idx = pd.bdate_range("2023-01-02", periods=300)
+    df = pd.DataFrame({"Open": 10.0, "High": 10.5, "Low": 9.5, "Close": [10 + i * 0.01 for i in range(300)],
+                       "Volume": 1000.0}, index=idx)
+    holiday = idx[290]
+    eu = df.drop(index=holiday)
+    days = [d.date() for d in idx[285:]]
+    snap = pretrain.snapshots({"SAP.DE": eu, "AAPL": df.drop(index=holiday)}, days, {})
+    assert "SAP.DE" in snap[holiday.date()]  # Frankfurt closed, the US open: the last session counts, as live
+    assert "AAPL" not in snap[holiday.date()]

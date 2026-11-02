@@ -25,14 +25,22 @@ import requests
 from discord_post import GREEN, embed, route, send
 
 LISBON = ZoneInfo("Europe/Lisbon")
-# Weekday jobs the Worker starts: (workflow, name, minimum runs per day).
+# Weekday jobs the Worker starts: (workflow, name, minimum runs per day, run-name prefix or None).
 WEEKDAY_JOBS = [
-    ("discord-daily.yml", "Dicas do dia e rankings", 1),
-    ("agents.yml", "Liga dos agentes", 1),
-    ("opportunity-alerts.yml", "Alertas", 1),
-    ("news.yml", "Notícias", 1),
-    ("alert-followups.yml", "Acompanhamento dos alertas", 1),
+    ("discord-daily.yml", "Dicas do dia e rankings", 1, None),
+    ("agents.yml", "Liga dos agentes", 1, "Agentes: daily"),
+    ("agents.yml", "Rondas dos agentes", 20, "Agentes: stops"),
+    ("opportunity-alerts.yml", "Alertas", 1, None),
+    ("news.yml", "Notícias", 1, None),
+    ("alert-followups.yml", "Acompanhamento dos alertas", 1, None),
 ]
+
+
+def named(runs: list[dict] | None, prefix: str | None) -> list[dict] | None:
+    """Only the runs whose run-name starts with `prefix` (agents.yml runs the daily league and the rounds)."""
+    if runs is None or prefix is None:
+        return runs
+    return [r for r in runs if str(r.get("display_title") or r.get("name") or "").startswith(prefix)]
 DATA_SOURCES = [
     ("Breadth (uptrend)", "https://raw.githubusercontent.com/tradermonty/uptrend-dashboard/main/data/uptrend_ratio_timeseries.csv", "date"),
     ("Breadth (S&P 500)", "https://tradermonty.github.io/market-breadth-analysis/market_breadth_data.csv", "Date"),
@@ -46,13 +54,19 @@ def runs_today(workflow: str, today: date) -> list[dict] | None:
     repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")
     if not repo or not token:
         return None
+    runs = []
     try:
-        resp = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs",
-                            params={"branch": "main", "created": f">={today - timedelta(days=1)}", "per_page": 50},
-                            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
-                            timeout=30)
-        resp.raise_for_status()
-        runs = resp.json()["workflow_runs"]
+        for page in (1, 2, 3):  # agents.yml runs ~80 times a weekday (league and rounds)
+            resp = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs",
+                                params={"branch": "main", "created": f">={today - timedelta(days=1)}", "per_page": 100,
+                                        "page": page},
+                                headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+                                timeout=30)
+            resp.raise_for_status()
+            batch = resp.json()["workflow_runs"]
+            runs += batch
+            if len(batch) < 100:
+                break
     except (requests.RequestException, ValueError, KeyError) as e:
         print(f"WARN: GitHub {workflow}: {e}", file=sys.stderr)
         return None
@@ -114,7 +128,8 @@ def main() -> int:
     args = parser.parse_args()
 
     today = datetime.now(LISBON).date()
-    jobs = [job_line(name, runs_today(wf, today), n) for wf, name, n in WEEKDAY_JOBS] if today.weekday() < 5 else []
+    jobs = [job_line(name, named(runs_today(wf, today), prefix), n) for wf, name, n, prefix in WEEKDAY_JOBS] \
+        if today.weekday() < 5 else []
     data = [data_line(name, last_data_date(url, col), today) for name, url, col in DATA_SOURCES]
     card = build_card(today, jobs, data)
     where = route("estado")

@@ -17,8 +17,8 @@ the Actions log (this repo is public).
 
 Limits, also in the report: today's list plus the historical S&P 500 membership (companies Alpaca has no bars for
 are missing); no ETFs or European stocks (Alpaca covers US listings only); earnings and news rules off (no history);
-the market context of each round is the previous close's; a swing-low support only counts once confirmed by the
-previous day's close.
+the market context of each round is the previous close's; valuation ratios (P/E, value score) during the day use the
+previous close; a swing-low support only counts once confirmed by the previous day's close.
 """
 
 from __future__ import annotations
@@ -64,13 +64,23 @@ def alpaca_symbol(symbol: str) -> str:
 
 
 def fetch_bars(symbols: list[str], start: date, end: date, feed: str = "sip") -> dict[str, pd.DataFrame]:
-    """30-minute bars (split and dividend adjusted) per symbol, cached on disk (out/lab/bars, kept by actions/cache)."""
+    """30-minute bars (split and dividend adjusted) per symbol, by calendar year, cached on disk (out/lab/bars, kept
+    by actions/cache): finished years are downloaded once, the current year again each day."""
+    parts: dict[str, list[pd.DataFrame]] = {}
+    for year in range(start.year, end.year + 1):
+        a, b = max(start, date(year, 1, 1)), min(end, date(year, 12, 31))
+        tag = str(year) if year < end.year else f"{year}-{end.isoformat()}"
+        for s, df in _fetch_chunk(symbols, a, b, tag, feed).items():
+            parts.setdefault(s, []).append(df)
+    return {s: pd.concat(dfs).sort_index() for s, dfs in parts.items()}
+
+
+def _fetch_chunk(symbols: list[str], start: date, end: date, tag: str, feed: str) -> dict[str, pd.DataFrame]:
     key, secret = os.environ.get("ALPACA_KEY_ID"), os.environ.get("ALPACA_SECRET_KEY")
     if not key or not secret:
         raise RuntimeError("Faltam os segredos ALPACA_KEY_ID e ALPACA_SECRET_KEY.")
     CACHE.mkdir(parents=True, exist_ok=True)
     out, missing = {}, []
-    tag = f"{start.isoformat()}_{end.isoformat()}"
     for s in symbols:
         f = CACHE / f"{s}_{tag}.pkl"
         if f.exists():
@@ -79,6 +89,9 @@ def fetch_bars(symbols: list[str], start: date, end: date, feed: str = "sip") ->
                 out[s] = df
         else:
             missing.append(s)
+    for old in CACHE.glob(f"*_{tag.split('-')[0]}-*.pkl"):  # earlier days' copies of the current year
+        if not old.name.endswith(f"_{tag}.pkl"):
+            old.unlink()
     headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
     end_ts = min(datetime.combine(end, datetime.min.time(), timezone.utc) + timedelta(days=1),
                  datetime.now(timezone.utc) - timedelta(minutes=20))  # the free plan has no data for the last 15 minutes
@@ -103,7 +116,7 @@ def fetch_bars(symbols: list[str], start: date, end: date, feed: str = "sip") ->
                 continue
             if resp.status_code == 403 and feed == "sip":
                 print("::notice title=Alpaca::sem acesso ao feed SIP; uso o IEX", flush=True)
-                return fetch_bars(symbols, start, end, feed="iex")
+                return _fetch_chunk(symbols, start, end, tag, "iex")
             resp.raise_for_status()
             data = resp.json()
             for sym, bars in (data.get("bars") or {}).items():
@@ -122,7 +135,7 @@ def fetch_bars(symbols: list[str], start: date, end: date, feed: str = "sip") ->
             (CACHE / f"{s}_{tag}.pkl").write_bytes(pickle.dumps(df))
             if df is not None:
                 out[s] = df
-        print(f"Alpaca: {min(i + 50, len(missing))}/{len(missing)} ações descarregadas", flush=True)
+        print(f"Alpaca {tag}: {min(i + 50, len(missing))}/{len(missing)} ações", flush=True)
     return out
 
 
@@ -151,11 +164,11 @@ def checkpoint_bars(intraday: pd.DataFrame) -> list[pd.DataFrame]:
     return out
 
 
-def features_at(full: pd.DataFrame, part: pd.DataFrame, fraction: float) -> pd.DataFrame:
+def features_at(full: pd.DataFrame, part: pd.DataFrame, fraction: float, base: pd.DataFrame | None = None) -> pd.DataFrame:
     """pretrain.features for every day as seen during it: the days before are complete (`full`), the day itself is
     `part` (its bar so far, volume projected by `fraction` of the session). The same fields as agents.load_market
     builds in the live rounds from Yahoo's bar so far."""
-    base = pretrain.features(full)
+    base = pretrain.features(full) if base is None else base
     part = part.reindex(full.index)
     close, high, low, vol = full["Close"], full["High"], full["Low"], full["Volume"]
     c, h, lo, o = part["Close"], part["High"], part["Low"], part["Open"]
@@ -259,7 +272,7 @@ class Lab:
     def __init__(self, intraday: dict[str, pd.DataFrame], sector_of: dict[str, str], member, days_wanted: int,
                  fx: pd.Series, ctx_frame: pd.DataFrame, funds: dict):
         per = {s: checkpoint_bars(df) for s, df in intraday.items()}
-        self.full = {s: bars[-1] for s, bars in per.items() if len(bars[-1]) > pretrain.WARMUP}
+        self.full = {s: bars[-1] for s, bars in per.items() if len(bars[-1]) > 0}  # late listings too (valid days only)
         spy = self.full.get("SPY")
         if spy is None:
             raise RuntimeError("Sem barras do SPY no Alpaca.")
@@ -273,12 +286,14 @@ class Lab:
         first = pd.Timestamp(self.days[0]) - pd.Timedelta(days=10)
         frames = {s: fundamentals.daily(funds[s], df["Close"][df.index >= first]) for s, df in stocks.items() if s in funds}
         extra = {s: {"sector": sector_of.get(s, "Unknown")} for s in stocks}
-        self.daily_snap = pretrain.snapshots(stocks, self.days, extra, member, frames)
-        lagged = {s: fr.shift(1) for s, fr in frames.items()}  # during the day: the filings known the day before
+        base = {s: pretrain.features(df) for s, df in stocks.items()}
+        self.daily_snap = pretrain.snapshots(stocks, self.days, extra, member, frames, featured=base, lazy=True)
+        # during the day: the valuation ratios of the day before (a known simplification, in the module's limits)
+        lagged = {s: fr.shift(1) for s, fr in frames.items()}
         self.snap = []
         for j in range(SLOTS):
-            featured = {s: features_at(df, self.parts[j][s], (j + 1) / SLOTS) for s, df in stocks.items()}
-            self.snap.append(pretrain.snapshots(stocks, self.days, extra, member, lagged, featured=featured))
+            featured = {s: features_at(df, self.parts[j][s], (j + 1) / SLOTS, base[s]) for s, df in stocks.items()}
+            self.snap.append(pretrain.snapshots(stocks, self.days, extra, member, lagged, featured=featured, lazy=True))
             print(f"Laboratório: momento {j + 1}/{SLOTS} do dia preparado", flush=True)
         self.fx = fx
         # the benchmark (agents.BENCHMARK, the S&P 500 in euros): SPY converted at each day's rate
@@ -349,12 +364,12 @@ def run_reactive(strategy: str, params: dict, lab: Lab, capital: float = 1000.0)
     trades, sells, bankrupt = 0, [], None
     for day in lab.days:
         for j in range(SLOTS):
-            if not lab.snap[j].get(day):
+            if day not in lab.snap[j] or not lab.snap[j][day]:
                 continue
             now = checkpoint_time(day, j)
             mkt = lab.market(day, j)
-            done = (agents.fill_pending(port, mkt) + agents.check_exits(port, mkt, open_day=day)
-                    + agents.live_exits(port, mkt, now))
+            done = (agents.fill_pending(port, mkt, partial_day=day) + agents.check_exits(port, mkt, open_day=day)
+                    + agents.live_exits(port, mkt, now, targets=True))
             if bankrupt is None:
                 traded, _ = agents.react(cfg, port, mkt, port["params"], now, live=False)
                 done += traded
@@ -476,7 +491,7 @@ def main() -> int:
         print("Nenhuma estratégia para testar.", file=sys.stderr)
         return 1
     LAB = build_lab(a.anos)
-    workers = min(len(jobs), os.cpu_count() or 1)
+    workers = min(len(jobs), os.cpu_count() or 1, 3)  # the tables are shared by fork; each worker adds its own days
     if workers > 1:
         with multiprocessing.get_context("fork").Pool(workers) as pool:
             results = dict(pool.map(_job, jobs))

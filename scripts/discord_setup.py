@@ -337,6 +337,7 @@ def round_text(spec) -> str:
     try:
         span, every = str(spec).split("/")
         start, end = span.split("-")
+        every = max(int(every), 5)
         return f"das {start} às {end}, de {every} em {every} min"
     except ValueError:
         return str(spec or "")

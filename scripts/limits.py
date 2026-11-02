@@ -187,6 +187,8 @@ def schedule() -> dict:
     if saved.get("v", 1) < 2:  # saved before the agents moved to the European open (as getSchedule in worker.js)
         saved.pop("dicas", None)
         saved.pop("agentes", None)
+    if saved.get("v", 1) < 3:  # saved before the reactive rounds every 10 minutes
+        saved.pop("ronda", None)
     return {**DEFAULT_SCHEDULE, **saved}
 
 

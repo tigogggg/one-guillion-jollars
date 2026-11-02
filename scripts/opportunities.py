@@ -210,6 +210,7 @@ def build(mkt, holders: dict[str, list[str]], fetch_earnings=None) -> dict:
         stop = stop_of(m, etf)
         return {
             "symbol": sym, "name": m.get("name", ""), "sector": m.get("sector", ""), "etf": etf,
+            "currency": "EUR" if etf else m.get("currency", "USD"),
             "price": round(m["price"], 2), "ret_1d": round(m["ret_1d"] * 100, 2), "ret_1w": round(m["ret_1w"] * 100, 2),
             "ret_3m": round(m["ret_3m"] * 100, 1), "trend_score": round(m.get("trend_score", 0)),
             "safety": score, "level": level(score), "parts": parts,

@@ -39,7 +39,8 @@ const WORKFLOW_COMMANDS = new Set(["acao", "etf", "mercado", "limites"]);
 
 const TIMEZONE = "Europe/Lisbon";
 // v2 (Nov 2026): tips and agents before the European open, so the agents' orders fill at that day's opens.
-const SCHEDULE_VERSION = 2;
+// v3: the rounds became every 10 minutes ("08:05-20:55/10") instead of four fixed times.
+const SCHEDULE_VERSION = 3;
 const DEFAULT_SCHEDULE = {
   dicas: "07:00",
   agentes: "07:30", // before Xetra/Euronext/LSE open at 08:00 Lisbon, with the last full sessions
@@ -73,6 +74,13 @@ function roundTimes(spec) {
   const out = [];
   for (let t = from; t <= to && out.length < 200; t += every) out.push(`${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`);
   return out;
+}
+function roundLabel(spec) {
+  if (Array.isArray(spec)) return spec.join(" · ");
+  const m = /^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})\/(\d{1,3})$/.exec(String(spec || ""));
+  if (!m) return String(spec || "");
+  const every = Math.max(+m[3], 5);
+  return `das ${m[1]} às ${m[2]}, de ${every} em ${every} minutos`;
 }
 const JOB_INPUTS = { ronda: { mode: "stops" } };
 const LATE_LIMIT_MIN = 20; // still start a job this many minutes after its time (missed cron ticks)
@@ -395,7 +403,7 @@ async function scheduleCommand(env, sub) {
     action === "ver" ? "🕒 **Horários atuais** (hora de Lisboa)" : "✅ **Horários atualizados** (hora de Lisboa)",
     `📊 Dicas do dia e rankings: **${schedule.dicas}** (dias úteis)`,
     `🤖 Liga dos agentes: **${schedule.agentes}** (dias úteis, antes da abertura europeia às 08:00)`,
-    `⏱️ Rondas dos agentes: **${Array.isArray(schedule.ronda) ? schedule.ronda.join(" · ") : schedule.ronda.replace("/", ", de ") + " em " + " minutos"}** (dias úteis; decidem e negociam ao preço do momento)`,
+    `⏱️ Rondas dos agentes: **${roundLabel(schedule.ronda)}** (dias úteis; decidem e negociam ao preço do momento)`,
     `🚨 Verificação de alertas: **${schedule.alertas.join(" · ")}** (dias úteis; a sessão dos EUA é das 14:30 às 21:00)`,
     `🔁 Acompanhamento dos alertas: **${schedule.acompanhamento}** (dias úteis, depois do fecho dos EUA)`,
     `📰 Notícias: **${schedule.noticias.join(" · ")}** (dias úteis)`,
@@ -412,6 +420,7 @@ async function getSchedule(env) {
     delete saved.dicas;
     delete saved.agentes;
   }
+  if ((saved.v || 1) < 3) delete saved.ronda;  // saved before the reactive rounds: take the new rounds
   return { ...structuredClone(DEFAULT_SCHEDULE), ...saved };
 }
 
