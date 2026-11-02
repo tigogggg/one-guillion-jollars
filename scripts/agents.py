@@ -2526,6 +2526,12 @@ def main() -> int:
         now = datetime.now(timezone.utc)
         mkt = load_market(now, live=True)
         print(f"Ronda: mercado carregado em {(datetime.now(timezone.utc) - now).total_seconds():.0f} s")
+        try:  # our own intraday history (private repo one-guillion-jollars-arquivo), when it is checked out
+            import market_archive
+
+            market_archive.intraday(mkt, now)
+        except Exception as e:  # noqa: BLE001
+            print(f"WARN: arquivo intradiário: {e!r}", file=sys.stderr)
         twins = ensure_twins(config, state, mkt.as_of)
         moves, _ = reactive_round(config, state, mkt, now)
         print(f"Ronda: decisões feitas em {(datetime.now(timezone.utc) - now).total_seconds():.0f} s desde o início")

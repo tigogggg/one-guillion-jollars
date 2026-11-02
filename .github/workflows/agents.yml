@@ -48,6 +48,15 @@ jobs:
           repository: tigogggg/one-guillion-jollars-dados
           ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
           path: agents
+      - name: Arquivo intradiário (repositório privado; só nas rondas, se a chave existir)
+        if: ${{ inputs.mode == 'stops' }}
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-arquivo
+          ssh-key: ${{ secrets.ARQUIVO_DEPLOY_KEY }}
+          path: arquivo-intradiario
+          fetch-depth: 1
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -102,5 +111,16 @@ jobs:
           git add -A
           git diff --cached --quiet && exit 0
           git commit -m "Agentes: $MODE $(date -u +%F)"
+          for i in 1 2 3; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 5; done
+          exit 1
+      - name: Guardar o arquivo intradiário
+        if: ${{ !cancelled() && inputs.mode == 'stops' && hashFiles('arquivo-intradiario/**/*.csv.gz') != '' }}
+        working-directory: arquivo-intradiario
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Ronda $(TZ=Europe/Lisbon date '+%F %H:%M')"
           for i in 1 2 3; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 5; done
           exit 1

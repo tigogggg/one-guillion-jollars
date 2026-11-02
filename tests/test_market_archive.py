@@ -38,3 +38,15 @@ def test_closes_keep_only_the_decision_day(tmp_path, monkeypatch):
     assert set(table["symbol"]) == {"AAA", "EURUSD"} and table.loc[table.symbol == "AAA", "close"].item() == 2
     assert market_archive.earnings(mkt) == 2
     assert json.loads((tmp_path / "resultados" / "2026-10-30.json").read_text())["AAA"] == "2026-11-05"
+
+
+def test_each_round_saves_the_markets_in_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(market_archive, "INTRADAY", tmp_path)
+    idx = pd.to_datetime(["2026-10-29", "2026-10-30"])
+    bar = pd.DataFrame({"Open": [1, 2], "High": [1, 3], "Low": [1, 1.5], "Close": [1, 2.5], "Volume": [5, 1000]}, index=idx)
+    mkt = Market(hist={"SAP.DE": bar, "AAPL": bar}, fx=pd.Series([1.1], index=idx[:1]), stocks={}, etfs={},
+                 as_of=date(2026, 10, 30), sessions=[], zone="Neutra", stage2_share=0.3)
+    now = datetime(2026, 10, 30, 10, 30, tzinfo=timezone.utc)  # Xetra open, the US not yet
+    assert market_archive.intraday(mkt, now) == 1
+    table = pd.read_csv(tmp_path / "2026" / "10-30" / "1030.csv.gz")
+    assert list(table["symbol"]) == ["SAP.DE"] and table["price"].item() == 2.5

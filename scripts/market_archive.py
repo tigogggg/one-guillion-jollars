@@ -10,6 +10,9 @@ as they stood each week. Each run adds what it saw:
 - resultados/YYYY-MM-DD.json    the next earnings date known that day for the stocks the run looked up
 - fundamentais-eu/YYYY-MM-DD.json.gz  Yahoo's fundamentals of the European stocks (weekly)
 
+And in a second private repo (one-guillion-jollars-arquivo, checked out at arquivo-intradiario/), each reactive
+round's prices of every market in session: YYYY/MM-DD/HHMM.csv.gz, our own intraday history of Europe and the US.
+
     uv run python scripts/market_archive.py fundamentais     # the weekly European fundamentals
 """
 
@@ -26,6 +29,7 @@ import pandas as pd
 
 REPO = Path(__file__).resolve().parents[1]
 ARCHIVE = REPO / "agents" / "arquivo"
+INTRADAY = REPO / "arquivo-intradiario"  # checkout of the private repo one-guillion-jollars-arquivo (when configured)
 # Yahoo's .info fields worth keeping (valuation, quality, growth, debt, size)
 FUNDAMENTAL_FIELDS = (
     "marketCap", "enterpriseValue", "trailingPE", "forwardPE", "priceToBook", "priceToSalesTrailing12Months",
@@ -121,6 +125,36 @@ def earnings(mkt) -> int:
     old = json.loads(path.read_text()) if path.exists() else {}
     path.write_text(json.dumps({**old, **known}, ensure_ascii=False, sort_keys=True))
     return len(known)
+
+
+def intraday(mkt, now: datetime) -> int:
+    """This round's bar so far of every symbol in session (one small file per round, never rewritten)."""
+    if not INTRADAY.is_dir():
+        return 0
+    import agents
+    from zoneinfo import ZoneInfo
+
+    rows = []
+    for sym, df in mkt.hist.items():
+        if df is None or not len(df) or not agents.market_open(sym, now):
+            continue
+        bar = df.iloc[-1]
+        if bar.name.date() != mkt.as_of:
+            continue
+        frac = agents.session_fraction(sym, now)
+        rows.append({"symbol": sym, "open": float(bar["Open"]), "high": float(bar["High"]), "low": float(bar["Low"]),
+                     "price": float(bar["Close"]),
+                     # Yahoo's volume so far (the rounds project it to a full session; undone here)
+                     "volume": round(float(bar["Volume"]) * max(frac, agents.LIVE_MIN_FRACTION)), "session": round(frac, 4)})
+    if not rows:
+        return 0
+    local = now.astimezone(ZoneInfo("Europe/Lisbon"))
+    path = INTRADAY / local.strftime("%Y") / local.strftime("%m-%d") / f"{local:%H%M}.csv.gz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    buf = io.StringIO()
+    pd.DataFrame(rows).to_csv(buf, index=False)
+    path.write_bytes(gzip.compress(buf.getvalue().encode(), mtime=0))
+    return len(rows)
 
 
 def european_fundamentals(symbols: list[str], today: date | None = None) -> int:
