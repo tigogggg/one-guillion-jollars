@@ -108,8 +108,8 @@ COMMANDS = [
             {
                 "type": SUB_COMMAND,
                 "name": "ronda",
-                "description": "Horas da ronda dos agentes: compras à abertura, stops e alvos (dias úteis)",
-                "options": [{"type": STRING, "name": "horas", "description": "Separadas por vírgulas, ex.: 10:30,15:30,17:00,20:30", "required": True}],
+                "description": "Rondas dos agentes: decidem e negociam ao preço do momento (dias úteis)",
+                "options": [{"type": STRING, "name": "horas", "description": "De-até/minutos, ex.: 08:05-20:55/10, ou horas separadas por vírgulas", "required": True}],
             },
             {
                 "type": SUB_COMMAND,
@@ -330,6 +330,18 @@ BANNER = REPO / "discord" / "portal-banner.png"  # drawn from discord/banner/por
 PINK = 0xFF2E88
 
 
+def round_text(spec) -> str:
+    """The agents' rounds for people: "das 08:05 às 20:55, de 10 em 10 min" or the list of times."""
+    if isinstance(spec, list):
+        return "às " + " · ".join(spec)
+    try:
+        span, every = str(spec).split("/")
+        start, end = span.split("-")
+        return f"das {start} às {end}, de {every} em {every} min"
+    except ValueError:
+        return str(spec or "")
+
+
 def portal_card(url: str | None, sched: dict, channels: dict[str, str]) -> dict:
     """The pinned portal message; `channels` fills in the channel mentions."""
     from limits import DAY_NAMES
@@ -350,7 +362,7 @@ def portal_card(url: str | None, sched: dict, channels: dict[str, str]) -> dict:
              f"📊 {ch('mercado')} · dicas do dia e rankings às **{sched['dicas']}**, resumo semanal ao "
              f"{DAY_NAMES.get(weekly['dia'], weekly['dia'])} às **{weekly['hora']}**\n"
              f"🚨 {ch('alertas')} · notícias às **{news}**, alertas às **{alerts}**, acompanhamento às **{sched['acompanhamento']}**\n"
-             f"🤖 {ch('agentes')} · liga dos agentes às **{sched['agentes']}**, rondas às **{' · '.join(sched.get('ronda', []))}**\n"
+             f"🤖 {ch('agentes')} · liga dos agentes às **{sched['agentes']}**, rondas **{round_text(sched.get('ronda'))}**\n"
              f"🔧 {ch('estado')} · estado do bot às **{sched['estado']}**\n"
              f"💬 {ch('discussao')} · conversa livre"),
             ("🎮 Começar",
@@ -537,7 +549,7 @@ def welcome_card() -> dict:
                 "**Dias úteis, 07:00** · 🏆 Top 3 ações por setor e 📦 top 10 ETFs UCITS, com valorização do dia, semana, 3 e 6 meses\n"
                 "**Dias úteis, 12:00 · 16:00 · 20:30** · 📰 Notícias que importam, lidas pelo Claude\n"
                 "**Dias úteis, 07:30** · 🤖 Liga dos agentes: estratégias com dinheiro fictício e preços reais, ações dos EUA e da Europa\n"
-                "**Dias úteis, 10:30 · 15:30 · 17:00 · 20:30** · ⏱️ Ronda dos agentes: compras à abertura, stops e alvos\n"
+                "**Dias úteis, das 08:05 às 20:55, de 10 em 10 minutos** · ⏱️ Rondas dos agentes: reagem ao mercado ao preço do momento\n"
                 "**Dias úteis, 15:40 · 17:40 · 19:40** · 🚨 Alertas, só quando uma ação da lista rompe o pivot com volume\n"
                 "**Dias úteis, 22:30** · 🔁 Como correu cada alerta 5 e 20 sessões depois, em resposta ao alerta original\n"
                 "**Sábado, 10:00** · 🗓️ Resumo semanal: índices, setores, maiores subidas e quedas, e como correram os alertas\n"

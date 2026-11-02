@@ -81,6 +81,17 @@ function lisbonToEpoch(y, m, d, h, mi) {
   return guess - offset;
 }
 
+// The agents' rounds: "HH:MM-HH:MM/N" (every N minutes from the first time to the last) or a list of times.
+function roundTimes(spec) {
+  if (Array.isArray(spec)) return spec;
+  const m = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})\/(\d{1,3})$/.exec(String(spec || ""));
+  if (!m) return [];
+  const [from, to, every] = [+m[1] * 60 + +m[2], +m[3] * 60 + +m[4], Math.max(+m[5], 5)];
+  const out = [];
+  for (let t = from; t <= to && out.length < 200; t += every) out.push(`${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`);
+  return out;
+}
+
 export function nextRuns(schedule, now) {
   const today = lisbonParts(now);
   const out = [];
@@ -91,7 +102,7 @@ export function nextRuns(schedule, now) {
       const [y, m, d, dow] = [day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), day.getUTCDay()];
       const weekday = dow >= 1 && dow <= 5;
       let times = [];
-      if (job.weekdays && weekday) times = [].concat(schedule[job.key] || []);
+      if (job.weekdays && weekday) times = job.key === "ronda" ? roundTimes(schedule.ronda) : [].concat(schedule[job.key] || []);
       if (job.key === "semanal" && DAYS[dow] === schedule.semanal?.dia) times = [schedule.semanal.hora];
       if (job.key === "treino" && DAYS[dow] === "dom") times = [schedule.treino];
       for (const t of times.slice().sort()) {
@@ -100,7 +111,7 @@ export function nextRuns(schedule, now) {
         if (at > now) { next = at; break; }
       }
     }
-    const all = job.weekdays ? [].concat(schedule[job.key] || []) : [];
+    const all = job.weekdays ? (job.key === "ronda" ? roundTimes(schedule.ronda) : [].concat(schedule[job.key] || [])) : [];
     out.push({ key: job.key, label: job.label, at: next, times: all });
   }
   return out.filter((j) => j.at).sort((a, b) => a.at - b.at);

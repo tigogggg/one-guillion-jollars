@@ -233,7 +233,7 @@ def test_portal_card_mentions_every_channel_with_the_schedule():
     card = discord_setup.portal_card("https://w/p/x", limits.DEFAULT_SCHEDULE, channels)
     where = card["fields"][0]["value"]
     assert all(f"<#{i}>" in where for i in "12345")
-    assert "**07:00**" in where and "**10:30 · 15:30 · 17:00 · 20:30**" in where and "**12:00 · 16:00 · 20:30**" in where and "**23:00**" in where
+    assert "**07:00**" in where and "das 08:05 às 20:55, de 10 em 10 min" in where and "**12:00 · 16:00 · 20:30**" in where and "**23:00**" in where
     assert card["image"]["url"] == "attachment://portal-banner.png"
 
 

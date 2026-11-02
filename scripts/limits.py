@@ -171,7 +171,7 @@ def yahoo_test() -> tuple[bool, str]:
 # --------------------------------------------------------------------------
 
 DEFAULT_SCHEDULE = {  # keep in step with DEFAULT_SCHEDULE in discord-bot/worker.js
-    "dicas": "07:00", "agentes": "07:30", "ronda": ["10:30", "15:30", "17:00", "20:30"],
+    "dicas": "07:00", "agentes": "07:30", "ronda": "08:05-20:55/10",
     "alertas": ["15:40", "17:40", "19:40"], "acompanhamento": "22:30",
     "estado": "23:00", "noticias": ["12:00", "16:00", "20:30"], "semanal": {"dia": "sab", "hora": "10:00"},
     "treino": "06:00",

@@ -107,7 +107,8 @@ def test_configurator_create_and_deposit(tmp_path):
 def test_run_day_indexador_invests_next_open():
     closes = [100, 101, 102, 103, 104]
     hist = {"SXR8.DE": frame(closes, closes, closes, closes)}
-    config = {"agents": [{"id": "i", "name": "I", "emoji": "🐢", "strategy": "indexador", "capital": 1000, "params": {}}]}
+    config = {"agents": [{"id": "i", "name": "I", "emoji": "🐢", "strategy": "indexador", "capital": 1000, "params": {},
+                          "modo": "diario"}]}
     state = {"agents": {}}
     run_day(config, state, market(hist, DATES[0].date()))
     port = state["agents"]["i"]
@@ -168,7 +169,8 @@ def test_jornalista_buys_good_news_and_sells_bad_news():
 def test_news_veto_blocks_buys_for_every_agent_but_cetico():
     closes = [100, 101, 102, 103, 104]
     hist = {"SXR8.DE": frame(closes, closes, closes, closes)}
-    config = {"agents": [{"id": "i", "name": "I", "emoji": "🐢", "strategy": "indexador", "capital": 1000, "params": {}}]}
+    config = {"agents": [{"id": "i", "name": "I", "emoji": "🐢", "strategy": "indexador", "capital": 1000, "params": {},
+                          "modo": "diario"}]}
     state = {"agents": {}}
     mkt = market(hist, DATES[0].date())
     mkt.news = {"SXR8.DE": {"score": -6, "importance": 3, "items": []}}
@@ -453,11 +455,12 @@ def test_stop_round_fills_todays_opens_and_stops_without_closing_the_day():
                                    "stop": 90.0, "tp": None, "checked": "2026-10-29"}
     port["pending"] = [{"side": "buy", "symbol": "BBB.DE", "eur": 200, "created": "2026-10-29"}]
     state = {"agents": {"a": port}}
-    config = {"agents": [{"id": "a", "name": "A", "emoji": "🅰️", "strategy": "rotador", "active": True, "params": {}}]}
+    config = {"agents": [{"id": "a", "name": "A", "emoji": "🅰️", "strategy": "rotador", "active": True, "params": {},
+                          "modo": "diario"}]}
     friday = DATES[4].date()
     mkt = market(hist, friday)
     now = datetime(2026, 10, 30, 15, 40, tzinfo=timezone.utc)
-    moves = agents.stop_round(config, state, mkt, now)
+    moves, _ = agents.reactive_round(config, state, mkt, now)
     sides = {t["symbol"]: t for _, t in moves}
     assert sides["BBB.DE"]["side"] == "compra" and sides["BBB.DE"]["date"] == "2026-10-30" and sides["BBB.DE"]["hora"] == "15:40"
     assert sides["AAA.DE"]["side"] == "venda" and sides["AAA.DE"]["reason"] == "stop"
@@ -465,3 +468,66 @@ def test_stop_round_fills_todays_opens_and_stops_without_closing_the_day():
     # the position bought today is still open and today is not marked as checked
     assert port["positions"]["BBB.DE"]["checked"] == "2026-10-29"
     assert not agents.session_started("AAPL", now.replace(hour=13, minute=0)) and agents.session_started("AAPL", now)
+
+
+def test_reactive_agent_trades_open_markets_now_and_plans_the_closed_ones():
+    from datetime import datetime, timezone
+
+    # Friday 10:30 in Lisbon: Xetra is open (today's bar so far), the US opens at 13:30 UTC that week
+    hist = {"EU1.DE": frame([10, 10, 10, 10, 10], [10, 10, 10, 10, 11], [10, 10, 10, 10, 9.5], [10, 10, 10, 10, 10.8]),
+            "US1": frame([20, 20, 20, 20], [20, 20, 20, 20], [20, 20, 20, 20], [20, 20, 20, 20])}
+    mkt = market(hist, DATES[4].date())
+    now = datetime(2026, 10, 30, 10, 30, tzinfo=timezone.utc)
+    port = new_portfolio(1000, DATES[0].date())
+    port["pending"] = [{"side": "buy", "symbol": "OLD.DE", "eur": 300, "created": "2026-10-30"}]
+    cfg = {"id": "r", "name": "R", "emoji": "R", "strategy": "x", "params": {}}
+    seen_cash = []
+
+    def fake_decide(c, p, m, params, live=True):
+        seen_cash.append(p["cash"])
+        return [agents.order_buy("EU1.DE", 200, "sinal"), agents.order_buy("US1", 200, "sinal")], []
+
+    orig = agents.decide
+    agents.decide = fake_decide
+    try:
+        done, _ = agents.react(cfg, port, mkt, {}, now)
+    finally:
+        agents.decide = orig
+    assert seen_cash == [700]  # the pending buy's money is reserved while it deciding again
+    assert [t["symbol"] for t in done] == ["EU1.DE"] and done[0]["price"] == pytest.approx(10.8 * 1.001)  # now, at 10.8
+    assert port["positions"]["EU1.DE"]["checked"] == "2026-10-30"  # today's earlier low (9.5) does not stop it
+    planned = [o for o in port["pending"] if o["symbol"] == "US1"]
+    assert planned and planned[0]["created"] == "2026-10-29"  # fills at the US open later today
+    assert agents.live_exits(port, mkt, now) == []
+
+
+def test_daily_twins_are_created_once_with_the_same_parameters():
+    config = {"agents": [{"id": "foguetao", "name": "Foguetão", "emoji": "🚀", "strategy": "foguetao", "capital": 1000,
+                          "params": {"n": 5}},
+                         {"id": "indexador", "name": "Indexador", "emoji": "🐢", "strategy": "indexador", "capital": 1000,
+                          "params": {}}]}
+    state = {"agents": {"foguetao": {**new_portfolio(1000, DATES[0].date()), "params": {"n": 7}}}}
+    made = agents.ensure_twins(config, state, DATES[0].date())
+    assert [t["id"] for t in made] == ["foguetao-diario"]
+    assert state["agents"]["foguetao-diario"]["params"] == {"n": 7} and made[0]["modo"] == "diario"
+    assert agents.ensure_twins(config, state, DATES[0].date()) == []
+
+
+def test_rounds_download_the_year_once_a_day_and_add_the_latest_days(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    calls = []
+    year = frame([1, 2, 3, 4], [1, 2, 3, 4], [1, 2, 3, 4], [1, 2, 3, 4])
+    latest = frame([4, 5, 6, 7, 8], [4, 5, 6, 7, 9], [4, 5, 6, 7, 7], [4, 5, 6, 7, 8.5]).iloc[3:]
+
+    def fake(tickers, period="1y"):
+        calls.append(period)
+        return {"AAA": year if period == "1y" else latest}
+
+    monkeypatch.setattr(agents, "download_history", fake)
+    monkeypatch.setattr(agents, "PRICE_CACHE", tmp_path)
+    now = datetime(2026, 10, 30, 10, 0, tzinfo=timezone.utc)
+    out = agents.round_history(["AAA"], now)
+    assert list(out["AAA"]["Close"]) == [1, 2, 3, 7, 8.5]  # the fresh days replace the cached ones from their start
+    agents.round_history(["AAA"], now)
+    assert calls == ["1y", "5d", "5d"]

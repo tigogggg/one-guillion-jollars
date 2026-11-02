@@ -64,6 +64,15 @@ jobs:
           path: state/news
           key: news-latest
           restore-keys: news-
+      - name: Dia (Lisboa)
+        id: dia
+        run: echo "day=$(TZ=Europe/Lisbon date +%F)" >> "$GITHUB_OUTPUT"
+      - name: Preços do ano, guardados para as rondas do dia
+        if: ${{ inputs.mode == 'stops' }}
+        uses: actions/cache@v4
+        with:
+          path: state/prices
+          key: prices-${{ steps.dia.outputs.day }}
       - name: Correr os agentes
         env:
           MODE: ${{ inputs.mode || 'daily' }}

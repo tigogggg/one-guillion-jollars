@@ -91,6 +91,10 @@ NEWS_VETO = 3  # no agent buys a stock whose 36 h news score is at or below -NEW
 NEWS_VETO_DEFAULT = NEWS_VETO
 # Strategies that cannot be replayed on past data (no history of fundamentals, news or other agents):
 # they learn by monthly mutation; the rest are re-trained every Sunday by pretrain.py.
+# How an agent trades. Reactive (the default): decides in every intraday round with the price of that moment and
+# trades at once in the markets that are open, while its plan for the next opens waits as pending orders. Daily: the
+# twin of each reactive agent, deciding once a day before the opens (07:30), as in the 20-year pre-training.
+REACTIVE, DAILY = "reativo", "diario"
 LIVE_ONLY = {"joalheiro", "jornalista", "catalisador", "cetico", "conselho", "maestro"}
 META = {"conselho", "maestro"}  # decide after the others, from their portfolios
 TRADES_KEPT = 200
@@ -366,21 +370,124 @@ def us_breadth(stocks: dict[str, dict]) -> float:
     return sum(us) / max(len(us), 1)
 
 
-def load_market(now: datetime | None = None) -> Market:
+def market_open(symbol: str, now: datetime) -> bool:
+    """Whether the symbol's exchange is in session right now (started, and not over)."""
+    from zoneinfo import ZoneInfo
+
+    if exchange_of(symbol) == "=X":
+        return True
+    local_today = now.astimezone(ZoneInfo(EXCHANGE_CLOSE[exchange_of(symbol)][0])).date()
+    return session_started(symbol, now) and last_complete_day(symbol, now) < local_today
+
+
+def session_fraction(symbol: str, now: datetime) -> float:
+    """How much of today's session at the symbol's exchange has gone by (0-1)."""
+    from zoneinfo import ZoneInfo
+
+    ex = exchange_of(symbol)
+    tz, ch, cm = EXCHANGE_CLOSE[ex]
+    oh, om = EXCHANGE_OPEN.get(ex, (9, 0))
+    local = now.astimezone(ZoneInfo(tz))
+    start = local.replace(hour=oh, minute=om, second=0, microsecond=0)
+    end = local.replace(hour=ch, minute=cm, second=0, microsecond=0)
+    return min(max((local - start) / (end - start), 0.0), 1.0)
+
+
+LIVE_MIN_FRACTION = 0.1  # volume projection: never scale a session's volume by more than 10x
+
+
+def live_bars(hist: dict[str, pd.DataFrame], now: datetime) -> dict[str, pd.DataFrame]:
+    """Each history up to now, for the reactive rounds: today's bar is kept while its session is under way (its close
+    is the latest price) with the volume projected to a full session, so volume rules compare like with like; a bar
+    dated today before the exchange opens (pre-market noise) is dropped."""
+    from zoneinfo import ZoneInfo
+
+    out = {}
+    for sym, df in hist.items():
+        ex = exchange_of(sym)
+        tz = "Europe/Lisbon" if ex == "=X" else EXCHANGE_CLOSE[ex][0]
+        today = now.astimezone(ZoneInfo(tz)).date()
+        cut = df.loc[: pd.Timestamp(today) + pd.Timedelta(hours=23, minutes=59)]
+        if len(cut) and cut.index[-1].date() == today and ex != "=X":
+            if not session_started(sym, now):
+                cut = cut.iloc[:-1]
+            elif market_open(sym, now):
+                cut = cut.copy()
+                cut.iloc[-1, cut.columns.get_loc("Volume")] = (
+                    float(cut["Volume"].iloc[-1]) / max(session_fraction(sym, now), LIVE_MIN_FRACTION))
+        if len(cut):
+            out[sym] = cut
+    return out
+
+
+PRICE_CACHE = Path(__file__).resolve().parents[1] / "state" / "prices"  # kept between rounds by actions/cache
+
+
+def round_history(tickers: list[str], now: datetime) -> dict[str, pd.DataFrame]:
+    """A year of daily bars for the rounds: the year is downloaded once a day and kept (PRICE_CACHE); each round
+    then only fetches the last 5 days, which carry today's bar so far, and puts them on top."""
+    import pickle
+    from zoneinfo import ZoneInfo
+
+    day = now.astimezone(ZoneInfo("Europe/Lisbon")).date().isoformat()
+    import hashlib
+
+    key = hashlib.sha1(",".join(sorted(tickers)).encode()).hexdigest()[:10]
+    path = PRICE_CACHE / f"base-{day}-{key}.pkl"
+    base = None
+    if path.exists():
+        try:
+            base = pickle.loads(path.read_bytes())
+        except Exception:  # noqa: BLE001 - a broken file is downloaded again
+            base = None
+    if base is None:
+        base = download_history(tickers)
+        PRICE_CACHE.mkdir(parents=True, exist_ok=True)
+        for old in PRICE_CACHE.glob("base-*.pkl"):
+            if not old.name.startswith(f"base-{day}-"):
+                old.unlink()
+        path.write_bytes(pickle.dumps(base))
+    fresh = download_history(tickers, period="5d")
+    out = {}
+    for t in tickers:
+        b, f = base.get(t), fresh.get(t)
+        if f is None or not len(f):
+            if b is not None:
+                out[t] = b
+            continue
+        out[t] = f if b is None else pd.concat([b[b.index < f.index[0]], f])
+    return out
+
+
+def load_market(now: datetime | None = None, live: bool = False) -> Market:
+    """The market for a decision. Daily (live=False): complete sessions only, cut at the last full US session.
+    Reactive rounds (live=True): up to this moment, today's sessions under way included (see live_bars)."""
+    from zoneinfo import ZoneInfo
+
     now = now or datetime.now(timezone.utc)
     constituents = load_constituents()
     europe = load_europe()
     sector_of = {c["symbol"]: c["sector"] for c in constituents} | {c["symbol"]: c["sector"] for c in europe}
     name_of = {c["symbol"]: c["name"] for c in constituents} | {c["symbol"]: c["name"] for c in europe}
-    raw = download_history(list(sector_of) + ["SPY"])
-    stock_hist = complete_bars({s: fix_pence(df) if currency_of(s) == "GBp" else df for s, df in raw.items()}, now)
-    if "SPY" not in stock_hist:
-        raise RuntimeError("Sem dados do Yahoo Finance (SPY).")
-    # The decision day: the last full US session. Nothing later is seen, in any market (as in the backtest).
-    as_of = stock_hist["SPY"].index[-1].date()
-    stock_hist = complete_bars(stock_hist, now, as_of)
-    etf_hist = complete_bars(download_history([t for t, _ in UCITS_ETFS]), now, as_of)
-    fx_hist = complete_bars(download_history(list(FX_SYMBOLS.values())), now, as_of)
+    history = (lambda tickers: round_history(tickers, now)) if live else download_history
+    raw = history(list(sector_of) + ["SPY"])
+    raw = {s: fix_pence(df) if currency_of(s) == "GBp" else df for s, df in raw.items()}
+    if live:
+        stock_hist = live_bars(raw, now)
+        if "SPY" not in stock_hist:
+            raise RuntimeError("Sem dados do Yahoo Finance (SPY).")
+        as_of = now.astimezone(ZoneInfo("Europe/Lisbon")).date()
+        etf_hist = live_bars(history([t for t, _ in UCITS_ETFS]), now)
+        fx_hist = live_bars(history(list(FX_SYMBOLS.values())), now)
+    else:
+        stock_hist = complete_bars(raw, now)
+        if "SPY" not in stock_hist:
+            raise RuntimeError("Sem dados do Yahoo Finance (SPY).")
+        # The decision day: the last full US session. Nothing later is seen, in any market (as in the backtest).
+        as_of = stock_hist["SPY"].index[-1].date()
+        stock_hist = complete_bars(stock_hist, now, as_of)
+        etf_hist = complete_bars(download_history([t for t, _ in UCITS_ETFS]), now, as_of)
+        fx_hist = complete_bars(download_history(list(FX_SYMBOLS.values())), now, as_of)
     if "EURUSD=X" not in fx_hist:
         raise RuntimeError("Sem dados do Yahoo Finance (EUR/USD).")
     fx_rates = {c: fx_hist[t]["Close"] for c, t in FX_SYMBOLS.items() if c != "USD" and t in fx_hist}
@@ -432,8 +539,8 @@ def load_market(now: datetime | None = None) -> Market:
         fx_rates=fx_rates,
         stocks=stocks,
         etfs=etfs,
-        as_of=spy.index[-1].date(),
-        sessions=[d.date() for d in spy.index],
+        as_of=as_of,
+        sessions=sorted({d.date() for d in spy.index} | ({as_of} if live and now.astimezone(ZoneInfo("Europe/Lisbon")).weekday() < 5 else set())),
         zone=zone_for(share),
         stage2_share=share,
     )
@@ -1203,10 +1310,14 @@ def s_cetico(cfg, port, mkt, p):
     return orders
 
 
+def mode_of(cfg: dict) -> str:
+    return cfg.get("modo", REACTIVE)
+
+
 def peers(mkt: Market, cfg: dict) -> list[tuple[dict, dict]]:
-    """The other agents that decide on their own (not meta-agents, not this one)."""
+    """The other agents of the same mode that decide on their own (not meta-agents, not this one)."""
     return [(c, port) for agent_id, (c, port) in mkt.league.items()
-            if agent_id != cfg.get("id") and c["strategy"] not in META]
+            if agent_id != cfg.get("id") and c["strategy"] not in META and mode_of(c) == mode_of(cfg)]
 
 
 def s_conselho(cfg, port, mkt, p):
@@ -1660,6 +1771,7 @@ def spawn_child(config: dict, state: dict, leader: dict, replaced: dict, mkt: Ma
     child = {
         "id": f"{base_id}-{n}", "name": f"{base_name} {ROMAN[n] if n < len(ROMAN) else n}", "emoji": leader["emoji"],
         "strategy": leader["strategy"], "capital": 1000, "params": params, "lineage": base_id, "lineage_name": base_name,
+        **({"modo": mode_of(replaced)} if mode_of(replaced) != REACTIVE else {}),
         "description": f"Filho de {leader['name']}, nasceu a {mkt.as_of.isoformat()} no lugar de {replaced['name']} "
                        f"(falência). Mutação: {', '.join(changes) or 'nenhuma'}.",
     }
@@ -1756,6 +1868,8 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
         note = train(cfg, port, mkt)
         if note:
             training.append(f"{cfg['emoji']} **{cfg['name']}** {note}")
+        if mode_of(cfg) == REACTIVE:  # it decides in the intraday rounds (reactive_round)
+            continue
         if port["last_decision"] != mkt.as_of.isoformat() and not port["pending"]:
             orders, notes = decide(cfg, port, mkt, params)
             if notes:
@@ -1766,7 +1880,8 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
         if note:
             training.append(f"{cfg['emoji']} **{cfg['name']}** {note}")
     for dead in bankrupt:
-        alive = [(c, state["agents"][c["id"]]) for c in active_agents(config) if c["strategy"] not in META | {"indexador"}]
+        alive = [(c, state["agents"][c["id"]]) for c in active_agents(config)
+                 if c["strategy"] not in META | {"indexador"} and mode_of(c) == mode_of(dead)]
         if not alive:
             continue
         leader, _ = max(alive, key=lambda cp: cp[1]["points"])
@@ -2276,45 +2391,112 @@ MONTHLY_TITLE = "📆 Relatório mensal dos agentes"
 # --------------------------------------------------------------------------
 
 
-def round_market(state: dict, now: datetime) -> Market | None:
-    """A small market for the stop round: the held and pending symbols with today's session so far."""
-    from zoneinfo import ZoneInfo
-
-    symbols = sorted({s for port in state["agents"].values() for s in list(port.get("positions", {}))
-                      + [o["symbol"] for o in port.get("pending", [])]})
-    if not symbols:
-        return None
-    hist = download_history(symbols, period="1mo")
-    fx_hist = download_history(list(FX_SYMBOLS.values()), period="1mo")
-    if "EURUSD=X" not in fx_hist:
-        raise RuntimeError("Sem dados do Yahoo Finance (EUR/USD).")
-    hist = {s: fix_pence(df) if currency_of(s) == "GBp" else df for s, df in hist.items()}
-    today = now.astimezone(ZoneInfo("Europe/Lisbon")).date()
-    # A market that has not opened yet today has no real bar for today: keep only the days before
-    hist = {s: df if session_started(s, now) else df.loc[: pd.Timestamp(today) - pd.Timedelta(seconds=1)]
-            for s, df in hist.items()}
-    return Market(hist=hist, fx=fx_hist["EURUSD=X"]["Close"], stocks={}, etfs={}, as_of=today, sessions=[],
-                  zone="Neutra", stage2_share=0.0,
-                  fx_rates={c: fx_hist[t]["Close"] for c, t in FX_SYMBOLS.items() if c != "USD" and t in fx_hist})
+def ensure_twins(config: dict, state: dict, start: date) -> list[dict]:
+    """A daily twin ("· diário") for every reactive agent that has none (the Indexador needs none): same strategy and
+    parameters, from the same capital, so the league shows what reacting during the day is worth."""
+    twinned = {a.get("twin_of") for a in config["agents"] if mode_of(a) == DAILY}
+    created = []
+    for cfg in list(active_agents(config)):
+        if mode_of(cfg) == DAILY or cfg["strategy"] == "indexador" or cfg["id"] in twinned:
+            continue
+        twin = {**{k: v for k, v in cfg.items() if k not in ("id", "name", "description")},
+                "id": f"{cfg['id']}-diario", "name": f"{cfg['name']} · diário", "modo": DAILY, "twin_of": cfg["id"],
+                "description": f"Gémeo diário de {cfg['name']}: a mesma estratégia, mas decide uma vez por dia antes "
+                               "das aberturas (07:30), como no pré-treino. Serve de comparação com o modo reativo."}
+        port = new_portfolio(cfg["capital"], start)
+        port["params"] = dict((state["agents"].get(cfg["id"]) or {}).get("params", cfg["params"]))
+        config["agents"].append(twin)
+        state["agents"][twin["id"]] = port
+        created.append(twin)
+    return created
 
 
-def stop_round(config: dict, state: dict, mkt: Market, now: datetime) -> list[tuple[dict, dict]]:
-    """During the sessions: fill the orders whose market has opened today (at that open, as the daily run would) and
-    sell the positions whose stop or target was reached so far today (at the stop or target). Prices and dates are
-    exactly the ones the daily run and the backtest use; only the time of the round is added, to show it sooner."""
+def live_exits(port: dict, mkt: Market, now: datetime) -> list[dict]:
+    """Stops and targets of positions bought during today's session: today's low and high may come from before the
+    purchase, so these are checked against the price of each round instead (and sold at it)."""
+    done = []
+    for symbol, pos in list(port["positions"].items()):
+        if pos.get("checked", "") < mkt.as_of.isoformat() or not market_open(symbol, now):
+            continue
+        price = last_close(mkt, symbol)
+        if price is None:
+            continue
+        if pos.get("stop") and price <= pos["stop"]:
+            done.append(sell(port, mkt, symbol, price, mkt.as_of, "stop",
+                             ctx={"stop": round(pos["stop"], 4), "entry": round(pos["entry"], 4), "price": round(price, 4)}))
+        elif pos.get("tp") and price >= pos["tp"]:
+            done.append(sell(port, mkt, symbol, price, mkt.as_of, "alvo",
+                             ctx={"tp": round(pos["tp"], 4), "entry": round(pos["entry"], 4), "price": round(price, 4)}))
+    return done
+
+
+def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime) -> tuple[list[dict], list[str]]:
+    """One reactive decision: the strategy runs with the prices of this moment. Orders in markets that are open are
+    traded now, at the current price; the others join the plan of pending orders for the next open (at the open
+    price, with the gap rule). The money of pending buys stays reserved, a symbol already pending is left to its
+    order, and a stock sold today is not bought back the same day."""
+    today = mkt.as_of.isoformat()
+    sold = {t["symbol"] for t in port["trades"] if t["side"] == "venda" and t["date"] == today}
+    pending = {o["symbol"] for o in port["pending"]}
+    reserved = sum(o["eur"] for o in port["pending"] if o["side"] == "buy")
+    port["cash"] -= reserved
+    try:
+        orders, notes = decide(cfg, port, mkt, params)
+    finally:
+        port["cash"] += reserved
+    done = []
+    for o in sorted(orders, key=lambda o: o["side"] != "sell"):  # sells first, so their cash is there for the buys
+        sym = o["symbol"]
+        if sym in pending or (o["side"] == "buy" and sym in sold):
+            continue
+        if market_open(sym, now):
+            price = last_close(mkt, sym)
+            if price is None:
+                continue
+            if o["side"] == "sell":
+                if sym in port["positions"]:
+                    done.append(sell(port, mkt, sym, price, mkt.as_of, o.get("reason", ""), o.get("fraction", 1.0), o.get("ctx")))
+            else:
+                t = buy(port, mkt, o, price, mkt.as_of)
+                if t:
+                    port["positions"][sym]["checked"] = today  # today's low/high before the buy do not count
+                    done.append(t)
+        else:
+            df = mkt.hist.get(sym)
+            if df is not None and len(df):  # fills at the first open after its last bar (later today or tomorrow)
+                port["pending"].append({**o, "created": df.index[-1].date().isoformat()})
+    port["last_decision"] = now.isoformat(timespec="minutes")
+    return done, notes
+
+
+def reactive_round(config: dict, state: dict, mkt: Market, now: datetime) -> tuple[list[tuple[dict, dict]], list[str]]:
+    """An intraday round (every 30 minutes during the sessions), with the market up to now (load_market(live=True)).
+    Every agent: pending orders whose market opened today fill at that open, stops and targets reached so far are
+    executed. Reactive agents then decide again with the prices of this moment (react). Daily twins only do the
+    first part, at exactly the prices their daily run would use."""
     from zoneinfo import ZoneInfo
 
     clock = now.astimezone(ZoneInfo("Europe/Lisbon")).strftime("%H:%M")
-    moves = []
-    for cfg in active_agents(config):
+    moves, avoided = [], []
+    order = sorted(active_agents(config), key=lambda c: c["strategy"] in META)  # meta-agents decide last
+    for cfg in order:
+        if cfg["id"] in state["agents"]:
+            mkt.league[cfg["id"]] = (cfg, state["agents"][cfg["id"]])
+    for cfg in order:
         port = state["agents"].get(cfg["id"])
         if not port:
             continue
-        done = fill_pending(port, mkt) + check_exits(port, mkt, open_day=mkt.as_of)
+        params = port.setdefault("params", dict(cfg["params"]))
+        done = fill_pending(port, mkt) + check_exits(port, mkt, open_day=mkt.as_of) + live_exits(port, mkt, now)
+        if mode_of(cfg) == REACTIVE:
+            traded, notes = react(cfg, port, mkt, params, now)
+            done += traded
+            if notes:
+                avoided.append(f"{cfg['emoji']} {cfg['name']}: " + ", ".join(notes))
         for t in done:
             t["hora"] = clock
             moves.append((cfg, t))
-    return moves
+    return moves, avoided
 
 
 def main() -> int:
@@ -2327,22 +2509,25 @@ def main() -> int:
     config, state = load_config(), load_state()
     target = reply_target()
     follow_up = ([], {})
-    if a.mode == "stops":  # intraday: today's opens and the stops/targets reached so far; post only when something moved
+    if a.mode == "stops":  # intraday round: the agents react to the market of this moment; post only when they trade
         now = datetime.now(timezone.utc)
-        mkt = round_market(state, now)
-        moves = stop_round(config, state, mkt, now) if mkt else []
-        print(f"Ronda: {len(moves)} movimentos")
-        if not moves:
+        mkt = load_market(now, live=True)
+        print(f"Ronda: mercado carregado em {(datetime.now(timezone.utc) - now).total_seconds():.0f} s")
+        twins = ensure_twins(config, state, mkt.as_of)
+        moves, _ = reactive_round(config, state, mkt, now)
+        print(f"Ronda: decisões feitas em {(datetime.now(timezone.utc) - now).total_seconds():.0f} s desde o início")
+        if not moves and not twins:
             return 0
         save(config, state)
-        lines = [f"{cfg['emoji']} **{cfg['name']}** {'comprou' if t['side'] == 'compra' else 'vendeu'} {t['symbol']} "
-                 f"({eur(t['eur'])}{', ' + t['reason'] if t['side'] == 'venda' else ''}) · {t['date']} às {t['hora']}"
-                 for cfg, t in moves]
-        try:  # the portal shows the new positions now, not tomorrow
-            full = load_market()
-            league(config, state, full, f"🤖 Liga dos agentes · fecho de {full.as_of.isoformat()}")
+        try:  # the portal at the prices of this moment
+            league(config, state, mkt, f"🤖 Liga dos agentes · {mkt.as_of.isoformat()} às {now.astimezone(timezone.utc):%H:%M} UTC")
         except Exception as e:
             print(f"WARN: portal: {e!r}", file=sys.stderr)
+        if not moves:
+            return 0
+        lines = [f"{cfg['emoji']} **{cfg['name']}** {'comprou' if t['side'] == 'compra' else 'vendeu'} {t['symbol']} "
+                 f"({eur(t['eur'])}{', ' + t['reason'] if t['side'] == 'venda' and t.get('reason') else ''}) · às {t['hora']}"
+                 for cfg, t in moves]
         where = route("agentes") or {"thread_id": discord_bot.todays_thread()}
         return send([embed("⏱️ Ronda dos agentes", "\n".join(lines)[:4000], color=BLUE)], {}, dry_run=a.dry_run, **where)
     if a.mode == "portal":  # the portal's league page from the current state: no trading, no post
@@ -2364,6 +2549,7 @@ def main() -> int:
     try:
         if a.mode == "daily":
             mkt = load_market()
+            ensure_twins(config, state, mkt.as_of)
             moves, training, avoided, events = run_day(config, state, mkt)
             save(config, state)  # bankruptcies retire agents and add their replacements
             embeds, files = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}",

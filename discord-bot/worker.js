@@ -43,7 +43,7 @@ const SCHEDULE_VERSION = 2;
 const DEFAULT_SCHEDULE = {
   dicas: "07:00",
   agentes: "07:30", // before Xetra/Euronext/LSE open at 08:00 Lisbon, with the last full sessions
-  ronda: ["10:30", "15:30", "17:00", "20:30"], // agents' intraday round: fills at today's opens, stops and targets
+  ronda: "08:05-20:55/10", // reactive rounds: the agents decide and trade at the prices of that moment
   alertas: ["15:40", "17:40", "19:40"],
   acompanhamento: "22:30", // after the US close: how each alert did 5 and 20 sessions later
   estado: "23:00", // health check, after every other weekday job
@@ -64,6 +64,16 @@ const WORKFLOWS = {
   semanal: "weekly-summary.yml",
   treino: "pretrain.yml",
 };
+// The agents' rounds: "HH:MM-HH:MM/N" (every N minutes from the first time to the last) or a list of times.
+function roundTimes(spec) {
+  if (Array.isArray(spec)) return spec;
+  const m = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})\/(\d{1,3})$/.exec(String(spec || ""));
+  if (!m) return [];
+  const [from, to, every] = [+m[1] * 60 + +m[2], +m[3] * 60 + +m[4], Math.max(+m[5], 5)];
+  const out = [];
+  for (let t = from; t <= to && out.length < 200; t += every) out.push(`${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`);
+  return out;
+}
 const JOB_INPUTS = { ronda: { mode: "stops" } };
 const LATE_LIMIT_MIN = 20; // still start a job this many minutes after its time (missed cron ticks)
 const MAX_ALERT_TIMES = 6;
@@ -295,7 +305,7 @@ async function runSchedule(env, ctx, now) {
       jobs.push(["dicas", schedule.dicas]);
       jobs.push(["agentes", schedule.agentes]);
       for (const t of schedule.alertas) jobs.push(["alertas", t]);
-      for (const t of schedule.ronda) jobs.push(["ronda", t]);
+      for (const t of roundTimes(schedule.ronda)) jobs.push(["ronda", t]);
       jobs.push(["acompanhamento", schedule.acompanhamento]);
       jobs.push(["estado", schedule.estado]);
       for (const t of schedule.noticias) jobs.push(["noticias", t]);
@@ -359,7 +369,13 @@ async function scheduleCommand(env, sub) {
   if (action === "dicas" || action === "agentes" || action === "acompanhamento" || action === "estado") {
     if (!isTime(args.hora)) return badTime(args.hora);
     schedule[action] = normaliseTime(args.hora);
-  } else if (action === "alertas" || action === "noticias" || action === "ronda") {
+  } else if (action === "ronda") {
+    const spec = (args.horas || "").replace(/\s+/g, "");
+    const list = spec.split(",").filter(Boolean);
+    if (roundTimes(spec).length) schedule.ronda = spec;
+    else if (list.length && list.length <= 60 && list.every(isTime)) schedule.ronda = [...new Set(list.map(normaliseTime))].sort();
+    else return "⚠️ Usa `08:05-20:55/10` (de 10 em 10 minutos, mínimo 5) ou uma lista de horas separadas por vírgulas.";
+  } else if (action === "alertas" || action === "noticias") {
     const times = (args.horas || "").split(/[,\s]+/).filter(Boolean);
     if (!times.length || times.length > MAX_ALERT_TIMES || !times.every(isTime)) {
       return `⚠️ Indica entre 1 e ${MAX_ALERT_TIMES} horas separadas por vírgulas, ex.: \`15:30,17:30,20:00\`.`;
@@ -379,7 +395,7 @@ async function scheduleCommand(env, sub) {
     action === "ver" ? "🕒 **Horários atuais** (hora de Lisboa)" : "✅ **Horários atualizados** (hora de Lisboa)",
     `📊 Dicas do dia e rankings: **${schedule.dicas}** (dias úteis)`,
     `🤖 Liga dos agentes: **${schedule.agentes}** (dias úteis, antes da abertura europeia às 08:00)`,
-    `⏱️ Ronda dos agentes: **${schedule.ronda.join(" · ")}** (dias úteis; compras à abertura, stops e alvos do dia)`,
+    `⏱️ Rondas dos agentes: **${Array.isArray(schedule.ronda) ? schedule.ronda.join(" · ") : schedule.ronda.replace("/", ", de ") + " em " + " minutos"}** (dias úteis; decidem e negociam ao preço do momento)`,
     `🚨 Verificação de alertas: **${schedule.alertas.join(" · ")}** (dias úteis; a sessão dos EUA é das 14:30 às 21:00)`,
     `🔁 Acompanhamento dos alertas: **${schedule.acompanhamento}** (dias úteis, depois do fecho dos EUA)`,
     `📰 Notícias: **${schedule.noticias.join(" · ")}** (dias úteis)`,
