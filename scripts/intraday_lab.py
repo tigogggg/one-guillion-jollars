@@ -126,17 +126,24 @@ def _fetch_chunk(symbols: list[str], start: date, end: date, tag: str, feed: str
         """One request series (pages) for up to 50 symbols; each symbol's year is cached as soon as it is complete."""
         names = {alpaca_symbol(s): s for s in chunk}
         rows: dict[str, list] = {s: [] for s in chunk}
-        token = None
+        token, fails = None, 0
         while True:
             limiter.wait()
             params = {"symbols": ",".join(names), "timeframe": TIMEFRAME, "start": f"{start.isoformat()}T00:00:00Z",
                       "end": end_ts.strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": 10000, "adjustment": "all", "feed": feed}
             if token:
                 params["page_token"] = token
-            resp = requests.get(BARS_URL, params=params, headers=headers, timeout=120)
-            if resp.status_code == 429:
-                time.sleep(30)
+            try:
+                resp = requests.get(BARS_URL, params=params, headers=headers, timeout=120)
+            except requests.RequestException:
+                resp = None
+            if resp is None or resp.status_code == 429 or resp.status_code >= 500:  # rate limit, gateway timeouts
+                fails += 1
+                if fails > 8:
+                    raise RuntimeError(f"Alpaca não responde ({resp.status_code if resp is not None else 'sem resposta'})")
+                time.sleep(min(30 * fails, 180))
                 continue
+            fails = 0
             if resp.status_code == 403 and feed == "sip":
                 raise _NoSip
             resp.raise_for_status()
