@@ -16,7 +16,7 @@ Reply to him in **pt-PT**, short and clear; commit messages in English.
 - Tests: `uv run pytest -q tests` (must pass before pushing).
 - Data in git: `data/context/*.csv`, `data/fundamentals/fundamentals.csv.gz` (refreshed weekly by `context-data.yml`).
 - Agents state: `agents/config.json`, `agents/state.json`, `agents/pretrain.json` (latest pre-training),
-  `agents/pretrain_history.json` (one entry per run), `agents/search.json` (search intensity: local 2×, Actions 0.5×).
+  `agents/pretrain_history.json` (one entry per run), `agents/search.json` (search intensity: 2× both locally and in Actions, where each strategy has its own 4-core runner).
   `agents/` is NOT in this public repo: it is a clone of the private repo `tigogggg/one-guillion-jollars-dados`
   (gitignored here; commit and push inside `agents/`). Workflows check it out with the deploy key `DADOS_DEPLOY_KEY`.
   Pre-training artifacts are encrypted with `BACKUP_KEY`; Actions logs are public, so never print results there.
