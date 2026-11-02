@@ -56,3 +56,15 @@ def test_scoreboard_counts_by_confidence():
     sb = proposals.scoreboard(log)
     assert sb["all"]["closed"] == 2 and sb["all"]["win_rate"] == 0.5 and sb["all"]["avg_r"] == 0.75
     assert sb["by_bucket"]["alta"]["targets"] == 1 and sb["by_bucket"]["baixa"]["executed"] == 0
+
+
+def test_odds_say_what_share_of_wins_the_plan_needs():
+    import proposals
+
+    p = {"net_target_pct": 7.2, "net_stop_pct": -3.6}           # wins twice what it loses
+    assert proposals.odds(p, {})["needed"] == round(3.6 / 10.8, 3)
+    assert "verdict" not in proposals.odds(p, {"trades": 3, "win_rate": 0.6})  # too few trades to compare
+    assert proposals.odds(p, {"trades": 40, "win_rate": 0.36})["verdict"] == "perto de empatar"
+    assert proposals.odds(p, {"trades": 40, "win_rate": 0.45})["verdict"] == "inclina a favor"
+    assert proposals.odds(p, {"trades": 40, "win_rate": 0.10})["verdict"] == "contra"
+    assert proposals.odds({"net_target_pct": -0.5, "net_stop_pct": -3.0}, {}) == {}

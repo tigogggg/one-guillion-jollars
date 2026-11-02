@@ -33,6 +33,7 @@ ATR_DAYS = 14
 STOP_ATR = 2.0
 MAX_STOP = 0.10
 TARGET_R = 2.5
+ODDS_MIN_TRADES = 10  # closed trades of the supporting agents before their record is compared with the plan
 ENTRY_ATR = 0.25  # do not pay more than the close + a quarter of a day's range
 FILL_WINDOW = 3  # sessions for the entry price to be reached
 HORIZON = 20  # sessions a proposal is followed
@@ -157,6 +158,22 @@ def plan(mkt: Market, symbol: str, orders: list[dict]) -> dict | None:
     }
 
 
+def odds(p: dict, rec: dict) -> dict:
+    """The share of wins this plan needs to break even (net at the target against net at the stop, after costs and
+    tax), and how the supporting agents' own record compares: an honest read of the plan, not a forecast."""
+    win, loss = p["net_target_pct"], -p["net_stop_pct"]
+    if win <= 0 or loss <= 0:
+        return {}
+    need = loss / (win + loss)
+    out = {"needed": round(need, 3)}
+    if (rec.get("trades") or 0) >= ODDS_MIN_TRADES and rec.get("win_rate") is not None:
+        gap = rec["win_rate"] - need
+        out["record"] = rec["win_rate"]
+        out["verdict"] = ("perto de empatar" if abs(gap) < 0.05 else ("inclina a favor" if gap > 0 else "inclina contra")
+                          if abs(gap) < 0.15 else ("a favor" if gap > 0 else "contra"))
+    return out
+
+
 def build(config: dict, state: dict, mkt: Market) -> dict:
     """Today's proposals from the orders the agents just placed for the next open."""
     pre = load_pretrain()
@@ -219,7 +236,7 @@ def build(config: dict, state: dict, mkt: Market) -> dict:
             "symbol": sym, "name": m.get("name", ""), "sector": m.get("sector", ""), "etf": sym in mkt.etfs,
             "support": round(support, 2), "confidence": round(support / total * 100, 1) if total else 0.0,
             "agents": [{"name": v["name"], "emoji": v["emoji"], "weight": v["weight"], "reason": o.get("reason", "")} for v, o in votes],
-            "plan": p, "record": record(votes), "safety": score, "level": level, "parts": parts,
+            "plan": p, "record": (rec := record(votes)), "odds": odds(p, rec), "safety": score, "level": level, "parts": parts,
             "earnings": mkt.earnings[sym].isoformat() if isinstance(mkt.earnings.get(sym), date) else None,
             "news": ((mkt.news.get(sym) or {}).get("items") or [{}])[0].get("resumo", ""),
             # the same signals as the Oportunidades tab: a proposal against them is shown with the warning, at the end

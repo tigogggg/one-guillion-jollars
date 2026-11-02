@@ -1066,6 +1066,8 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
       tile("Alvo", fmtNum(pl.target) + " " + cur, "+" + fmtNum(pl.gross_pct, 1) + "% · risco/retorno " + fmtNum(pl.rr, 1), "up") +
       tile("Líquido no alvo", fmtPct(pl.net_target_pct), "depois de custos e 28% de imposto", "up") +
       tile("Líquido no stop", fmtPct(pl.net_stop_pct), "com custos", "down") +
+      (b.odds && b.odds.needed != null ? tile("Para empatar", pctOrDash(b.odds.needed) + " de acerto",
+        b.odds.verdict ? "historial dos agentes " + pctOrDash(b.odds.record) + ": " + esc(b.odds.verdict) : "acima disto, o plano ganha dinheiro em média") : "") +
       tile("Historial dos agentes", rec.trades ? pctOrDash(rec.win_rate) + " de acerto" : "ainda sem vendas", rec.trades ? "ganho médio " + fmtPct(rec.avg_win * 100) + " · perda média " + fmtPct(rec.avg_loss * 100) + (rec.median_days ? " · ~" + rec.median_days + " dias" : "") : "") +
       '</div><p class="small sizing" data-sym="' + esc(b.symbol) + '"></p>' +
       (b.earnings ? '<p class="small">📅 Resultados a ' + esc(b.earnings) + '</p>' : '') + (b.news ? '<p class="small muted">📰 ' + esc(b.news) + '</p>' : '') +
