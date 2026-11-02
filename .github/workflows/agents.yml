@@ -117,6 +117,7 @@ jobs:
           exit 1
       - name: Guardar o arquivo intradiário
         if: ${{ !cancelled() && inputs.mode == 'stops' && hashFiles('arquivo-intradiario/**/*.csv.gz') != '' }}
+        continue-on-error: true  # the archive never fails the round (nor its price cache)
         working-directory: arquivo-intradiario
         run: |
           git config user.name "github-actions[bot]"
@@ -124,5 +125,10 @@ jobs:
           git add -A
           git diff --cached --quiet && exit 0
           git commit -m "Ronda $(TZ=Europe/Lisbon date '+%F %H:%M')"
-          for i in 1 2 3; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 5; done
+          for i in 1 2 3; do
+            # an empty repository has no main yet: the first push creates it
+            if git ls-remote --exit-code origin main >/dev/null 2>&1; then git pull --rebase origin main || { sleep 5; continue; }; fi
+            git push origin HEAD:main && exit 0
+            sleep 5
+          done
           exit 1
