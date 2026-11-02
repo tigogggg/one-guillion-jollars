@@ -70,6 +70,14 @@ on:
         type: choice
         options: [equilibrado, conservador, arrojado]
         default: equilibrado
+      seguintes:
+        description: "Perfis a treinar a seguir, um depois do outro (auto = conservador e arrojado depois do equilibrado; vazio = nenhum)"
+        required: false
+        default: "auto"
+      serie:
+        description: "(interno) execuções pedidas por perfil na série"
+        required: false
+        default: ""
 
 # The profile reaches every job (scripts/pretrain.py reads PRETRAIN_PERFIL); its report is agents/pretrain.json
 # (balanced) or agents/pretrain-<profile>.json.
@@ -81,11 +89,12 @@ permissions:
   contents: read  # results are pushed to the private data repo with its deploy key
   actions: read  # juntar_de: artifacts of an earlier run
 
-# One pre-training at a time (each builds on the last one's choices); a rehearsal saves nothing, so it runs on
-# its own. Only the merge job, which writes agents/, waits for the agents' daily run (agents-state): the hours of
-# training no longer hold up the daily league or the /agentes commands.
+# One pre-training at a time, whatever the profile (each builds on the last one's choices and the merges all write
+# agents/): the profiles run one after the other (seguintes). A rehearsal saves nothing, so it runs on its own. Only
+# the merge job, which writes agents/, waits for the agents' daily run (agents-state): the hours of training no
+# longer hold up the daily league or the /agentes commands.
 concurrency:
-  group: ${{ inputs.ensaio && format('ensaio-{0}', github.run_id) || format('pretrain-{0}', inputs.perfil || 'equilibrado') }}
+  group: ${{ inputs.ensaio && format('ensaio-{0}', github.run_id) || 'pretrain' }}
   cancel-in-progress: false
 
 jobs:
@@ -227,7 +236,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: ${{ inputs.ensaio && format('ensaio-merge-{0}', github.run_id) || format('agents-state-pretrain-{0}', inputs.perfil || 'equilibrado') }}
+      group: ${{ inputs.ensaio && format('ensaio-merge-{0}', github.run_id) || 'agents-state' }}
       cancel-in-progress: false
     permissions:
       contents: read
@@ -293,7 +302,7 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -m "Agentes: pré-treino $(date -u +%F)"
           # the intraday rounds push the agents' state every 10 minutes: retry on a race
-          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 10; done
+          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; git rebase --abort 2>/dev/null; sleep 10; done
           exit 1
       - name: Instalar o Claude Code
         if: ${{ success() && inputs.revisao_claude != false && !inputs.ensaio && (inputs.perfil == '' || inputs.perfil == 'equilibrado') }}
@@ -312,16 +321,19 @@ jobs:
           git add claude_review.json
           git diff --cached --quiet && exit 0
           git commit -m "Agentes: revisão do Claude $(date -u +%F)"
-          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 10; done
+          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; git rebase --abort 2>/dev/null; sleep 10; done
           exit 1
       # A series of runs (repetir, or a run another run of the series dispatched): dispatch the next one, or, when
       # the series ends (converged, no runs left, or this one failed), say so in 🤖-agentes.
       - name: Encadear a próxima execução ou avisar no fim
-        if: ${{ !cancelled() && !inputs.ensaio && ((inputs.repetir != '' && inputs.repetir != '0') || github.actor == 'github-actions[bot]') }}
+        if: ${{ !cancelled() && !inputs.ensaio }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           REPETIR: ${{ inputs.repetir || '0' }}
+          SERIE: ${{ inputs.serie || inputs.repetir || '0' }}
+          SEGUINTES: ${{ inputs.seguintes }}
+          ACTOR: ${{ github.actor }}
           SEM_MUDANCAS: ${{ inputs.sem_mudancas || '0' }}
           ESTADO: ${{ job.status }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -343,13 +355,31 @@ jobs:
           sys.exit(send([embed(title, text, GREEN if ok else RED, fields=fields)], **route("agentes")))
           EOF
           }
-          if [ "$ESTADO" != success ]; then avisar falhou "uma execução não correu bem (ver o Actions)"; exit 0; fi
+          if [ "$SEGUINTES" = auto ]; then
+            if [ "$PRETRAIN_PERFIL" = equilibrado ]; then SEGUINTES="conservador,arrojado"; else SEGUINTES=""; fi
+          fi
+          SEGUINTES=$(echo "$SEGUINTES" | tr -d ' ')
+          # a single run by hand, with no profiles after it: nothing to chain or announce
+          if [ "$REPETIR" -le 0 ] && [ -z "$SEGUINTES" ] && [ "$ACTOR" != "github-actions[bot]" ]; then exit 0; fi
+          # the next profile in the queue starts its own series (same number of runs)
+          proximo_perfil() {
+            [ -n "$SEGUINTES" ] || return 0
+            next="${SEGUINTES%%,*}"; rest="${SEGUINTES#"$next"}"; rest="${rest#,}"
+            gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f perfil="$next" -f seguintes="$rest" \
+              -f repetir="$SERIE" -f serie="$SERIE" -f sem_mudancas=0
+            echo "Pedi o pré-treino do perfil seguinte ($next)."
+          }
+          if [ "$ESTADO" != success ]; then
+            avisar falhou "uma execução não correu bem (ver o Actions)${SEGUINTES:+; os perfis seguintes ($SEGUINTES) não foram treinados}"
+            exit 0
+          fi
           jq -c '.strategies | map_values(.chosen)' "agents/$PRETRAIN_REPORT" > "$RUNNER_TEMP/depois.json"
           changed=$(jq -rn --slurpfile a "$RUNNER_TEMP/antes.json" --slurpfile b "$RUNNER_TEMP/depois.json" \
             '[$b[0] | to_entries[] | select($a[0][.key] != .value) | .key] | join(", ")')
           echo "Estratégias com parâmetros novos: ${changed:-nenhuma}"
           if [ -n "$changed" ]; then quiet=0; else quiet=$((SEM_MUDANCAS + 1)); fi
-          if [ "$quiet" -ge 2 ]; then avisar ok "convergiu, 2 execuções seguidas sem melhorias"; exit 0; fi
-          if [ "$REPETIR" -le 0 ]; then avisar ok "fez todas as execuções pedidas"; exit 0; fi
-          gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f repetir=$((REPETIR - 1)) -f sem_mudancas=$quiet -f perfil="$PRETRAIN_PERFIL"
+          if [ "$quiet" -ge 2 ]; then proximo_perfil; avisar ok "convergiu, 2 execuções seguidas sem melhorias" || true; exit 0; fi
+          if [ "$REPETIR" -le 0 ]; then proximo_perfil; avisar ok "fez todas as execuções pedidas" || true; exit 0; fi
+          gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f repetir=$((REPETIR - 1)) -f sem_mudancas=$quiet -f perfil="$PRETRAIN_PERFIL" \
+            -f seguintes="$SEGUINTES" -f serie="$SERIE"
           echo "Pedi a próxima execução (depois dela ainda faltam $((REPETIR - 1)))."

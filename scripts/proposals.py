@@ -24,7 +24,7 @@ from datetime import date
 
 import pandas as pd
 
-from agents import (BENCHMARK, FEE, FX_FEE, LIVE_ONLY, META, REPO_AGENTS, TAX_RATE, Market, active_agents,
+from agents import (BENCHMARK, DEFAULT_PROFILE, FEE, FX_FEE, LIVE_ONLY, META, REPO_AGENTS, TAX_RATE, Market, active_agents, profile_of,
                     benchmark_return, buy_tax, currency_of, fx_series, is_eur, last_close, live_stats)
 import opportunities
 
@@ -41,7 +41,7 @@ NO_VOTE = META | {"indexador"}
 
 WEIGHT_RULES = [
     "Todos começam com peso 1.",
-    "Exame do pré-treino (último ano, fora do treino): pontos positivos somam até +1 (300 pontos = +1); negativos multiplicam por 0,6.",
+    "Exame do pré-treino (último ano, fora do treino, nota face ao S&P 500): pontos positivos somam até +1 (50 pontos, cerca de 5% acima do índice = +1); negativos multiplicam por 0,6.",
     "Zona de mercado atual: se no pré-treino a estratégia bateu o S&P 500 nesta zona, soma até +1 (0,03% por dia = +1); se perdeu, multiplica por 0,6.",
     "Ao vivo (a partir de 20 sessões): à frente do S&P 500 soma até +1 (5 pontos percentuais = +1); atrás multiplica por 0,7.",
     "Risco de falência no Monte Carlo acima de 5%: multiplica por 0,5.",
@@ -79,7 +79,7 @@ def agent_weight(cfg: dict, port: dict, mkt: Market, pre: dict) -> tuple[float, 
     exam = ((r.get("valid") or {}).get("best") or {}).get("points") if r.get("adopted") else ((r.get("valid") or {}).get("default") or {}).get("points")
     if exam is not None:
         if exam > 0:
-            w += min(1.0, exam / 300)
+            w += min(1.0, exam / 50)
             why.append(f"exame +{exam} pts")
         else:
             w *= 0.6
@@ -164,7 +164,7 @@ def build(config: dict, state: dict, mkt: Market) -> dict:
     voters, total = [], 0.0
     for cfg in active_agents(config):
         port = state["agents"].get(cfg["id"])
-        if not port or cfg["strategy"] in NO_VOTE:
+        if not port or cfg["strategy"] in NO_VOTE or profile_of(cfg) != DEFAULT_PROFILE:  # one vote per strategy
             continue
         w, why = agent_weight(cfg, port, mkt, pre)
         stats = (((pre.get(cfg["strategy"]) or {}).get("year") or {}).get("trade_stats")) or live_trade_stats(port)

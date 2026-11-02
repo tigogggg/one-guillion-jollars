@@ -150,10 +150,10 @@ def test_final_phase_keeps_only_rules_that_help_train_exam_and_crises(monkeypatc
 
     def fake_sim(strategy, p, markets):
         points = 1000
-        if markets is train:
+        if markets[0] == "train":  # the training years, one block at a time
             points += 300 if p.get("credito_max") else 0      # helps training…
             points += 200 if p.get("vix_max") else 0          # …this too, but…
-            points += 5 if p.get("epu_max") else 0            # too small to count
+            points += 2 if p.get("epu_max") else 0            # too small to count
         else:
             points = 100 - (50 if p.get("vix_max") else 0)    # …it loses on the exam
         return {"points": points}
@@ -164,3 +164,17 @@ def test_final_phase_keeps_only_rules_that_help_train_exam_and_crises(monkeypatc
     kept = {t["param"] for t in log if t["kept"]}
     assert kept == {"credito_max"} and chosen["credito_max"] and not chosen.get("vix_max")
     assert exam["points"] == 100 and log[0]["param"] == "credito_max"
+
+
+def test_points_are_the_profile_grade_over_the_index(monkeypatch):
+    _synthetic_training(monkeypatch)
+    markets = pretrain._MARKETS
+    r = pretrain.simulate("indexador", dict(agents.STRATEGIES["indexador"][2]), markets)
+    years = len(markets) / pretrain.SESSIONS_PER_YEAR
+    assert r["points"] == pytest.approx(r["profile_score"] - pretrain.index_score(markets, years), abs=0.11)
+    assert abs(r["points"]) < 15  # buying the index scores about what the index does (costs aside)
+    # the training years' score: each year on its own, recency-weighted
+    blocks = pretrain.yearly_blocks(markets)
+    P = dict(agents.STRATEGIES["foguetao"][2])
+    each = [pretrain.simulate("foguetao", P, b)["points"] for b in blocks]
+    assert pretrain.train_score("foguetao", P, markets) == pytest.approx(pretrain.weighted(each))

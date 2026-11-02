@@ -68,14 +68,18 @@ def append(report: dict, seed: str = "") -> None:
 
 def compact(history: list[dict]) -> dict:
     """For the portal: per run its date and source; per strategy its series and what changed between runs.
-    Only the balanced profile's runs (the others train for other investors and are not one series)."""
+    Only the balanced profile's runs (the others train for other investors and are not one series). The exam points
+    of runs before the investor profiles (no "perfil") were league points, another scale: left out of the exam series."""
     history = [h for h in history if h.get("perfil", "equilibrado") == "equilibrado"]
     runs = [{"at": h["at"], "source": h.get("source", "")} for h in history]
     series: dict[str, list] = {}
     changes: dict[str, list] = {}
     for i, h in enumerate(history):
         for s, r in h["strategies"].items():
-            series.setdefault(s, [None] * len(history))[i] = {k: r.get(k) for k in ("ret", "dd", "sharpe", "exam", "exam0", "adopted", "kept")}
+            row = {k: r.get(k) for k in ("ret", "dd", "sharpe", "exam", "exam0", "adopted", "kept")}
+            if "perfil" not in h:
+                row["exam"] = row["exam0"] = None
+            series.setdefault(s, [None] * len(history))[i] = row
             prev = next((history[j]["strategies"].get(s) for j in range(i - 1, -1, -1) if s in history[j]["strategies"]), None)
             if prev is None:
                 continue

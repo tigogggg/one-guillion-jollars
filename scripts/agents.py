@@ -108,6 +108,11 @@ def profile_of(cfg: dict) -> str:
     return cfg.get("perfil", DEFAULT_PROFILE)
 
 
+def pretrain_path(profile: str = DEFAULT_PROFILE) -> Path:
+    """The latest pre-training report of a profile (the balanced one keeps pretrain.json)."""
+    return REPO_AGENTS / ("pretrain.json" if profile == DEFAULT_PROFILE else f"pretrain-{profile}.json")
+
+
 def profile_score(ret: float, years: float, max_dd: float, profile: str = DEFAULT_PROFILE) -> float:
     """The profile's grade of a result: yearly log growth (x1000), losses weighted and deep falls penalised."""
     p = PROFILES[profile]
@@ -118,23 +123,31 @@ def profile_score(ret: float, years: float, max_dd: float, profile: str = DEFAUL
     return round(growth * 1000, 1)
 
 
-# Where a strategy buys stocks (a trained parameter, regiao): 0 both, 1 only the US, 2 only Europe.
+# Where a strategy buys stocks (a trained parameter, regiao): 0 both, 1 only the US, 2 only Europe. The strategies
+# that trade only ETFs or other agents' portfolios have no use for it, so it is neither trained nor shown for them.
 REGIONS = {0: "EUA e Europa", 1: "só EUA", 2: "só Europa"}
+NO_REGION = {"indexador", "guardiao", "rotador", "pendulo", "joalheiro", "conselho", "maestro"}
 
 
-def in_region(mkt: "Market", region: int) -> "Market":
-    """The market with only the stocks of that region (kept per market, so a backtest builds each view once)."""
+def uses_param(strategy: str | None, key: str) -> bool:
+    return not (key == "regiao" and strategy in NO_REGION)
+
+
+def in_region(mkt: "Market", region: int, held=()) -> "Market":
+    """The market with only the stocks of that region, plus the ones the agent still holds elsewhere (so its exits
+    keep seeing them after the region changed). Kept per market, so a backtest builds each view once."""
     if not region:
         return mkt
+    inside = is_us if region == 1 else (lambda s: not is_us(s))
+    extra = frozenset(s for s in held if s in mkt.stocks and not inside(s))
     cache = mkt.__dict__.setdefault("_regions", {})
-    if region not in cache:
+    if (region, extra) not in cache:
         from dataclasses import replace
 
-        keep = is_us if region == 1 else (lambda s: not is_us(s))
-        view = replace(mkt, stocks={s: m for s, m in mkt.stocks.items() if keep(s)})
+        view = replace(mkt, stocks={s: m for s, m in mkt.stocks.items() if inside(s) or s in extra})
         view.league, view.earnings, view.news = mkt.league, mkt.earnings, mkt.news  # shared, not copied
-        cache[region] = view
-    return cache[region]
+        cache[(region, extra)] = view
+    return cache[(region, extra)]
 
 
 # How an agent trades. Reactive (the default): decides in every intraday round with the price of that moment and
@@ -1026,8 +1039,9 @@ def mutate(params: dict, rng: random.Random, strategy: str | None = None) -> lis
     changes = []
     if strategy and strategy != "indexador":
         for k, v in COMMON.items():
-            params.setdefault(k, v)
-    for k in [k for k in params if k in PARAM_BOUNDS]:
+            if uses_param(strategy, k):
+                params.setdefault(k, v)
+    for k in [k for k in params if k in PARAM_BOUNDS and uses_param(strategy, k)]:
         lo, hi, kind = PARAM_BOUNDS[k]
         if k in OFFABLE and not params[k]:
             if rng.random() < 0.25:
@@ -1440,9 +1454,11 @@ def mode_of(cfg: dict) -> str:
 
 
 def peers(mkt: Market, cfg: dict) -> list[tuple[dict, dict]]:
-    """The other agents of the same mode that decide on their own (not meta-agents, not this one)."""
+    """The other agents of the same mode that decide on their own (not meta-agents, not this one). Only the balanced
+    profile: the conservative and aggressive agents of a strategy would count its picks two more times."""
     return [(c, port) for agent_id, (c, port) in mkt.league.items()
-            if agent_id != cfg.get("id") and c["strategy"] not in META and mode_of(c) == mode_of(cfg)]
+            if agent_id != cfg.get("id") and c["strategy"] not in META and mode_of(c) == mode_of(cfg)
+            and profile_of(c) == DEFAULT_PROFILE]
 
 
 def s_conselho(cfg, port, mkt, p):
@@ -1819,7 +1835,8 @@ def decide(cfg: dict, port: dict, mkt: Market, params: dict, live: bool = True) 
     """The strategy's orders after the shared rules: earnings (live only), bad news, risk. Same live and in backtests."""
     params = effective(params, mkt.zone, cfg["strategy"])
     rebalanced_before = port.get("last_rebalance")
-    orders = STRATEGIES[cfg["strategy"]][0](cfg, port, in_region(mkt, int(params.get("regiao") or 0)), params)
+    region = int(params.get("regiao") or 0) if uses_param(cfg["strategy"], "regiao") else 0
+    orders = STRATEGIES[cfg["strategy"]][0](cfg, port, in_region(mkt, region, port["positions"]), params)
     notes = []
     if cfg["strategy"] != "indexador":
         orders, skipped = shared_rules(orders, port, mkt, params)
@@ -2086,6 +2103,14 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
             f"{medals[i] if i < 3 else f'`{i + 1:>2}`'} {cfg['emoji']} **{cfg['name']}** · {eur(eq)} ({pct(total)})"
             f" · hoje {pct(day_change(port, eq, mkt))} · ⭐ **{port['points']}** · {len(port['positions'])} pos."
         )
+    text, shown = "", 0  # a Discord message holds 6000 characters with the fields: the rest of the table is on the portal
+    for line in lines:
+        if len(text) + len(line) + 60 > 3000:
+            break
+        text, shown = text + ("\n" if text else "") + line, shown + 1
+    if shown < len(lines):
+        text += f"\n… e mais {len(lines) - shown} agentes (tabela completa no portal)"
+    lines = [text]
     fields = [("🧭 Mercado", f"{ZONE_ICON[mkt.zone]} zona **{mkt.zone}** · {mkt.stage2_share * 100:.0f}% das ações do S&P 500 em tendência de alta")]
     best = best_by_profile(rows)
     if best:
@@ -2177,9 +2202,14 @@ def readiness(cfg: dict, port: dict, bench: dict | None, mc: dict | None) -> lis
     ]
 
 
+def pretrain_report(profile: str = DEFAULT_PROFILE) -> dict:
+    """The latest pre-training of a profile ({} before its first run)."""
+    path = pretrain_path(profile)
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
 def readiness_card(config: dict, state: dict) -> list[dict]:
-    path = REPO_AGENTS / "pretrain.json"
-    pre = json.loads(path.read_text())["strategies"] if path.exists() else {}
+    reports = {p: pretrain_report(p).get("strategies", {}) for p in PROFILES}
     bench_cfg = next((c for c in active_agents(config) if c["strategy"] == "indexador"), None)
     bench = live_stats(state["agents"][bench_cfg["id"]]) if bench_cfg and bench_cfg["id"] in state["agents"] else None
     icon = {True: "✅", False: "❌", None: "➖"}
@@ -2188,7 +2218,7 @@ def readiness_card(config: dict, state: dict) -> list[dict]:
         port = state["agents"].get(cfg["id"])
         if not port or cfg["strategy"] == "indexador":
             continue
-        checks = readiness(cfg, port, bench, pre.get(cfg["strategy"], {}).get("monte_carlo"))
+        checks = readiness(cfg, port, bench, reports[profile_of(cfg)].get(cfg["strategy"], {}).get("monte_carlo"))
         passed = all(ok is not False for _, ok in checks) and any(ok for _, ok in checks)
         if passed:
             ready.append(cfg["name"])
@@ -2263,6 +2293,8 @@ def common_rules(params: dict, strategy: str) -> str:
         on = [x for x in on if x]
         rules.append("🎛️ regras afinadas pelo treino: " + ("; ".join(on) if on else "nenhuma ligada por agora")
                      + f"; veto de notícias a -{p.get('peso_noticias', NEWS_VETO)}")
+        if uses_param(strategy, "regiao"):
+            rules.append(f"🌍 compra ações: {REGIONS.get(int(p.get('regiao') or 0), REGIONS[0])}")
         if params.get("por_zona"):
             rules.append("🧭 parâmetros próprios por zona de mercado: " + "; ".join(
                 f"{z}: " + ", ".join(f"{k} {v}" for k, v in d.items()) for z, d in params["por_zona"].items()))
@@ -2273,12 +2305,12 @@ def common_rules(params: dict, strategy: str) -> str:
     return "\n".join(rules)
 
 
-def pretrain_text(strategy: str) -> str:
-    path = REPO_AGENTS / "pretrain.json"
-    saved = json.loads(path.read_text()) if path.exists() else {}
+def pretrain_text(strategy: str, profile: str = DEFAULT_PROFILE) -> str:
+    saved = pretrain_report(profile)
     r = saved.get("strategies", {}).get(strategy)
     if not r:
-        return "Ainda não pré-treinado."
+        return ("Ainda não pré-treinado para este perfil: usa os parâmetros do perfil equilibrado."
+                if profile != DEFAULT_PROFILE else "Ainda não pré-treinado.")
     if "skipped" in r:
         return f"Não testável no passado: {r['skipped']}. Aprende ao vivo (ajusta parâmetros nos meses em que perde)."
     y, v = r["year"], r["valid"]
@@ -2288,7 +2320,8 @@ def pretrain_text(strategy: str) -> str:
     period = f"{years} anos" if years else "Período"
     verdict = "✅ adotou os parâmetros do treino" if r["adopted"] else "↩️ mantém os parâmetros originais"
     return (f"{period}: {pct(y['return'])} · queda máx. {pct(-y['max_drawdown'])} · Sharpe {y.get('sharpe', 0):.1f} · "
-            f"{y['trades']} operações\nExame (último ano): {v['best']['points']} vs {v['default']['points']} pts "
+            f"{y['trades']} operações\nExame (último ano, nota do perfil {PROFILES[profile]['label'].lower()} face ao S&P 500): "
+            f"{v['best']['points']:+g} vs {v['default']['points']:+g} pts "
             f"({pct(v['best']['return'])} vs {pct(v['default']['return'])}) · {verdict}\n"
             f"_Os {period.lower()} incluem os anos usados para escolher os parâmetros; o exame é o teste justo._")
 
@@ -2301,7 +2334,7 @@ def strategy_card(cfg: dict, port: dict | None) -> list[dict]:
         ("🟢 Quando compra", buys), ("🔴 Quando vende", sells), ("⚖️ Tamanho das posições", size),
         ("🛡️ Regras comuns", common_rules(params, cfg["strategy"])),
         ("⚙️ Parâmetros atuais", "\n".join(strategy_docs.params_lines(params)) or "nenhum"),
-        ("🧠 Pré-treino", pretrain_text(cfg["strategy"])),
+        ("🧠 Pré-treino", pretrain_text(cfg["strategy"], profile_of(cfg))),
     ]
     if port and port["history"]:
         last = port["history"][-1]
@@ -2324,7 +2357,7 @@ def strategy_info(cfg: dict, params: dict) -> dict:
         "idea": idea, "buys": buys, "sells": sells, "size": size, "rules": common_rules(params, cfg["strategy"]),
         "params": [{"key": k, "value": strategy_docs.fmt_param(k, v), "meaning": strategy_docs.PARAMS.get(k, "")}
                    for k, v in params.items()],
-        "pretrain": pretrain_text(cfg["strategy"]),
+        "pretrain": pretrain_text(cfg["strategy"], profile_of(cfg)),
     }
 
 
@@ -2585,13 +2618,13 @@ def ensure_profiles(config: dict, state: dict, start: date) -> list[dict]:
     created = []
     for cfg in list(active_agents(config)):
         if (mode_of(cfg) != REACTIVE or profile_of(cfg) != DEFAULT_PROFILE or cfg["strategy"] in LIVE_ONLY
-                or cfg["strategy"] == "indexador" or cfg.get("lineage")):
+                or cfg["strategy"] == "indexador" or cfg.get("lineage") or cfg["id"] != cfg["strategy"]):
             continue
         for name, p in PROFILES.items():
             if name == DEFAULT_PROFILE or (cfg["id"], name) in have:
                 continue
             agent = {**{k: v for k, v in cfg.items() if k not in ("id", "name", "description", "lineage", "lineage_name")},
-                     "id": f"{cfg['id']}-{name}", "name": f"{cfg['name']} {p['emoji']}", "perfil": name,
+                     "id": f"{cfg['id']}-{name}", "name": f"{cfg['name']} {p['label']}", "perfil": name,
                      "profile_base": cfg["id"],
                      "description": f"{cfg['name']} para um investidor {p['label'].lower()}: a mesma estratégia, com os "
                                     f"parâmetros que o pré-treino escolhe para esse perfil."}

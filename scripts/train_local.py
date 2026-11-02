@@ -14,6 +14,7 @@ pretrain.yml does, on this machine:
 
     uv run python scripts/train_local.py --execucoes 3 --paralelo 2 --push
     uv run python scripts/train_local.py --ate-convergir --paralelo 2 --push   # until no strategy improves
+    uv run python scripts/train_local.py --ate-convergir --perfil todos --push  # each investor profile in turn
 
 Needs: git, uv and internet (Yahoo Finance, FRED, the Geopolitical Risk index). Discord posting is skipped
 unless DISCORD_WEBHOOK_URL / DISCORD_BOT_TOKEN are set in the environment.
@@ -39,6 +40,13 @@ STRATEGIES = ["guardiao", "rotador", "foguetao", "analista", "quant", "monge", "
 
 
 AGENTS = REPO / "agents"  # clone of the private data repo
+PROFILES = ["equilibrado", "conservador", "arrojado"]  # agents.PROFILES; the balanced one first
+
+
+def report_path() -> Path:
+    """The report of the profile being trained (PRETRAIN_PERFIL, as scripts/pretrain.py reads it)."""
+    profile = os.environ.get("PRETRAIN_PERFIL") or "equilibrado"
+    return AGENTS / ("pretrain.json" if profile == "equilibrado" else f"pretrain-{profile}.json")
 
 
 def run(cmd: list[str], log: Path | None = None, cwd: Path = REPO) -> int:
@@ -116,7 +124,7 @@ def train_all(strategies: list[str], years: int, parallel: int, seed: str, ctx: 
 
 def chosen_params() -> dict:
     """{strategy: chosen parameters} from the saved pre-training (to see what a run changed)."""
-    path = REPO / "agents" / "pretrain.json"
+    path = report_path()
     if not path.exists():
         return {}
     return {s: r.get("chosen") for s, r in json.loads(path.read_text()).get("strategies", {}).items() if "year" in r}
@@ -133,7 +141,7 @@ def push(a, i: int) -> None:
 
 
 def summary() -> None:
-    report = json.loads((REPO / "agents" / "pretrain.json").read_text())
+    report = json.loads(report_path().read_text())
     rows = [(s, r) for s, r in report["strategies"].items() if "year" in r]
     for s, r in sorted(rows, key=lambda kv: -kv[1]["year"]["return"]):
         y, v = r["year"], r.get("valid", {})
@@ -161,6 +169,8 @@ def main() -> int:
     parser.add_argument("--estrategias", default=",".join(STRATEGIES), help="Comma-separated (default: all trainable)")
     parser.add_argument("--push", action="store_true", help="Commit and push agents/ after each run")
     parser.add_argument("--revisao", action="store_true", help="Ask Claude for proposals between runs (needs the claude CLI)")
+    parser.add_argument("--perfil", default="equilibrado", choices=PROFILES + ["todos"],
+                        help="Investor profile to train for (default equilibrado; todos = each one in turn)")
     parser.add_argument("--retomar", help="First merge and apply an earlier run's folder (e.g. out/local/run1-...) whose merge failed")
     a = parser.parse_args()
     strategies = [s.strip() for s in a.estrategias.split(",") if s.strip()]
@@ -175,14 +185,26 @@ def main() -> int:
     if run(PY + ["scripts/context.py", "--guardar", str(ctx)]) != 0:
         return 1
     dry = [] if os.environ.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_BOT_TOKEN") else ["--dry-run"]
+    if a.ate_convergir and a.execucoes == 3:
+        a.execucoes = 12  # a ceiling; it usually stops much earlier
+    for profile in (PROFILES if a.perfil == "todos" else [a.perfil]):
+        os.environ["PRETRAIN_PERFIL"] = profile  # read by every scripts/pretrain.py started from here
+        print(f"\n##### Perfil {profile} #####", flush=True)
+        if series(a, strategies, work, ctx, dry) != 0:
+            return 1
+        a.retomar = None  # only before the first profile
+    print("\nFeito." + ("" if a.push else " Para os agentes ao vivo usarem os parâmetros: cd agents && git add -A && git commit -m pre-treino && git push"))
+    return 0
+
+
+def series(a, strategies: list[str], work: Path, ctx: Path, dry: list[str]) -> int:
+    """One profile's runs (until it converges with --ate-convergir)."""
     if a.retomar:
         print(f"Juntar a execução anterior em {a.retomar}...", flush=True)
         if run(PY + ["scripts/pretrain.py", "--juntar", a.retomar, "--apply"] + dry) != 0:
             return 1
         summary()
         push(a, 0)
-    if a.ate_convergir and a.execucoes == 3:
-        a.execucoes = 12  # a ceiling; it usually stops much earlier
     quiet = 0
     for i in range(1, a.execucoes + 1):
         if a.push and i > 1:  # picks up improvements to the training published meanwhile (scripts, data, agents)
@@ -212,7 +234,6 @@ def main() -> int:
         if a.revisao:
             run(PY + ["scripts/agent_review.py"] + (["--dry-run"] if dry else []))
         push(a, i)
-    print("\nFeito." + ("" if a.push else " Para os agentes ao vivo usarem os parâmetros: cd agents && git add -A && git commit -m pre-treino && git push"))
     return 0
 
 

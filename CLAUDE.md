@@ -40,8 +40,12 @@ Run on this PC (free, uses all cores the memory allows):
     uv run python scripts/train_local.py --ate-convergir --push
 
 It repeats runs until no strategy improves for 2 runs (max 12), merges, applies and pushes `agents/`.
+`--perfil conservador|equilibrado|arrojado|todos` picks the investor profile (default equilibrado). Each profile has
+its own agents (`<id>-conservador`, `<id>-arrojado`) and report (`pretrain.json`, `pretrain-<perfil>.json`). Points are
+the profile's grade (`agents.profile_score`) minus the S&P 500's over the same days (10 points ≈ 1%/year).
 A run only replaces a strategy's parameters if the exam (last year, out of sample) does not get worse and
-training + exam together improve by at least 5% (`CHANGE_MARGIN`, weekly runs on Sundays must not swap for noise); the last 3 choices always stay candidates. If a merge failed:
+training + exam together improve by at least 5% and 5 points (`CHANGE_MARGIN`, `CHANGE_MIN`; weekly runs on Sundays must not swap for noise); the last 3 choices always stay candidates.
+In Actions the profiles run one after another (input `seguintes`, default: conservador and arrojado after equilibrado). If a merge failed:
 `--retomar out/local/<run folder>`. Logs: `out/local/<run>/<strategy>.log`.
 
 After a run is pushed, the portal shows it once GitHub Actions republishes: dispatch

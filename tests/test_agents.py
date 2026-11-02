@@ -1,4 +1,5 @@
 import sys
+from types import SimpleNamespace
 from datetime import date
 from pathlib import Path
 
@@ -611,6 +612,22 @@ def test_region_parameter_limits_where_a_strategy_buys():
     mkt = market({}, DATES[0].date(), stocks=stocks)
     assert set(agents.in_region(mkt, 1).stocks) == {"AAPL"} and set(agents.in_region(mkt, 2).stocks) == {"SAP.DE"}
     assert agents.in_region(mkt, 0) is mkt and agents.in_region(mkt, 1) is agents.in_region(mkt, 1)  # built once
+    # a position held outside the region stays visible, so the strategy can still sell it
+    assert set(agents.in_region(mkt, 1, {"SAP.DE": {}}).stocks) == {"AAPL", "SAP.DE"}
+    assert not agents.uses_param("guardiao", "regiao") and agents.uses_param("foguetao", "regiao")
+    p = {"n": 5}
+    for seed in range(30):
+        agents.mutate(p, __import__("random").Random(seed), "rotador")
+    assert "regiao" not in p
+
+
+def test_profile_clones_do_not_vote_again_in_the_meta_agents():
+    port = new_portfolio(1000, DATES[0].date())
+    league = {"a": ({"id": "a", "strategy": "foguetao"}, port),
+              "a-c": ({"id": "a-c", "strategy": "foguetao", "perfil": "conservador"}, port),
+              "b": ({"id": "b", "strategy": "monge"}, port)}
+    mkt = SimpleNamespace(league=league)
+    assert [c["id"] for c, _ in agents.peers(mkt, {"id": "conselho", "strategy": "conselho"})] == ["a", "b"]
 
 
 def test_each_trainable_strategy_gets_a_conservative_and_an_aggressive_agent():
@@ -620,9 +637,12 @@ def test_each_trainable_strategy_gets_a_conservative_and_an_aggressive_agent():
         {"id": "foguetao-diario", "name": "Foguetão · diário", "emoji": "🚀", "strategy": "foguetao", "capital": 1000,
          "params": {}, "modo": "diario", "twin_of": "foguetao"}]}
     state = {"agents": {"foguetao": {**new_portfolio(1000, DATES[0].date()), "params": {"n": 7}}}}
+    config["agents"].append({"id": "meu-foguete", "name": "Meu foguete", "emoji": "🚀", "strategy": "foguetao",
+                             "capital": 1000, "params": {"n": 5}})  # made with /agente criar: no profile copies
     made = agents.ensure_profiles(config, state, DATES[0].date())
     assert sorted(a["id"] for a in made) == ["foguetao-arrojado", "foguetao-conservador"]
+    assert all(agents.slug(a["name"]) == a["id"] for a in made)  # /agente finds them by name
     assert state["agents"]["foguetao-conservador"]["params"] == {"n": 7}
     assert agents.ensure_profiles(config, state, DATES[0].date()) == []
     twins = agents.ensure_twins(config, state, DATES[0].date())
-    assert [t["twin_of"] for t in twins] == ["jornalista"]  # none for the profile agents
+    assert sorted(t["twin_of"] for t in twins) == ["jornalista", "meu-foguete"]  # none for the profile agents

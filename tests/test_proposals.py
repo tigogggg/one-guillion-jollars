@@ -33,7 +33,7 @@ def test_plan_uses_two_atr_stop_and_a_target_at_2_5_r_after_costs_and_tax():
 def test_agent_weight_follows_the_rules():
     port = {"history": [], "trades": []}
     mkt = SimpleNamespace(priors={"foguetao": {"Neutra": 0.0003}}, zone="Neutra")
-    pre = {"foguetao": {"adopted": True, "valid": {"best": {"points": 150}}, "monte_carlo": {"p_ruin": 0.2}}}
+    pre = {"foguetao": {"adopted": True, "valid": {"best": {"points": 25}}, "monte_carlo": {"p_ruin": 0.2}}}
     w, why = proposals.agent_weight({"strategy": "foguetao"}, port, mkt, pre)
     assert w == round((1 + 0.5 + 1.0) * 0.5, 2) and len(why) == 3
 

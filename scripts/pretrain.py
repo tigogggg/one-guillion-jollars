@@ -98,7 +98,7 @@ SKIP = {
 PROFILE = os.environ.get("PRETRAIN_PERFIL") or agents.DEFAULT_PROFILE
 if PROFILE not in agents.PROFILES:
     raise SystemExit(f"Perfil desconhecido: {PROFILE} ({', '.join(agents.PROFILES)})")
-REPORT_PATH = agents.REPO_AGENTS / ("pretrain.json" if PROFILE == agents.DEFAULT_PROFILE else f"pretrain-{PROFILE}.json")
+REPORT_PATH = agents.pretrain_path(PROFILE)
 
 
 # --------------------------------------------------------------------------
@@ -558,7 +558,7 @@ def variants(strategy: str, n: int) -> list[dict]:
     """The original parameters, then n random draws within the bounds (shared rules included, often off)."""
     base = dict(STRATEGIES[strategy][2])
     if strategy != "indexador":
-        base.update({k: agents.COMMON[k] for k in SHARED_IN_BACKTEST})
+        base.update({k: agents.COMMON[k] for k in SHARED_IN_BACKTEST if agents.uses_param(strategy, k)})
     tunable = [k for k in base if k in PARAM_BOUNDS]
     rng = random.Random(f"pretrain-{strategy}{SEED}")
     out = [dict(base)]
@@ -577,7 +577,8 @@ def variants(strategy: str, n: int) -> list[dict]:
 
 REVIEW_PATH = agents.REPO_AGENTS / "claude_review.json"
 HISTORY_KEEP = 3  # earlier choices kept per strategy, each one a candidate in the next pre-training
-CHANGE_MARGIN = 0.05  # a new choice replaces the one the agent trades with only if it is this much better overall
+CHANGE_MARGIN = 0.05  # a new choice replaces the one the agent trades with only if it is this much better overall…
+CHANGE_MIN = 5.0  # …and by at least this many points (0.5% a year): scores relative to the index can be close to 0
 
 
 def previous_choices(strategy: str) -> list[dict]:
@@ -663,29 +664,32 @@ MIN_TRADES = 20
 ZONE_TRIES, ZONE_MIN_SHARE = 3, 0.10
 GREEDY_LEVELS = (0.25, 0.5, 0.75)  # where in each rule's range the final phase tries it
 GREEDY_MAX = 4  # rules the final phase may switch on
-GREEDY_GAIN = 0.02  # each must add 2% to the training points (at least 20 points)
+# Points are 1000 x the yearly log growth over the index's (10 points is about 1% a year), so the gains each phase
+# requires are absolute: a share of a score close to 0 would let noise through.
+GREEDY_GAIN = 5.0  # each rule the final phase adds must raise the training years' score by this much
+ZONE_GAIN = 5.0  # the same for a zone's own parameters
 
 
 def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: list[Market], windows: dict,
                  exam: int) -> tuple[dict, list[dict], dict | None]:
     """The final phase: switch on, one at a time, the shared rules that help this strategy most.
 
-    Each rule that is off is tried at GREEDY_LEVELS of its range on the training years; the best level of
-    each is kept as a candidate. Candidates are added in order of gain, each only if it adds GREEDY_GAIN to
-    the training points, does not lose on the exam year and does not fall deeper in the crises.
+    Each rule that is off is tried at GREEDY_LEVELS of its range on the training years (train_score); the best level
+    of each is kept as a candidate. Candidates are added in order of gain, each only if it adds GREEDY_GAIN to the
+    training score, does not lose on the exam year and does not fall deeper in the crises.
     Returns (parameters, the log of what was tried, the new exam result or None).
     """
-    base = simulate(strategy, chosen, train_mk)["points"]
+    base = train_score(strategy, chosen, train_mk)
     tries = []
     rules = []
-    for k in [k for k in SHARED_IN_BACKTEST if k in agents.OFFABLE and not chosen.get(k)]:
+    for k in [k for k in SHARED_IN_BACKTEST if k in agents.OFFABLE and not chosen.get(k) and agents.uses_param(strategy, k)]:
         lo, hi, kind = PARAM_BOUNDS[k]
         rules.append((k, sorted({int(round(lo + f * (hi - lo))) if kind is int else round(lo + f * (hi - lo), 4) for f in GREEDY_LEVELS})))
     jobs = [(strategy, {**chosen, k: v}, "train") for k, levels in rules for v in levels]
     if _SEGMENTS.get("train") is train_mk:  # on the worker processes
         points = _map(_points, jobs)
     else:
-        points = [simulate(strategy, p, train_mk)["points"] for _, p, _ in jobs]
+        points = [train_score(strategy, p, train_mk) for _, p, _ in jobs]
     i = 0
     for k, levels in rules:
         best = max(zip(points[i:i + len(levels)], levels), key=lambda t: t[0])
@@ -695,12 +699,12 @@ def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: lis
     crashes = crash_test(strategy, chosen, windows)
     exam_result, added = None, 0
     for t in tries:
-        need = max(abs(base) * GREEDY_GAIN, 20)
+        need = GREEDY_GAIN
         t["kept"] = False
         if added >= GREEDY_MAX or t["train_gain"] < need:
             continue
         cand = {**chosen, t["param"]: t["value"]}
-        points = simulate(strategy, cand, train_mk)["points"]  # on top of what was added before
+        points = train_score(strategy, cand, train_mk)  # on top of what was added before
         if points < base + need:
             t["train_gain"] = points - base
             continue
@@ -742,9 +746,20 @@ def _years(job: tuple[str, dict]) -> tuple[list[int], int]:
     return [r["points"] for r in runs], sum(r["trades"] for r in runs)
 
 
-def _points(job: tuple[str, dict, str]) -> int:
+def _points(job: tuple[str, dict, str]) -> float:
+    """The exam year's points ("valid"), or the training years' score ("train", see train_score)."""
     strategy, params, segment = job
+    if segment == "train":
+        return weighted(_years((strategy, params))[0])
     return simulate(strategy, params, _SEGMENTS[segment])["points"]
+
+
+def train_score(strategy: str, params: dict, train_mk: list[Market]) -> float:
+    """Recency-weighted points of each training year on its own (fresh capital each year), as generations 1 and 2
+    rank candidates. One run over all the years would be graded mostly by its single deepest fall (2008)."""
+    if _SEGMENTS.get("train") is train_mk and _SEGMENTS.get("blocks"):
+        return weighted(_years((strategy, params))[0])
+    return weighted([simulate(strategy, params, b)["points"] for b in yearly_blocks(train_mk)])
 
 
 def _map(fn, jobs: list) -> list:
@@ -908,7 +923,9 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
         mine = weighted(scored[i][0])
         near = [weighted(y) for y, _ in _map(_years, [(strategy, nudge(pool[i], rng)) for _ in range(NEIGHBOURS)])]
         plateau[i] = near
-        if mine > 0 and sum(n >= PLATEAU * mine for n in near) < NEIGHBOURS - 1:
+        # nearby values must keep PLATEAU of the gain over the original (scores relative to the index can be negative)
+        w0 = weighted(base)
+        if mine > w0 and sum(n - w0 >= PLATEAU * (mine - w0) for n in near) < NEIGHBOURS - 1:
             continue
         crashes[i] = crash_test(strategy, pool[i], windows)
         if survives(crashes[i], crashes[0]):
@@ -938,7 +955,7 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
     zones_tried = {}
     if strategy != "indexador" and any(k in PARAM_BOUNDS for k in chosen):
         counts = {z: sum(m.zone == z for m in train_mk) for z in agents.ZONES}
-        train_points = simulate(strategy, chosen, train_mk)["points"]
+        train_points = train_score(strategy, chosen, train_mk)
         for zone, n in counts.items():
             if n < ZONE_MIN_SHARE * len(train_mk):
                 continue
@@ -946,16 +963,16 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
             for _ in range(ZONE_TRIES):
                 alt = {k: v for k, v in chosen.items() if k != "por_zona"}
                 agents.mutate(alt, rng, strategy)
-                diff = {k: v for k, v in alt.items() if k in PARAM_BOUNDS and k not in agents.LIVE_TUNED and chosen.get(k) != v}
+                diff = {k: v for k, v in alt.items() if k in PARAM_BOUNDS and k not in agents.LIVE_TUNED and k != "regiao"
+                        and chosen.get(k) != v}  # the region stays one for all zones: positions would be orphaned
                 if not diff:
                     continue
                 cand = {**chosen, "por_zona": {**(chosen.get("por_zona") or {}), zone: diff}}
-                tries.append((simulate(strategy, cand, train_mk)["points"], cand, diff))
+                tries.append((train_score(strategy, cand, train_mk), cand, diff))
             if not tries:
                 continue
             pts, cand, diff = max(tries, key=lambda t: t[0])
-            gain_needed = abs(train_points) * 0.02 if train_points else 20
-            exam = simulate(strategy, cand, valid) if pts >= train_points + gain_needed else None
+            exam = simulate(strategy, cand, valid) if pts >= train_points + ZONE_GAIN else None
             kept = exam is not None and exam["points"] >= chosen_valid["points"]
             zones_tried[zone] = {"train": pts, "base": train_points, "exam": exam["points"] if exam else None,
                                  "exam_base": chosen_valid["points"], "kept": kept, "diff": diff}
@@ -996,7 +1013,7 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
                 keep(previous, prev_exam, prev_obj)
     # Changing what the agent trades with must be clearly worth it (CHANGE_MARGIN of the overall score), so the weekly
     # re-training does not swap parameters for noise.
-    if live and chosen != live[0] and new_obj < live[2] + abs(live[2]) * CHANGE_MARGIN:
+    if live and chosen != live[0] and new_obj < live[2] + max(abs(live[2]) * CHANGE_MARGIN, CHANGE_MIN):
         keep(*live)
         kept_previous["margin"] = CHANGE_MARGIN
 
@@ -1046,9 +1063,10 @@ def parameter_importance(strategy: str, chosen: dict, train_mk: list[Market], va
     if strategy == "indexador":
         return {}
     defaults = {**{k: agents.COMMON[k] for k in SHARED_IN_BACKTEST}, **STRATEGIES[strategy][2]}
-    base = simulate(strategy, chosen, train_mk)["points"]
+    base = train_score(strategy, chosen, train_mk)
     alts = []
-    for k in sorted(k for k in set(chosen) | set(SHARED_IN_BACKTEST) if k in PARAM_BOUNDS and k not in agents.LIVE_TUNED):
+    for k in sorted(k for k in set(chosen) | set(SHARED_IN_BACKTEST)
+                    if k in PARAM_BOUNDS and k not in agents.LIVE_TUNED and agents.uses_param(strategy, k)):
         value = chosen.get(k, 0)
         if value and value != defaults.get(k):
             alts.append((k, value, {**chosen, k: defaults.get(k, 0)}, True))
@@ -1059,7 +1077,8 @@ def parameter_importance(strategy: str, chosen: dict, train_mk: list[Market], va
     if _SEGMENTS.get("train") is train_mk and _SEGMENTS.get("valid") is valid:  # on the worker processes
         points = _map(_points, [(strategy, alt, seg) for _, _, alt, _ in alts for seg in ("train", "valid")])
     else:
-        points = [simulate(strategy, alt, m)["points"] for _, _, alt, _ in alts for m in (train_mk, valid)]
+        points = [train_score(strategy, alt, train_mk) if m is train_mk else simulate(strategy, alt, m)["points"]
+                  for _, _, alt, _ in alts for m in (train_mk, valid)]
     out = {}
     for (k, value, alt, used), t, e in zip(alts, points[0::2], points[1::2]):
         out[k] = {"used": used, "value": value if used else alt[k],
@@ -1183,7 +1202,7 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
     fields = [("🧪 Como foi feito",
                f"Treino {results['train'][0]} a {results['train'][1]} · exame {results['valid'][0]} a {results['valid'][1]}.\n"
                "Variações por estratégia; só passam as que batem os parâmetros originais em 65% dos anos de treino, "
-               "não caem mais do que eles nas crises (2008, 2011, 2020, 2022) e passam o exame. Pontos da liga (face ao S&P 500, com penalização das quedas). Composição "
+               "não caem mais do que eles nas crises (2008, 2011, 2020, 2022) e passam o exame. Pontos: a nota do perfil menos a do S&P 500 (10 pontos ≈ 1% ao ano acima do índice). Composição "
                "histórica do S&P 500, ordens à abertura seguinte, custos, câmbio e 28% de imposto, sem ver o futuro.\n"
                "*O período inclui os anos em que os parâmetros foram escolhidos, por isso é otimista; "
                "o que conta é o exame: a nota do perfil contra o índice no último ano (crescimento do capital com as perdas e "

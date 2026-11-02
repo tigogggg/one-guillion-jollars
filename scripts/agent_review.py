@@ -40,7 +40,9 @@ Para cada estratégia tens: as regras, os parâmetros atuais e os ajustáveis (c
 (rentabilidade, queda máxima, Sharpe, operações, taxa de acerto), o ano de exame (fora do treino), as crises,
 o Monte Carlo, o valor medido de cada parâmetro (importance: pontos que acrescenta ou acrescentaria, treino e exame),
 o que a fase final ligou (greedy), os parâmetros por zona de mercado e, se existir, o registo ao vivo.
-Os pontos são os da liga: ganho face ao S&P 500 com penalização das quedas.
+Os pontos (exame, anos de treino, importance) são a nota do perfil equilibrado menos a do S&P 500 no mesmo período:
+1000 × o crescimento anual do capital (log), com os anos de perda a contar a dobrar e a queda máxima acima de 25% penalizada;
+10 pontos ≈ 1% ao ano acima do índice. Positivo = bate o índice; negativo = fica atrás.
 
 Objetivo: encontrar parâmetros que tenham boas hipóteses de melhorar cada estratégia de forma robusta
 (não só no passado). Para cada estratégia:
