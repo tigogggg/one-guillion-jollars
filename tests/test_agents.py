@@ -560,3 +560,14 @@ def test_a_missing_rate_uses_the_last_one_seen(tmp_path, monkeypatch):
     agents.with_last_rates({"GBP": pd.Series([0.85], index=idx)})
     rates = agents.with_last_rates({})
     assert float(rates["GBP"].iloc[-1]) == 0.85 and "SEK" not in rates
+
+
+def test_live_bars_project_whole_number_volumes():
+    from datetime import datetime, timezone
+
+    idx = pd.to_datetime(["2026-10-29", "2026-10-30"])
+    df = pd.DataFrame({"Open": [1.0, 2.0], "High": [1.0, 2.0], "Low": [1.0, 2.0], "Close": [1.0, 2.0],
+                       "Volume": [100, 50]}, index=idx)  # int64, as Yahoo returns it
+    now = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)  # Xetra half-way through its session
+    out = agents.live_bars({"SAP.DE": df}, now)
+    assert out["SAP.DE"]["Volume"].iloc[-1] > 50

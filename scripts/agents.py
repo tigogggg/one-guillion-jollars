@@ -430,6 +430,7 @@ def live_bars(hist: dict[str, pd.DataFrame], now: datetime) -> dict[str, pd.Data
                 cut = cut.iloc[:-1]
             elif market_open(sym, now):
                 cut = cut.copy()
+                cut["Volume"] = cut["Volume"].astype(float)  # Yahoo gives whole numbers; the projection is not
                 cut.iloc[-1, cut.columns.get_loc("Volume")] = (
                     float(cut["Volume"].iloc[-1]) / max(session_fraction(sym, now), LIVE_MIN_FRACTION))
         if len(cut):
