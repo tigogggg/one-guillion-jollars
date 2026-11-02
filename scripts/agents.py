@@ -237,7 +237,8 @@ OFFABLE = {"stop_atr", "trail_atr", "tempo_max", "min_tecnico", "max_ext", "gap_
            "juros_max", "usd_max", "filtro_spy", "gpr_max", "petroleo_max", "ouro_max", "filtro_setor", "ema_filtro", "stop_suporte",
            "qualidade_fund_min", "valor_fund_min", "evita_macro", "evita_geo"}
 CONTEXT_RULES = {"vix_max", "vix_meio", "epu_max", "credito_max", "juros_max", "usd_max", "filtro_spy", "gpr_max", "petroleo_max", "ouro_max"}
-LIVE_TUNED = {"peso_noticias", "dias_resultados", "evita_macro", "evita_geo"}  # no history: not in the backtest
+# no history: not in the backtest (the earnings dates have one: data/earnings, from the SEC, so dias_resultados is trained)
+LIVE_TUNED = {"peso_noticias", "evita_macro", "evita_geo"}
 GEO_RISK_HIGH = 4  # evita_geo: no new buys when Claude rates the geopolitical risk this high (0-5), live only
 ZONES = ("Alta", "Neutra", "Cautelosa", "Queda")
 
@@ -255,6 +256,8 @@ class Market:
     rankings: list[dict] = field(default_factory=list)
     vcp: set[str] = field(default_factory=set)
     earnings: dict[str, date | None] = field(default_factory=dict)  # looked up once per run
+    # backtest: every company's past earnings dates (earnings.load_history), so the earnings rule runs there too
+    earnings_dates: dict[str, list[date]] | None = None
     closes: dict[str, float] | None = None  # as_of closes, precomputed by the backtest for speed
     news: dict[str, dict] = field(default_factory=dict)  # news.py signals: {symbol: {score, importance, items}}
     league: dict[str, tuple[dict, dict]] = field(default_factory=dict)  # {agent id: (cfg, portfolio)}, for meta-agents
@@ -1609,7 +1612,8 @@ def skip_earnings(orders: list[dict], mkt: Market, days: int = EARNINGS_AVOID_DA
     for o in orders:
         if o["side"] == "buy" and o["symbol"] not in ETF_SYMBOLS and o["symbol"] not in mkt.etfs:  # ETFs report no results
             if o["symbol"] not in mkt.earnings:
-                mkt.earnings[o["symbol"]] = earnings.next_earnings(o["symbol"], mkt.as_of)
+                mkt.earnings[o["symbol"]] = (earnings.next_from_history(mkt.earnings_dates.get(o["symbol"]), mkt.as_of)
+                                             if mkt.earnings_dates is not None else earnings.next_earnings(o["symbol"], mkt.as_of))
             if days and earnings.within(mkt.earnings[o["symbol"]], days, mkt.as_of):
                 skipped.append(o["symbol"])
                 continue
@@ -1832,7 +1836,10 @@ def trail_stops(port: dict, mkt: Market, p: dict) -> None:
 
 
 def decide(cfg: dict, port: dict, mkt: Market, params: dict, live: bool = True) -> tuple[list[dict], list[str]]:
-    """The strategy's orders after the shared rules: earnings (live only), bad news, risk. Same live and in backtests."""
+    """The strategy's orders after the shared rules: earnings, bad news, risk. Same live and in backtests.
+
+    The earnings rule runs live, and in a backtest whose markets carry the past earnings dates (earnings_dates).
+    """
     params = effective(params, mkt.zone, cfg["strategy"])
     rebalanced_before = port.get("last_rebalance")
     region = int(params.get("regiao") or 0) if uses_param(cfg["strategy"], "regiao") else 0
@@ -1841,7 +1848,7 @@ def decide(cfg: dict, port: dict, mkt: Market, params: dict, live: bool = True) 
     if cfg["strategy"] != "indexador":
         orders, skipped = shared_rules(orders, port, mkt, params)
         notes += skipped
-    if live and not params.get("ignora_resultados"):
+    if (live or mkt.earnings_dates is not None) and not params.get("ignora_resultados"):
         orders, skipped = skip_earnings(orders, mkt, int(params.get("dias_resultados", EARNINGS_AVOID_DAYS)))
         notes += [f"{s} (resultados {earnings.label(mkt.earnings[s])})" for s in skipped]
     if not params.get("ignora_noticias") and cfg["strategy"] != "cetico":

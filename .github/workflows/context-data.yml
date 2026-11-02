@@ -2,8 +2,9 @@ name: Dados de contexto e fundamentos
 
 # Refreshes data/context/ with the slow series (FRED policy uncertainty, high-yield spread and
 # Brent, downloaded in small date ranges with retries; the daily Geopolitical Risk index) and
-# data/fundamentals/ with the companies' SEC filings (EDGAR, point in time). The pre-training
-# and the daily runs read these files. Weekly (Sunday), before the monthly re-training, or by hand.
+# data/fundamentals/ with the companies' SEC filings (EDGAR, point in time) and data/earnings/ with their
+# past earnings release dates (8-K item 2.02), for the backtest's earnings rule. The pre-training and the
+# daily runs read these files. Weekly (Sunday, 03:17 UTC), before the Sunday re-training, or by hand.
 on:
   schedule:
     - cron: "17 3 * * 0"
@@ -36,13 +37,18 @@ jobs:
         env:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}  # the SEC asks for "Name email@example.com"
         run: uv run python scripts/fundamentals.py --atualizar
+      - name: Datas de resultados passadas (SEC EDGAR, 8-K item 2.02)
+        continue-on-error: true
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: uv run python scripts/earnings.py --atualizar
       - name: Guardar
         if: ${{ !cancelled() }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          for d in data/context data/fundamentals; do [ -d "$d" ] && git add "$d"; done
+          for d in data/context data/fundamentals data/earnings; do [ -d "$d" ] && git add "$d"; done
           git diff --cached --quiet && exit 0
-          git commit -m "Dados de contexto e fundamentos: $(date -u +%F)"
+          git commit -m "Dados de contexto, fundamentos e resultados: $(date -u +%F)"
           git pull --rebase origin main
           git push origin HEAD:main

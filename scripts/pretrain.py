@@ -11,8 +11,9 @@ Limits, also stated in the Discord report: today's S&P 500 list is used for
 the whole year (survivorship bias, results a bit optimistic); European stocks
 (data/universe/europe.csv) use today's list too, each one only on the days it was among the most traded of the
 list, in euros, after currency costs and stock exchange taxes; Joalheiro is not
-tested because Yahoo only has today's fundamentals; the earnings rule is off
-because past earnings dates are not available.
+tested because Yahoo only has today's fundamentals; the earnings rule uses the
+past release dates the SEC lists (8-K item 2.02, data/earnings), so European
+stocks, which the SEC does not cover, are not held back by it.
 
     uv run python scripts/pretrain.py --dry-run          # report only
     uv run python scripts/pretrain.py --apply            # also set the agents' parameters
@@ -438,6 +439,11 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
     first = pd.Timestamp(days[0]) - pd.Timedelta(days=10)
     frames = {s: fundamentals.daily(funds[s], df["Close"][df.index >= first]) for s, df in stock_hist.items() if s in funds}
     print(f"::notice title=Fundamentos::{len(frames)} de {len(stock_hist)} ações com fundamentos da SEC", flush=True)
+    import earnings
+
+    # the earnings rule: past release dates from the SEC (None without the file: the rule then stays live-only)
+    report_dates = earnings.load_history() or None
+    print(f"::notice title=Resultados::{len(report_dates or {})} ações com datas de resultados da SEC", flush=True)
     stocks = snapshots(stock_hist, days, {s: {"sector": sector_of[s]} for s in stock_hist}, member, frames)
     left = [s for s in stock_hist if s not in {c["symbol"] for c in constituents}]
     print(f"{len(stock_hist)} ações com preços, {len(left)} já saíram do índice", file=sys.stderr)
@@ -462,6 +468,7 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
             sessions=[x for x in sessions if x <= d], zone=zone_for(share), stage2_share=share,
             closes=PriceRow(close_values[at], close_cols),
             context=context.on(ctx_frame, d),
+            earnings_dates=report_dates,
         ))
     return markets
 
@@ -1259,7 +1266,7 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
                    "compradas não têm), por isso ainda há algum otimismo. Ações europeias: a lista é a de hoje (não há "
                    "histórico gratuito da composição dos índices); só entram nos dias em que estavam entre as mais "
                    "negociadas da lista, mas o otimismo é maior do que nos EUA. Sem fundamentais da SEC para empresas "
-                   "europeias (regras de qualidade/valor só nos EUA). Sem regra de resultados nem notícias no passado."))
+                   "europeias (regras de qualidade/valor só nos EUA). A regra dos resultados usa as datas passadas da SEC (só ações dos EUA); sem notícias no passado."))
     if bench:
         fields.append(("🐢 Referência", f"S&P 500 (Indexador) no período: {pct(bench['return'])}, queda máx. {pct(-bench['max_drawdown'])}"))
     series = {by_strategy.get(s, {"name": s})["name"]: r["curve"] for s, r in results["strategies"].items() if "curve" in r}

@@ -321,16 +321,34 @@ def with_growth(df: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(out) if out else df.assign(rev_growth=np.nan)
 
 
-def download(symbols: list[str], pause: float = 0.12) -> pd.DataFrame:
-    """Companyfacts for every symbol the SEC can map to a CIK; one request each (SEC limit: 10 per second)."""
+def sec_session() -> tuple[requests.Session, dict[str, int]]:
+    """A session that identifies itself as the SEC asks, and {ticker: CIK} (dash-style class shares, BRK-B)."""
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, deflate"})
     resp = session.get(TICKERS_URL, timeout=60)
     if resp.status_code != 200 or "json" not in resp.headers.get("Content-Type", ""):
         raise RuntimeError(f"a SEC recusou o pedido ({resp.status_code}). Define o secret SEC_USER_AGENT com um nome e um email "
                            "de contacto, como a SEC pede (ex.: 'OneGuillionJollars nome@exemplo.com').")
-    tickers = resp.json()
-    cik_of = {v["ticker"].upper().replace(".", "-"): int(v["cik_str"]) for v in tickers.values()}
+    return session, {v["ticker"].upper().replace(".", "-"): int(v["cik_str"]) for v in resp.json().values()}
+
+
+def universe() -> list[str]:
+    """Today's S&P 500 plus every company that was in it in the last 21 years (the backtest's universe)."""
+    from pretrain import load_membership
+    from rankings import load_constituents
+
+    symbols = {c["symbol"] for c in load_constituents()}
+    try:
+        since = date(date.today().year - 21, 1, 1)
+        symbols |= {t for t, spans in load_membership().items() if any(e is None or e >= since for _, e in spans)}
+    except requests.RequestException as e:
+        print(f"::warning title=SEC::sem composição histórica ({e})")
+    return sorted(symbols)
+
+
+def download(symbols: list[str], pause: float = 0.12) -> pd.DataFrame:
+    """Companyfacts for every symbol the SEC can map to a CIK; one request each (SEC limit: 10 per second)."""
+    session, cik_of = sec_session()
     frames, missing, failed = [], [], []
     for i, sym in enumerate(sorted(set(symbols))):
         cik = cik_of.get(sym.upper())
@@ -397,16 +415,7 @@ def main() -> int:
     if a.simbolos:
         symbols = [s.strip().upper() for s in a.simbolos.split(",") if s.strip()]
     else:
-        from pretrain import load_membership
-        from rankings import load_constituents
-
-        symbols = {c["symbol"] for c in load_constituents()}
-        try:
-            since = date(date.today().year - 21, 1, 1)
-            symbols |= {t for t, spans in load_membership().items() if any(e is None or e >= since for _, e in spans)}
-        except requests.RequestException as e:
-            print(f"::warning title=Fundamentos::sem composição histórica ({e})")
-        symbols = sorted(symbols)
+        symbols = universe()
     if "@" not in USER_AGENT:
         print("::warning title=Fundamentos::sem email no SEC_USER_AGENT: a SEC costuma recusar pedidos sem contacto.")
     try:

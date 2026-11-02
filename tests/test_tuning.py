@@ -88,7 +88,7 @@ def test_train_strategy_runs_end_to_end_on_synthetic_markets(monkeypatch):
     strategy, r = pretrain.train_strategy("foguetao")
     assert strategy == "foguetao" and "chosen" in r and r["search"]["candidates"] >= 4
     assert {"stop_atr", "trail_atr", "vix_max"} <= set(r["chosen"]) and "trade_stats" in r["year"]
-    assert "dias_resultados" not in r["chosen"] and {"stop_atr", "filtro_spy"} <= set(r["importance"])
+    assert "dias_resultados" in r["chosen"] and {"stop_atr", "filtro_spy"} <= set(r["importance"])
     assert r["greedy"] and all({"param", "value", "train_gain", "kept"} <= set(t) for t in r["greedy"])
 
 
