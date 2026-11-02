@@ -82,6 +82,10 @@ TARGET_VOL = 0.02  # daily volatility a full-size position is meant for; more vo
 SECTOR_CAP = 0.40  # at most this share of equity in one sector
 DD_BRAKE = 0.20  # a fall this deep from the last high pauses new buys…
 BRAKE_DAYS = 14  # …for this many calendar days; the brake then re-arms from the current level
+# Intraday rounds (react), for every reactive agent without ignora_risco. Exits are never held back.
+NO_BUYS_AFTER_OPEN = 15  # minutes: the first prices of a session swing the most
+NO_BUYS_BEFORE_CLOSE = 30  # minutes: a buy this late has no time left to work today
+DAY_LOSS_STOP = 0.03  # an agent down this much since the last close makes no new buys until tomorrow
 EXPOSURE = {"Alta": 1.0, "Neutra": 0.7, "Cautelosa": 0.4, "Queda": 0.1}
 ZONE_ICON = {"Alta": "🟢", "Neutra": "🟡", "Cautelosa": "🟠", "Queda": "🔴"}
 MUTATION = 0.2
@@ -2665,11 +2669,48 @@ def live_exits(port: dict, mkt: Market, now: datetime, targets: bool = False) ->
     return done
 
 
+def session_minutes(symbol: str, now: datetime) -> tuple[float, float]:
+    """Minutes since today's open and until today's close at the symbol's exchange."""
+    from zoneinfo import ZoneInfo
+
+    ex = exchange_of(symbol)
+    tz, ch, cm = EXCHANGE_CLOSE[ex]
+    oh, om = EXCHANGE_OPEN.get(ex, (9, 0))
+    local = now.astimezone(ZoneInfo(tz))
+    start = local.replace(hour=oh, minute=om, second=0, microsecond=0)
+    end = local.replace(hour=ch, minute=cm, second=0, microsecond=0)
+    return (local - start).total_seconds() / 60, (end - local).total_seconds() / 60
+
+
+def round_buy_block(port: dict, mkt: Market, params: dict) -> str | None:
+    """Why this reactive agent makes no new buys in this round at all (the day's loss stop), or None."""
+    if params.get("ignora_risco") or not port.get("history"):
+        return None
+    before = port["history"][-1]["equity"] if port["history"][-1]["date"] < mkt.as_of.isoformat() else (
+        port["history"][-2]["equity"] if len(port["history"]) > 1 else None)
+    if before and equity(port, mkt) / before - 1 <= -DAY_LOSS_STOP:
+        return f"já perdeu {DAY_LOSS_STOP:.0%} hoje: sem compras novas até amanhã"
+    return None
+
+
+def buy_window(symbol: str, now: datetime, params: dict) -> str | None:
+    """Why a reactive buy of this symbol waits (too close to its exchange's open or close), or None."""
+    if params.get("ignora_risco"):
+        return None
+    since_open, to_close = session_minutes(symbol, now)
+    if since_open < NO_BUYS_AFTER_OPEN:
+        return f"{symbol} (só compra {NO_BUYS_AFTER_OPEN} min depois da abertura)"
+    if to_close < NO_BUYS_BEFORE_CLOSE:
+        return f"{symbol} (não compra nos últimos {NO_BUYS_BEFORE_CLOSE} min da sessão)"
+    return None
+
+
 def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime, live: bool = True) -> tuple[list[dict], list[str]]:
     """One reactive decision: the strategy runs with the prices of this moment. Orders in markets that are open are
     traded now, at the current price; the others join the plan of pending orders for the next open (at the open
     price, with the gap rule). The money of pending buys stays reserved, a symbol already pending is left to its
-    order, and a stock sold today is not bought back the same day."""
+    order, and a stock sold today is not bought back the same day. Buys in open markets also wait out the first
+    and last minutes of the session (buy_window), and stop for the day after a DAY_LOSS_STOP loss (round_buy_block)."""
     today = mkt.as_of.isoformat()
     if not port["positions"] and not port["pending"]:
         # all in cash: a reactive agent looks for entries in every round, not only every "cada" sessions
@@ -2683,11 +2724,21 @@ def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime, live:
     finally:
         port["cash"] += reserved
     done = []
+    day_block = round_buy_block(port, mkt, params)
+    if day_block:
+        notes = notes + [day_block]
     for o in sorted(orders, key=lambda o: o["side"] != "sell"):  # sells first, so their cash is there for the buys
         sym = o["symbol"]
         if sym in pending or (o["side"] == "buy" and sym in sold):
             continue
+        if o["side"] == "buy" and day_block:
+            continue
         if trading_now(mkt, sym, now):
+            if o["side"] == "buy":
+                wait = buy_window(sym, now, params)
+                if wait:
+                    notes = notes + [wait]
+                    continue
             price = last_close(mkt, sym)
             if price is None:
                 continue

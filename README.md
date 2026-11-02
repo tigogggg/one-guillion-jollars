@@ -417,12 +417,19 @@ How the agents trade, live and in the pre-training alike:
   default, tuned by the training) away from the close it was decided on.
 - **Intraday round** (`agents.py stops`): fills the day's orders at the opens
   and executes stops and targets reached so far, at exactly the prices the daily
-  run would use, so the portal shows them the same day.
+  run would use, so the portal shows them the same day. Reactive agents also
+  decide again at that moment's prices; their new buys wait out the first 15 and
+  the last 30 minutes of each exchange's session, and an agent down 3% since the
+  last close makes no new buys until the next day (`NO_BUYS_AFTER_OPEN`,
+  `NO_BUYS_BEFORE_CLOSE`, `DAY_LOSS_STOP`; never for exits, nor with
+  `ignora_risco`).
 
 ## Earnings calendar
 
 `scripts/earnings.py` looks up each stock's next earnings date on Yahoo
-Finance. The rankings mark stocks reporting within 10 days (📅), alert cards
+Finance, and keeps every past earnings release date from the SEC (8-K item
+2.02, `data/earnings/`, weekly), so the backtest applies and trains the same
+earnings rule (`dias_resultados`). The rankings mark stocks reporting within 10 days (📅), alert cards
 turn orange with a warning when the stock reports within 5 days, `/acao` shows
 the next date, the agents skip new buys of stocks reporting within 5 days
 (except Kamikaze, `ignora_resultados`), and the weekly summary lists next
