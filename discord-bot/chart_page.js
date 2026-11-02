@@ -237,7 +237,8 @@ export function chartPage(data, upcoming, newer, extras = {}) {
 ${banner}
 <header>
   <div class="topbar">
-  <h1>${portal ? '<img class="logo" src="/logo-256.png?v=1" alt="" width="120" height="120">One Guillion Jollars' : esc(data.title)}</h1>
+  <h1>${portal ? "One Guillion Jollars" : esc(data.title)}</h1>
+  ${portal ? '<img class="logo" src="/logo-256.png?v=1" alt="" width="108" height="108">' : ""}
   ${portal ? `<div class="userbar">${extras.user
     ? `<span>👤 <b>${esc(extras.user.name)}</b></span><a class="btn alt" href="#carteira" data-go="carteira">💼 A MINHA CARTEIRA</a><a class="btn alt" href="/sair">SAIR</a>`
     : `<a class="btn" href="/entrar">🔑 ENTRAR</a>`}</div>` : ""}
@@ -348,10 +349,11 @@ const CSS = `
 body { margin:0; background:radial-gradient(circle at 50% -20%,#2a1a6b 0,var(--bg) 60%) fixed; color:var(--fg); font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
 body::after { content:""; position:fixed; inset:0; pointer-events:none; background:repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px); }
 h1, h2, .pixel { font-family:var(--pixel); letter-spacing:.5px; } h1 { color:var(--gold); text-shadow:0 0 8px rgba(255,225,77,.6); line-height:1.5; }
-.topbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 24px; margin-right:52px; }
-.topbar h1 { display:flex; align-items:center; margin:0; }
-h1 .logo { width:6em; height:6em; margin-right:.4em; flex:none; }
-@media (max-width:640px) { h1 .logo { width:3.5em; height:3.5em; } .topbar { margin-right:48px; } }
+.topbar { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:8px 24px; }
+.topbar h1 { margin:0; }
+.topbar .logo { font-size:1.35rem; width:5em; height:5em; justify-self:center; }
+.topbar .userbar { justify-self:end; }
+@media (max-width:640px) { .topbar { grid-template-columns:1fr auto; padding-right:48px; } .topbar .logo { width:3.5em; height:3.5em; } .topbar .userbar { grid-column:1 / -1; justify-self:start; } }
 h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem !important; line-height:1.6; }
 .marquee { overflow:hidden; white-space:nowrap; border:2px solid var(--accent); border-radius:6px; background:#12002a; box-shadow:0 0 12px rgba(255,46,136,.5); margin:8px 0; }
 .marquee span { display:inline-block; padding:8px 0 8px 100%; font-family:var(--pixel); font-size:.75rem; color:var(--gold); animation:scroll 14s linear infinite; }
