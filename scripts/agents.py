@@ -265,15 +265,70 @@ def zone_for(stage2_share: float) -> str:
     return "Queda"
 
 
-def load_market() -> Market:
+# When each exchange's session ends (local time) and a margin for the closing auction and Yahoo's daily bar.
+# During a session Yahoo returns that day as a bar still moving; deciding with it would use information the
+# backtest never has (it only sees full days) and the order would still fill at that same day's open.
+EXCHANGE_CLOSE = {
+    "": ("America/New_York", 16, 0),  # US listings
+    ".DE": ("Europe/Berlin", 17, 30), ".F": ("Europe/Berlin", 17, 30),
+    ".PA": ("Europe/Paris", 17, 30), ".AS": ("Europe/Amsterdam", 17, 30), ".BR": ("Europe/Brussels", 17, 30),
+    ".LS": ("Europe/Lisbon", 16, 30), ".MI": ("Europe/Rome", 17, 30), ".MC": ("Europe/Madrid", 17, 30),
+    ".L": ("Europe/London", 16, 30), ".SW": ("Europe/Zurich", 17, 30), ".ST": ("Europe/Stockholm", 17, 30),
+    ".CO": ("Europe/Copenhagen", 17, 0), ".HE": ("Europe/Helsinki", 18, 30), ".OL": ("Europe/Oslo", 16, 20),
+    ".IR": ("Europe/Dublin", 16, 30), ".VI": ("Europe/Vienna", 17, 30),
+}
+CLOSE_MARGIN_MIN = 30
+
+
+def exchange_of(symbol: str) -> str:
+    """The Yahoo suffix of a listing ('' for US stocks and ETFs, '=X' for currencies)."""
+    if symbol.endswith("=X"):
+        return "=X"
+    dot = symbol.rfind(".")
+    return symbol[dot:] if dot > 0 and symbol[dot:] in EXCHANGE_CLOSE else ""
+
+
+def last_complete_day(symbol: str, now: datetime) -> date:
+    """The latest day whose session at the symbol's exchange is over (plus CLOSE_MARGIN_MIN), as of `now`."""
+    from zoneinfo import ZoneInfo
+
+    ex = exchange_of(symbol)
+    if ex == "=X":  # currencies trade around the clock: a day is complete once it is over in Lisbon
+        return now.astimezone(ZoneInfo("Europe/Lisbon")).date() - timedelta(days=1)
+    tz, hour, minute = EXCHANGE_CLOSE[ex]
+    local = now.astimezone(ZoneInfo(tz))
+    closed = local.replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(minutes=CLOSE_MARGIN_MIN)
+    return local.date() if local >= closed else local.date() - timedelta(days=1)
+
+
+def complete_bars(hist: dict[str, pd.DataFrame], now: datetime, until: date | None = None) -> dict[str, pd.DataFrame]:
+    """Each history without the session still under way at its exchange, and (with `until`) nothing after it."""
+    out = {}
+    for sym, df in hist.items():
+        last = last_complete_day(sym, now)
+        if until is not None:
+            last = min(last, until)
+        cut = df.loc[: pd.Timestamp(last) + pd.Timedelta(hours=23, minutes=59)]
+        if len(cut):
+            out[sym] = cut
+    return out
+
+
+def load_market(now: datetime | None = None) -> Market:
+    now = now or datetime.now(timezone.utc)
     constituents = load_constituents()
     sector_of = {c["symbol"]: c["sector"] for c in constituents}
     name_of = {c["symbol"]: c["name"] for c in constituents}
-    stock_hist = download_history(list(sector_of) + ["SPY"])
-    etf_hist = download_history([t for t, _ in UCITS_ETFS])
-    fx_hist = download_history(["EURUSD=X"])
-    if "SPY" not in stock_hist or "EURUSD=X" not in fx_hist:
-        raise RuntimeError("Sem dados do Yahoo Finance (SPY ou EUR/USD).")
+    stock_hist = complete_bars(download_history(list(sector_of) + ["SPY"]), now)
+    if "SPY" not in stock_hist:
+        raise RuntimeError("Sem dados do Yahoo Finance (SPY).")
+    # The decision day: the last full US session. Nothing later is seen, in any market (as in the backtest).
+    as_of = stock_hist["SPY"].index[-1].date()
+    stock_hist = complete_bars(stock_hist, now, as_of)
+    etf_hist = complete_bars(download_history([t for t, _ in UCITS_ETFS]), now, as_of)
+    fx_hist = complete_bars(download_history(["EURUSD=X"]), now, as_of)
+    if "EURUSD=X" not in fx_hist:
+        raise RuntimeError("Sem dados do Yahoo Finance (EUR/USD).")
 
     stocks = {}
     for sym, df in stock_hist.items():

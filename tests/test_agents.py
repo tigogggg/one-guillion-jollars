@@ -358,3 +358,24 @@ def test_readiness_checks_and_card():
                          {"id": "f", "name": "F", "emoji": "🚀", "strategy": "foguetao"}]}
     card = agents.readiness_card(config, {"agents": {"i": port(index), "f": good}})[0]
     assert "Prontos para a fase 2" in card["description"] and "F" in card["description"]
+
+
+def test_session_under_way_is_dropped_per_exchange():
+    from datetime import datetime, timezone
+
+    idx = pd.to_datetime(["2026-10-29", "2026-10-30", "2026-11-02"])
+    df = pd.DataFrame({"Open": [1, 2, 3], "High": [1, 2, 3], "Low": [1, 2, 3], "Close": [1, 2, 3], "Volume": [1, 1, 1]},
+                      index=idx)
+    hist = {"SXR8.DE": df, "AAPL": df, "EURUSD=X": df}
+    # Monday 12:15 in Lisbon: Xetra is open, the US has not opened: Monday's bars are not complete anywhere
+    noon = datetime(2026, 11, 2, 12, 15, tzinfo=timezone.utc)
+    out = agents.complete_bars(hist, noon)
+    assert all(d.index[-1].date() == date(2026, 10, 30) for d in out.values())
+    # Monday 17:00 in Lisbon: Xetra closed at 16:30 (+30 min margin), the US is still trading
+    evening = datetime(2026, 11, 2, 17, 5, tzinfo=timezone.utc)
+    out = agents.complete_bars(hist, evening)
+    assert out["SXR8.DE"].index[-1].date() == date(2026, 11, 2)
+    assert out["AAPL"].index[-1].date() == date(2026, 10, 30)
+    # and a decision day cuts every market there, even one already closed
+    assert agents.complete_bars(hist, evening, date(2026, 10, 30))["SXR8.DE"].index[-1].date() == date(2026, 10, 30)
+    assert agents.exchange_of("BRK-B") == "" and agents.exchange_of("ASML.AS") == ".AS"
