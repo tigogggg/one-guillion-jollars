@@ -119,7 +119,8 @@ The Worker is also the scheduler. A Cloudflare cron trigger (`*/5 * * * *`)
 calls its `scheduled()` handler, which dispatches `discord-daily.yml`,
 `opportunity-alerts.yml` and `weekly-summary.yml` at the times stored in the
 Worker's KV namespace (binding `CONFIG`), in Lisbon time. Defaults: tips and
-rankings 11:40 on weekdays, alerts 15:40/17:40/19:40 on weekdays, alert
+rankings 07:00 on weekdays, agents 07:30 (before the 08:00 European open), the
+agents' intraday round 10:30/15:30/17:00/20:30, alerts 15:40/17:40/19:40 on weekdays, alert
 follow-ups 22:30 and health check 23:00 on weekdays, weekly
 summary Saturday 10:00. Server admins change them with `/horario`.
 
@@ -394,9 +395,29 @@ Caçador (breakouts on volume, 2% risk), Sniper (volatility contraction, 1%
 risk), Campeão Setorial (best stocks of the strongest sectors), Pescador de
 Quedas (pullbacks in uptrends) and Kamikaze (2 biggest 3-month gainers).
 
-`.github/workflows/agents.yml` runs the daily league (12:15 Lisbon by default,
+`.github/workflows/agents.yml` runs the daily league (07:30 Lisbon by default,
 set with `/horario`) and answers `/agentes [nome]` and the admin-only `/agente
 criar|depositar|remover`.
+
+How the agents trade, live and in the pre-training alike:
+
+- **Universe**: the S&P 500, the UCITS ETFs and ~330 large European companies
+  (`data/universe/europe.csv`: symbol, name, GICS sector, country). A European
+  stock is in play only while it is among the most traded 75% of that list
+  (60-day traded value in euros), each day.
+- **Decisions** use complete sessions only (`complete_bars`: a session still
+  under way at its exchange is dropped, and every market is cut at the last full
+  US session). The 07:30 run decides before any market opens; orders fill at
+  that day's opens.
+- **Currencies and costs**: prices are converted to euros with Yahoo's EURxxx=X
+  rates (London quotes are in pence); 0.1% per side, +0.15% conversion outside
+  the euro, and buy-side taxes: France 0.4%, Italy 0.1%, Spain 0.2%, UK stamp
+  duty 0.5%, Ireland 1% (foreign-registered companies and ETFs exempt).
+- **Gaps**: a buy is cancelled when the stock opens more than `gap_max` (8% by
+  default, tuned by the training) away from the close it was decided on.
+- **Intraday round** (`agents.py stops`): fills the day's orders at the opens
+  and executes stops and targets reached so far, at exactly the prices the daily
+  run would use, so the portal shows them the same day.
 
 ## Earnings calendar
 

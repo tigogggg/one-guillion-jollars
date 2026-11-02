@@ -97,13 +97,19 @@ COMMANDS = [
                 "type": SUB_COMMAND,
                 "name": "dicas",
                 "description": "Hora das dicas do dia e dos rankings (dias úteis)",
-                "options": [{"type": STRING, "name": "hora", "description": "HH:MM, ex.: 11:40", "required": True}],
+                "options": [{"type": STRING, "name": "hora", "description": "HH:MM, ex.: 07:00", "required": True}],
             },
             {
                 "type": SUB_COMMAND,
                 "name": "agentes",
-                "description": "Hora da liga dos agentes (dias úteis, depois das dicas)",
-                "options": [{"type": STRING, "name": "hora", "description": "HH:MM, ex.: 12:15", "required": True}],
+                "description": "Hora da liga dos agentes (dias úteis, antes da abertura europeia)",
+                "options": [{"type": STRING, "name": "hora", "description": "HH:MM, ex.: 07:30", "required": True}],
+            },
+            {
+                "type": SUB_COMMAND,
+                "name": "ronda",
+                "description": "Horas da ronda dos agentes: compras à abertura, stops e alvos (dias úteis)",
+                "options": [{"type": STRING, "name": "horas", "description": "Separadas por vírgulas, ex.: 10:30,15:30,17:00,20:30", "required": True}],
             },
             {
                 "type": SUB_COMMAND,
@@ -344,7 +350,7 @@ def portal_card(url: str | None, sched: dict, channels: dict[str, str]) -> dict:
              f"📊 {ch('mercado')} · dicas do dia e rankings às **{sched['dicas']}**, resumo semanal ao "
              f"{DAY_NAMES.get(weekly['dia'], weekly['dia'])} às **{weekly['hora']}**\n"
              f"🚨 {ch('alertas')} · notícias às **{news}**, alertas às **{alerts}**, acompanhamento às **{sched['acompanhamento']}**\n"
-             f"🤖 {ch('agentes')} · liga dos agentes às **{sched['agentes']}**\n"
+             f"🤖 {ch('agentes')} · liga dos agentes às **{sched['agentes']}**, rondas às **{' · '.join(sched.get('ronda', []))}**\n"
              f"🔧 {ch('estado')} · estado do bot às **{sched['estado']}**\n"
              f"💬 {ch('discussao')} · conversa livre"),
             ("🎮 Começar",
@@ -527,10 +533,11 @@ def welcome_card() -> dict:
         fields=[
             (
                 "📅 O que aparece aqui (hora de Lisboa)",
-                "**Dias úteis, 11:40** · 📊 Dicas do dia: saúde do mercado (breadth), exposição sugerida, setores e setups VCP\n"
-                "**Dias úteis, 11:40** · 🏆 Top 3 ações por setor e 📦 top 10 ETFs UCITS, com valorização do dia, semana, 3 e 6 meses\n"
+                "**Dias úteis, 07:00** · 📊 Dicas do dia: saúde do mercado (breadth), exposição sugerida, setores e setups VCP\n"
+                "**Dias úteis, 07:00** · 🏆 Top 3 ações por setor e 📦 top 10 ETFs UCITS, com valorização do dia, semana, 3 e 6 meses\n"
                 "**Dias úteis, 12:00 · 16:00 · 20:30** · 📰 Notícias que importam, lidas pelo Claude\n"
-                "**Dias úteis, 12:15** · 🤖 Liga dos agentes: 16 estratégias com dinheiro fictício e preços reais\n"
+                "**Dias úteis, 07:30** · 🤖 Liga dos agentes: estratégias com dinheiro fictício e preços reais, ações dos EUA e da Europa\n"
+                "**Dias úteis, 10:30 · 15:30 · 17:00 · 20:30** · ⏱️ Ronda dos agentes: compras à abertura, stops e alvos\n"
                 "**Dias úteis, 15:40 · 17:40 · 19:40** · 🚨 Alertas, só quando uma ação da lista rompe o pivot com volume\n"
                 "**Dias úteis, 22:30** · 🔁 Como correu cada alerta 5 e 20 sessões depois, em resposta ao alerta original\n"
                 "**Sábado, 10:00** · 🗓️ Resumo semanal: índices, setores, maiores subidas e quedas, e como correram os alertas\n"

@@ -7,13 +7,15 @@ run-name: "Agentes: ${{ inputs.mode || 'daily' }} ${{ inputs.args }}"
 # The agents' state (agents/) is a checkout of the private repo one-guillion-jollars-dados
 # and is committed back there (deploy key DADOS_DEPLOY_KEY); this repo is public.
 # Daily runs are started by the Cloudflare Worker at the time set with
-# /horario (default 12:15 Lisbon on weekdays).
+# /horario (default 07:30 Lisbon on weekdays, before the European open, with the last full sessions).
+# Stops: the intraday round (default 10:30, 15:30, 17:00, 20:30): orders fill at today's opens, stops and
+# targets reached so far are executed, at the prices the daily run would use.
 on:
   workflow_dispatch:
     inputs:
       mode:
         type: choice
-        options: [daily, config, portal]
+        options: [daily, config, portal, stops]
         default: daily
       args:
         description: "config: JSON com acao, nome, estrategia, capital, valor, emoji"

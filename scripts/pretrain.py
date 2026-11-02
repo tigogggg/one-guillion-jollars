@@ -8,7 +8,9 @@ best one is then run on the last year (validation, never seen in training) and a
 original parameters.
 
 Limits, also stated in the Discord report: today's S&P 500 list is used for
-the whole year (survivorship bias, results a bit optimistic); Joalheiro is not
+the whole year (survivorship bias, results a bit optimistic); European stocks
+(data/universe/europe.csv) use today's list too, each one only on the days it was among the most traded of the
+list, in euros, after currency costs and stock exchange taxes; Joalheiro is not
 tested because Yahoo only has today's fundamentals; the earnings rule is off
 because past earnings dates are not available.
 
@@ -288,6 +290,33 @@ def load_membership() -> dict[str, list[tuple[date, date | None]]]:
     return out
 
 
+def europe_liquidity(stock_hist: dict[str, pd.DataFrame], fx_rates: dict[str, pd.Series], fx: pd.Series,
+                     share: float = agents.EU_LIQUID_SHARE) -> dict[date, set[str]]:
+    """{day: European stocks in the most traded `share` of the list that day} (60-day traded value in euros)."""
+    probe = Market(hist={}, fx=fx, stocks={}, etfs={}, as_of=date.today(), sessions=[], zone="Neutra",
+                   stage2_share=0.0, fx_rates=fx_rates)
+    value = {}
+    for s, df in stock_hist.items():
+        if agents.is_us(s):
+            continue
+        ccy = agents.currency_of(s)
+        traded = (df["Close"] * df["Volume"]).rolling(agents.LIQUIDITY_DAYS, min_periods=20).mean()
+        if ccy != "EUR":
+            series = agents.fx_series(probe, ccy)
+            if series is None:
+                continue
+            rate = series.reindex(traded.index, method="ffill").bfill()
+            traded = traded / rate / (100 if ccy == "GBp" else 1)
+        value[s] = traded
+    if not value:
+        return {}
+    table = pd.DataFrame(value).sort_index()
+    ranks = table.rank(axis=1, ascending=False, method="first")
+    counts = table.notna().sum(axis=1)
+    keep = ranks.le(np.ceil(counts * share), axis=0) & table.notna()
+    return {ts.date(): set(table.columns[row]) for ts, row in zip(keep.index, keep.to_numpy())}
+
+
 def build_markets(years: int = YEARS, context_path: str | None = None, prices_only: bool = False) -> list[Market]:
     """Daily markets for the backtest, with the S&P 500 as it was on each day (survivorship bias reduced).
 
@@ -296,6 +325,7 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
     prices into PRICE_CACHE_DIR (the plan job, once for every strategy's job) and return no markets.
     """
     constituents = load_constituents()
+    europe = agents.load_europe()
     sector_of = {c["symbol"]: c["sector"] for c in constituents}
     try:
         membership = load_membership()
@@ -307,18 +337,30 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
         if any(end is None or end >= since for _, end in spans):
             sector_of.setdefault(ticker, "Unknown")
 
-    def member(symbol: str, day: date) -> bool:
-        spans = membership.get(symbol)
-        return True if not spans else any(start <= day and (end is None or day <= end) for start, end in spans)
+    for c in europe:
+        sector_of[c["symbol"]] = c["sector"]
     # Yahoo periods: enough for the backtest plus the 200-day warm-up
     period = "2y" if years <= 1 else "10y" if years <= 8 else "max"
     stock_hist = download_history(list(sector_of) + ["SPY"], period=period)
+    stock_hist = {s: agents.fix_pence(df) if agents.currency_of(s) == "GBp" else df for s, df in stock_hist.items()}
     etf_hist = download_history([t for t, _ in UCITS_ETFS], period=period)
-    fx = download_history(["EURUSD=X"], period=period)["EURUSD=X"]["Close"]
+    fx_all = download_history(list(agents.FX_SYMBOLS.values()), period=period)
+    fx = fx_all["EURUSD=X"]["Close"]
+    fx_rates = {c: fx_all[t]["Close"] for c, t in agents.FX_SYMBOLS.items() if c != "USD" and t in fx_all}
     proxy_hist = download_history(sorted({p for ps in ETF_PROXIES.values() for p in ps}), period=period)
     if prices_only:
         print(f"::notice title=Preços::{len(stock_hist)} ações, {len(etf_hist)} ETFs", flush=True)
         return []
+    # Europe has no free history of index membership: a European stock is in play on a day only while it is in the
+    # most traded EU_LIQUID_SHARE of the list (60-day traded value in euros), as live. Today's list is still used
+    # for the whole period (survivorship bias, stated in the report).
+    eu_liquid = europe_liquidity(stock_hist, fx_rates, fx)
+
+    def member(symbol: str, day: date) -> bool:
+        if not agents.is_us(symbol):
+            return symbol in eu_liquid.get(day, ())
+        spans = membership.get(symbol)
+        return True if not spans else any(start <= day and (end is None or day <= end) for start, end in spans)
     for etf, proxies in ETF_PROXIES.items():
         spliced = splice(etf_hist.get(etf), [proxy_hist[p] for p in proxies if p in proxy_hist], fx)
         if spliced is not None:
@@ -337,8 +379,7 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
     first = pd.Timestamp(days[0]) - pd.Timedelta(days=10)
     frames = {s: fundamentals.daily(funds[s], df["Close"][df.index >= first]) for s, df in stock_hist.items() if s in funds}
     print(f"::notice title=Fundamentos::{len(frames)} de {len(stock_hist)} ações com fundamentos da SEC", flush=True)
-    stocks = snapshots(stock_hist, days, {s: {"sector": sector_of[s]} for s in stock_hist},
-                       member if membership else None, frames)
+    stocks = snapshots(stock_hist, days, {s: {"sector": sector_of[s]} for s in stock_hist}, member, frames)
     left = [s for s in stock_hist if s not in {c["symbol"] for c in constituents}]
     print(f"{len(stock_hist)} ações com preços, {len(left)} já saíram do índice", file=sys.stderr)
     COVERAGE.clear()
@@ -347,7 +388,7 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
         if d and membership:
             in_index = sum(1 for spans in membership.values()
                            if any(a <= d and (b is None or d <= b) for a, b in spans))
-            COVERAGE[name] = round(len(stocks[d]) / max(in_index, 1), 3)
+            COVERAGE[name] = round(sum(1 for s in stocks[d] if agents.is_us(s)) / max(in_index, 1), 3)
     etfs = snapshots(etf_hist, days, {s: {"name": names.get(s, s)} for s in etf_hist})
     hist = {**stock_hist, **etf_hist}
     closes = pd.DataFrame({s: df["Close"] for s, df in hist.items()}).sort_index().ffill()
@@ -355,10 +396,10 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
     close_values = closes.to_numpy(dtype=float)
     markets = []
     for d in days:
-        share = sum(m["stage2"] for m in stocks[d].values()) / max(len(stocks[d]), 1)
+        share = agents.us_breadth(stocks[d])
         at = closes.index.searchsorted(pd.Timestamp(d), side="right") - 1
         markets.append(Market(
-            hist=hist, fx=fx, stocks=stocks[d], etfs=etfs[d], as_of=d,
+            hist=hist, fx=fx, fx_rates=fx_rates, stocks=stocks[d], etfs=etfs[d], as_of=d,
             sessions=[x for x in sessions if x <= d], zone=zone_for(share), stage2_share=share,
             closes=PriceRow(close_values[at], close_cols),
             context=context.on(ctx_frame, d),
@@ -1110,7 +1151,10 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
         fields.append(("⚙️ Parâmetros aplicados aos agentes", "\n".join(applied)[:1024]))
     fields.append(("⚠️ Limites",
                    "Empresas que saíram do índice só entram quando o Yahoo ainda tem os preços (muitas falidas ou "
-                   "compradas não têm), por isso ainda há algum otimismo. Sem regra de resultados nem notícias no passado."))
+                   "compradas não têm), por isso ainda há algum otimismo. Ações europeias: a lista é a de hoje (não há "
+                   "histórico gratuito da composição dos índices); só entram nos dias em que estavam entre as mais "
+                   "negociadas da lista, mas o otimismo é maior do que nos EUA. Sem fundamentais da SEC para empresas "
+                   "europeias (regras de qualidade/valor só nos EUA). Sem regra de resultados nem notícias no passado."))
     if bench:
         fields.append(("🐢 Referência", f"S&P 500 (Indexador) no período: {pct(bench['return'])}, queda máx. {pct(-bench['max_drawdown'])}"))
     series = {by_strategy.get(s, {"name": s})["name"]: r["curve"] for s, r in results["strategies"].items() if "curve" in r}

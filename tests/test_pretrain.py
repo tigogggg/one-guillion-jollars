@@ -176,3 +176,23 @@ def test_rows_read_like_the_live_dicts():
     assert dict(m)["price"] == m["price"] and {**m}["sector"] == "Energy"
     closes = pretrain.PriceRow(np.array([1.5, np.nan]), {"A": 0, "B": 1})
     assert closes.get("A") == 1.5 and closes.get("B") is None and closes.get("C", 7) == 7 and list(closes) == ["A"]
+
+
+def test_europe_liquidity_is_point_in_time_and_in_euros():
+    from datetime import date as _d
+
+    idx = pd.bdate_range("2020-01-01", periods=80)
+    def df(close, vol):
+        return pd.DataFrame({"Open": close, "High": close, "Low": close, "Close": close, "Volume": vol}, index=idx)
+    hist = {
+        "AAA.DE": df([10.0] * 80, [1000] * 80),            # 10 000 € a day
+        "BBB.L": df([2000.0] * 80, [1000] * 80),           # 2 000 000 pence = 20 000 £ a day
+        "CCC.PA": df([10.0] * 80, [10] * 40 + [10_000] * 40),  # becomes liquid half-way
+        "DDD.DE": df([1.0] * 80, [10] * 80),
+        "AAPL": df([100.0] * 80, [10**9] * 80),           # US stocks are not ranked here
+    }
+    fx = pd.Series(1.1, index=idx)
+    gbp = pd.Series(0.8, index=idx)
+    liq = pretrain.europe_liquidity(hist, {"GBP": gbp}, fx, share=0.5)
+    assert liq[idx[30].date()] == {"AAA.DE", "BBB.L"}
+    assert "CCC.PA" in liq[idx[-1].date()] and "AAPL" not in liq[idx[-1].date()]

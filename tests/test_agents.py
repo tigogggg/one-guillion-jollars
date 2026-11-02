@@ -379,3 +379,89 @@ def test_session_under_way_is_dropped_per_exchange():
     # and a decision day cuts every market there, even one already closed
     assert agents.complete_bars(hist, evening, date(2026, 10, 30))["SXR8.DE"].index[-1].date() == date(2026, 10, 30)
     assert agents.exchange_of("BRK-B") == "" and agents.exchange_of("ASML.AS") == ".AS"
+
+
+def test_european_currencies_pence_and_buy_taxes():
+    fx_gbp = pd.Series([0.85] * len(DATES), index=DATES)
+    mkt = market({}, DATES[0].date())
+    mkt.fx_rates = {"GBP": fx_gbp}
+    assert agents.currency_of("SHEL.L") == "GBp" and agents.currency_of("NOVO-B.CO") == "DKK"
+    assert agents.currency_of("ASML.AS") == "EUR" and agents.currency_of("AAPL") == "USD"
+    assert agents.to_eur(mkt, "SHEL.L", 2550.0, DATES[0].date()) == pytest.approx(25.50 / 0.85)  # pence -> pounds -> euros
+    with pytest.raises(KeyError):  # never value a stock at a made-up rate
+        agents.to_eur(mkt, "NESN.SW", 80.0, DATES[0].date())
+    assert agents.buy_tax("BNP.PA") == 0.004 and agents.buy_tax("AIR.PA") == 0.0  # Airbus is a Dutch company
+    assert agents.buy_tax("SAP.DE") == 0.0 and agents.buy_tax("SXR8.DE") == 0.0 and agents.buy_tax("RYA.IR") == 0.01
+    hist = {"BNP.PA": frame([60, 60], [60, 60], [60, 60], [60, 60])}
+    port = new_portfolio(1000, DATES[0].date())
+    port["pending"] = [{"side": "buy", "symbol": "BNP.PA", "eur": 600, "created": "2026-10-26"}]
+    fill_pending(port, market(hist, DATES[1].date()))
+    assert port["positions"]["BNP.PA"]["entry"] == pytest.approx(60 * 1.005)  # 0.1% costs + 0.4% French FTT
+
+
+def test_pence_glitch_days_are_repaired():
+    closes = [2500.0] * 10 + [25.1] + [2510.0] * 10
+    df = pd.DataFrame({c: closes for c in ("Open", "High", "Low", "Close")} | {"Volume": [1] * 21},
+                      index=pd.bdate_range("2026-01-01", periods=21))
+    assert agents.fix_pence(df)["Close"].iloc[10] == pytest.approx(2510.0)
+
+
+def test_buy_is_cancelled_when_the_open_gaps_past_the_limit():
+    hist = {"AAA.DE": frame([100, 89, 100], [100, 90, 100], [100, 88, 100], [100, 89, 100]),
+            "BBB.DE": frame([100, 103, 100], [100, 104, 100], [100, 102, 100], [100, 103, 100])}
+    port = new_portfolio(1000, DATES[0].date())
+    port["pending"] = [{"side": "buy", "symbol": s, "eur": 400, "created": "2026-10-26", "ref": 100.0, "gap_max": 0.08}
+                       for s in ("AAA.DE", "BBB.DE")]
+    done = fill_pending(port, market(hist, DATES[1].date()))
+    assert [t["symbol"] for t in done] == ["BBB.DE"]  # opened 3% up: bought
+    assert "AAA.DE" not in port["positions"] and port["cancelled"][-1]["symbol"] == "AAA.DE"  # opened 11% down
+    assert port["pending"] == [] and port["cash"] == 600
+
+
+def test_decisions_carry_the_close_and_gap_limit():
+    hist = {"AAA.DE": frame([10, 10], [10, 10], [10, 10], [10, 12])}
+    mkt = market(hist, DATES[1].date(), etfs={"AAA.DE": {"price": 12, "sma200": 10, "trend_score": 90, "ret_3m": 0.1,
+                                                         "ret_6m": 0.1}})
+    cfg = {"id": "r", "strategy": "rotador", "params": {"n": 1, "cada": 5}}
+    port = new_portfolio(1000, DATES[0].date())
+    orders, _ = agents.decide(cfg, port, mkt, cfg["params"], live=False)
+    assert orders and orders[0]["ref"] == 12 and orders[0]["gap_max"] == agents.COMMON["gap_max"]
+
+
+def test_only_the_most_traded_european_stocks_are_in_play():
+    values = {f"S{i}.DE": float(i) for i in range(1, 9)} | {"Z.PA": 0.0}
+    assert agents.liquid_europe(values) == {f"S{i}.DE" for i in range(3, 9)}  # top 75% of the 8 that trade
+
+
+def test_europe_universe_file_is_well_formed():
+    rows = agents.load_europe()
+    assert len(rows) > 250 and len({r["symbol"] for r in rows}) == len(rows)
+    sectors = set(agents.SECTORS_PT)
+    assert all(r["sector"] in sectors and agents.exchange_of(r["symbol"]) != "" for r in rows)
+
+
+def test_stop_round_fills_todays_opens_and_stops_without_closing_the_day():
+    from datetime import datetime, timezone
+
+    # Thursday: bought at Wednesday's open earlier; today (Friday) so far the low touched the stop
+    hist = {"AAA.DE": frame([100, 100, 100, 100, 95], [101, 101, 101, 101, 96], [99, 99, 99, 99, 89],
+                            [100, 100, 100, 100, 90]),
+            "BBB.DE": frame([50, 50, 50, 50, 52], [50, 50, 50, 50, 53], [50, 50, 50, 50, 51], [50, 50, 50, 50, 52])}
+    port = new_portfolio(1000, DATES[0].date())
+    port["cash"] = 500
+    port["positions"]["AAA.DE"] = {"qty": 5, "entry": 100, "entry_date": "2026-10-28", "cost_eur": 500,
+                                   "stop": 90.0, "tp": None, "checked": "2026-10-29"}
+    port["pending"] = [{"side": "buy", "symbol": "BBB.DE", "eur": 200, "created": "2026-10-29"}]
+    state = {"agents": {"a": port}}
+    config = {"agents": [{"id": "a", "name": "A", "emoji": "🅰️", "strategy": "rotador", "active": True, "params": {}}]}
+    friday = DATES[4].date()
+    mkt = market(hist, friday)
+    now = datetime(2026, 10, 30, 15, 40, tzinfo=timezone.utc)
+    moves = agents.stop_round(config, state, mkt, now)
+    sides = {t["symbol"]: t for _, t in moves}
+    assert sides["BBB.DE"]["side"] == "compra" and sides["BBB.DE"]["date"] == "2026-10-30" and sides["BBB.DE"]["hora"] == "15:40"
+    assert sides["AAA.DE"]["side"] == "venda" and sides["AAA.DE"]["reason"] == "stop"
+    assert sides["AAA.DE"]["price"] == pytest.approx(90 * (1 - 0.001))  # at the stop, as the daily check would
+    # the position bought today is still open and today is not marked as checked
+    assert port["positions"]["BBB.DE"]["checked"] == "2026-10-29"
+    assert not agents.session_started("AAPL", now.replace(hour=13, minute=0)) and agents.session_started("AAPL", now)

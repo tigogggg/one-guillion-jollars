@@ -171,9 +171,10 @@ def yahoo_test() -> tuple[bool, str]:
 # --------------------------------------------------------------------------
 
 DEFAULT_SCHEDULE = {  # keep in step with DEFAULT_SCHEDULE in discord-bot/worker.js
-    "dicas": "11:40", "agentes": "12:15", "alertas": ["15:40", "17:40", "19:40"], "acompanhamento": "22:30",
+    "dicas": "07:00", "agentes": "07:30", "ronda": ["10:30", "15:30", "17:00", "20:30"],
+    "alertas": ["15:40", "17:40", "19:40"], "acompanhamento": "22:30",
     "estado": "23:00", "noticias": ["12:00", "16:00", "20:30"], "semanal": {"dia": "sab", "hora": "10:00"},
-    "treino": "07:30",
+    "treino": "06:00",
 }
 DAY_NAMES = {"dom": "domingo", "seg": "segunda", "ter": "terça", "qua": "quarta", "qui": "quinta", "sex": "sexta",
              "sab": "sábado"}
@@ -182,7 +183,11 @@ DAY_NAMES = {"dom": "domingo", "seg": "segunda", "ter": "terça", "qua": "quarta
 def schedule() -> dict:
     import discord_bot
 
-    return {**DEFAULT_SCHEDULE, **(discord_bot.kv_get("schedule") or {})}
+    saved = dict(discord_bot.kv_get("schedule") or {})
+    if saved.get("v", 1) < 2:  # saved before the agents moved to the European open (as getSchedule in worker.js)
+        saved.pop("dicas", None)
+        saved.pop("agentes", None)
+    return {**DEFAULT_SCHEDULE, **saved}
 
 
 def times_text(times: str | list[str]) -> str:

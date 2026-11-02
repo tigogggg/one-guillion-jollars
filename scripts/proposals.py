@@ -25,7 +25,7 @@ from datetime import date
 import pandas as pd
 
 from agents import (BENCHMARK, FEE, FX_FEE, LIVE_ONLY, META, REPO_AGENTS, TAX_RATE, Market, active_agents,
-                    benchmark_return, is_eur, last_close, live_stats)
+                    benchmark_return, buy_tax, currency_of, fx_series, is_eur, last_close, live_stats)
 import opportunities
 
 LOG_PATH = REPO_AGENTS / "proposals.json"
@@ -119,11 +119,13 @@ def atr(df: pd.DataFrame, n: int = ATR_DAYS) -> float | None:
 
 
 def fx_eur(mkt: Market, symbol: str) -> float:
-    """Euros per unit of the symbol's currency today."""
-    if is_eur(symbol):
+    """Euros per unit of the symbol's quote currency today (per penny for London)."""
+    ccy = currency_of(symbol)
+    if ccy == "EUR":
         return 1.0
-    rate = mkt.fx.iloc[-1] if len(mkt.fx) else None
-    return 1.0 / float(rate) if rate else 1.0
+    series = fx_series(mkt, ccy)
+    rate = float(series.iloc[-1]) if series is not None and len(series) else None
+    return (1.0 / rate) / (100 if ccy == "GBp" else 1) if rate else 1.0
 
 
 def plan(mkt: Market, symbol: str, orders: list[dict]) -> dict | None:
@@ -142,7 +144,7 @@ def plan(mkt: Market, symbol: str, orders: list[dict]) -> dict | None:
     agent_tps = sorted(o["tp"] for o in orders if o.get("tp") and o["tp"] > entry)
     if agent_tps:
         target = agent_tps[len(agent_tps) // 2]
-    costs = 2 * (FEE + (0.0 if is_eur(symbol) else FX_FEE))
+    costs = 2 * (FEE + (0.0 if is_eur(symbol) else FX_FEE)) + buy_tax(symbol)
     gross = target / entry - 1
     net = (gross - costs) * (1 - TAX_RATE) if gross > costs else gross - costs
     loss = -(risk / entry) - costs
@@ -151,7 +153,7 @@ def plan(mkt: Market, symbol: str, orders: list[dict]) -> dict | None:
         "rr": round((target - entry) / risk, 2) if risk > 0 else None, "atr": round(a, 2),
         "risk_pct": round(risk / entry * 100, 2), "gross_pct": round(gross * 100, 2),
         "net_target_pct": round(net * 100, 2), "net_stop_pct": round(loss * 100, 2),
-        "currency": "EUR" if is_eur(symbol) else "USD", "fx_eur": round(fx_eur(mkt, symbol), 5),
+        "currency": currency_of(symbol), "fx_eur": round(fx_eur(mkt, symbol), 5),
     }
 
 

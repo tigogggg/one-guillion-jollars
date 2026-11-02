@@ -15,6 +15,7 @@ const JOBS = [
   { key: "dicas", label: "📊 Dicas do dia e rankings", weekdays: true },
   { key: "noticias", label: "📰 Leitura de notícias", weekdays: true },
   { key: "agentes", label: "🤖 Liga dos agentes", weekdays: true },
+  { key: "ronda", label: "⏱️ Ronda dos agentes", weekdays: true },
   { key: "alertas", label: "🚨 Alertas de rompimento", weekdays: true },
   { key: "acompanhamento", label: "🔁 Acompanhamento dos alertas", weekdays: true },
   { key: "estado", label: "🔧 Estado do bot", weekdays: true },
@@ -983,7 +984,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
 (function props() {
   if (!$("props")) return;
   const P = PROPOSALS;
-  if (!P) { $("props").innerHTML = '<p class="muted">As propostas aparecem depois da próxima liga dos agentes (dias úteis às 12:15).</p>'; return; }
+  if (!P) { $("props").innerHTML = '<p class="muted">As propostas aparecem depois da próxima liga dos agentes (dias úteis às 07:30).</p>'; return; }
   const sb = (P.scoreboard || {}).all || {};
   const pctOrDash = (x) => x == null ? "—" : fmtNum(x * 100, 0) + "%";
   const sizing = (b, capital, riskPct) => {
@@ -995,7 +996,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
     return { qty, value: qty * pl.entry_max * pl.fx_eur, risk: qty * perShare, capped };
   };
   const card = (b) => {
-    const pl = b.plan, rec = b.record || {}, cur = pl.currency === "EUR" ? "€" : "$";
+    const pl = b.plan, rec = b.record || {}, cur = ({ EUR: "€", USD: "$", GBp: "p", CHF: "CHF", SEK: "kr", DKK: "kr", NOK: "kr" })[pl.currency] || pl.currency || "";
     return '<div class="opp"><div class="top"><span class="sym">' + esc(b.symbol) + '</span><span class="muted">' + esc(b.name || "") + (b.sector ? " · " + esc(b.sector) : "") + '</span>' +
       (b.safety != null ? '<span class="score ' + esc((b.level || "").split(" ")[0]) + '">🛡️ ' + b.safety + '/100 · ' + esc(b.level) + '</span>' : "") + '</div>' +
       ((b.alerts || []).length ? '<p class="alert ' + (b.conflict === "venda" ? "down" : "warn") + '">' + (b.conflict === "venda" ? "🔴 Contra os sinais de venda" : "🟡 Atenção antes de comprar") + ': ' +
@@ -1324,7 +1325,7 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
   const hours = (iso) => iso ? (Date.now() - Date.parse(iso.length === 10 ? iso + "T18:00:00Z" : iso)) / 3.6e6 : null;
   const weekendSlack = [0, 1].includes(new Date().getDay()) ? 48 : 0;  // Sunday and Monday: Friday's data is fine
   const rows = [
-    ["🏁 Liga dos agentes", DATA.updated, 30 + weekendSlack, "dias úteis às 12:15"],
+    ["🏁 Liga dos agentes", DATA.updated, 30 + weekendSlack, "dias úteis às 07:30"],
     ["📰 Notícias", NEWS && NEWS.updated, 8 + weekendSlack, "várias vezes por dia"],
     ["🎯 Oportunidades e contexto", when(MARKET), 30 + weekendSlack, "com a liga"],
     ["🧠 Propostas", when(PROPOSALS), 30 + weekendSlack, "com a liga"],

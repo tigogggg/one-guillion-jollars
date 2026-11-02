@@ -35,6 +35,7 @@ PARAMS = {
     "tempo_max": "vende posições a perder que não andaram ao fim destas sessões (0 = desligado)",
     "min_tecnico": "score técnico mínimo para comprar: tendência, volatilidade e distância ao máximo, 0-60 (0 = desligado)",
     "max_ext": "não compra se o preço estiver mais do que isto acima da média de 50 dias (0 = desligado)",
+    "gap_max": "cancela a compra se a ação abrir mais do que isto acima ou abaixo do fecho em que decidiu (0 = desligado)",
     "peso_noticias": "não compra se o score das notícias estiver neste valor negativo ou pior",
     "vix_max": "não compra quando o VIX (medo no mercado) está acima deste valor (0 = desligado)",
     "vix_meio": "compra metade do tamanho quando o VIX está acima deste valor (0 = desligado)",
@@ -65,7 +66,7 @@ PARAMS = {
     "limiar_mom": "momentum mínimo do melhor ETF de ações para ficar investido em ações",
 }
 
-PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext",
+PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext", "gap_max",
               "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max", "queda_min", "limiar_mom"}
 
 # strategy: (idea, buys when, sells when, position size)

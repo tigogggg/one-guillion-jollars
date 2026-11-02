@@ -38,9 +38,12 @@ const EPHEMERAL = 64;
 const WORKFLOW_COMMANDS = new Set(["acao", "etf", "mercado", "limites"]);
 
 const TIMEZONE = "Europe/Lisbon";
+// v2 (Nov 2026): tips and agents before the European open, so the agents' orders fill at that day's opens.
+const SCHEDULE_VERSION = 2;
 const DEFAULT_SCHEDULE = {
-  dicas: "11:40",
-  agentes: "12:15",
+  dicas: "07:00",
+  agentes: "07:30", // before Xetra/Euronext/LSE open at 08:00 Lisbon, with the last full sessions
+  ronda: ["10:30", "15:30", "17:00", "20:30"], // agents' intraday round: fills at today's opens, stops and targets
   alertas: ["15:40", "17:40", "19:40"],
   acompanhamento: "22:30", // after the US close: how each alert did 5 and 20 sessions later
   estado: "23:00", // health check, after every other weekday job
@@ -53,6 +56,7 @@ const DAY_NAMES = { dom: "domingo", seg: "segunda", ter: "terça", qua: "quarta"
 const WORKFLOWS = {
   dicas: "discord-daily.yml",
   agentes: "agents.yml",
+  ronda: "agents.yml",
   alertas: "opportunity-alerts.yml",
   acompanhamento: "alert-followups.yml",
   estado: "health.yml",
@@ -60,6 +64,7 @@ const WORKFLOWS = {
   semanal: "weekly-summary.yml",
   treino: "pretrain.yml",
 };
+const JOB_INPUTS = { ronda: { mode: "stops" } };
 const LATE_LIMIT_MIN = 20; // still start a job this many minutes after its time (missed cron ticks)
 const MAX_ALERT_TIMES = 6;
 const MAX_FOLLOWS = 20;
@@ -262,7 +267,7 @@ async function route(request, env, ctx) {
       }
       const content = token
         ? `🏟️ **One Guillion Jollars**: corrida e fichas dos agentes, notícias, oportunidades com score de segurança e agenda.\n${new URL(request.url).origin}/p/${token}\n🔑 Ou entra em ${new URL(request.url).origin}/ com o Discord ou o Google: o portal e a tua carteira no mesmo sítio.\n-# Link do servidor: partilha só com os membros.`
-        : "⚠️ O portal aparece depois da próxima liga dos agentes (dias úteis às 12:15).";
+        : "⚠️ O portal aparece depois da próxima liga dos agentes (dias úteis às 07:30).";
       return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
     }
     if (name === "seguir") {
@@ -290,6 +295,7 @@ async function runSchedule(env, ctx, now) {
       jobs.push(["dicas", schedule.dicas]);
       jobs.push(["agentes", schedule.agentes]);
       for (const t of schedule.alertas) jobs.push(["alertas", t]);
+      for (const t of schedule.ronda) jobs.push(["ronda", t]);
       jobs.push(["acompanhamento", schedule.acompanhamento]);
       jobs.push(["estado", schedule.estado]);
       for (const t of schedule.noticias) jobs.push(["noticias", t]);
@@ -304,7 +310,7 @@ async function runSchedule(env, ctx, now) {
       if (await env.CONFIG.get(key)) continue;
       // Marked as started only once GitHub accepts it: a refused dispatch (GitHub down, token expired) is retried
       // on the next ticks of the LATE_LIMIT_MIN window instead of skipping the job for the whole day.
-      const resp = await dispatchWorkflow(env, WORKFLOWS[job], {});
+      const resp = await dispatchWorkflow(env, WORKFLOWS[job], JOB_INPUTS[job] || {});
       if (resp.ok) await env.CONFIG.put(key, "1", { expirationTtl: 3 * 24 * 3600 });
     }
   }
@@ -353,7 +359,7 @@ async function scheduleCommand(env, sub) {
   if (action === "dicas" || action === "agentes" || action === "acompanhamento" || action === "estado") {
     if (!isTime(args.hora)) return badTime(args.hora);
     schedule[action] = normaliseTime(args.hora);
-  } else if (action === "alertas" || action === "noticias") {
+  } else if (action === "alertas" || action === "noticias" || action === "ronda") {
     const times = (args.horas || "").split(/[,\s]+/).filter(Boolean);
     if (!times.length || times.length > MAX_ALERT_TIMES || !times.every(isTime)) {
       return `⚠️ Indica entre 1 e ${MAX_ALERT_TIMES} horas separadas por vírgulas, ex.: \`15:30,17:30,20:00\`.`;
@@ -367,11 +373,13 @@ async function scheduleCommand(env, sub) {
     Object.assign(schedule, structuredClone(DEFAULT_SCHEDULE));
   }
 
+  schedule.v = SCHEDULE_VERSION;
   if (action !== "ver") await env.CONFIG.put("schedule", JSON.stringify(schedule));
   return [
     action === "ver" ? "🕒 **Horários atuais** (hora de Lisboa)" : "✅ **Horários atualizados** (hora de Lisboa)",
     `📊 Dicas do dia e rankings: **${schedule.dicas}** (dias úteis)`,
-    `🤖 Liga dos agentes: **${schedule.agentes}** (dias úteis, depois das dicas)`,
+    `🤖 Liga dos agentes: **${schedule.agentes}** (dias úteis, antes da abertura europeia às 08:00)`,
+    `⏱️ Ronda dos agentes: **${schedule.ronda.join(" · ")}** (dias úteis; compras à abertura, stops e alvos do dia)`,
     `🚨 Verificação de alertas: **${schedule.alertas.join(" · ")}** (dias úteis; a sessão dos EUA é das 14:30 às 21:00)`,
     `🔁 Acompanhamento dos alertas: **${schedule.acompanhamento}** (dias úteis, depois do fecho dos EUA)`,
     `📰 Notícias: **${schedule.noticias.join(" · ")}** (dias úteis)`,
@@ -383,8 +391,12 @@ async function scheduleCommand(env, sub) {
 }
 
 async function getSchedule(env) {
-  const saved = await env.CONFIG.get("schedule", "json");
-  return { ...structuredClone(DEFAULT_SCHEDULE), ...(saved || {}) };
+  const saved = { ...((await env.CONFIG.get("schedule", "json")) || {}) };
+  if ((saved.v || 1) < 2) {  // saved before the agents moved to the European open: take the new tips and agents times
+    delete saved.dicas;
+    delete saved.agentes;
+  }
+  return { ...structuredClone(DEFAULT_SCHEDULE), ...saved };
 }
 
 function lisbonNow(date) {
@@ -421,7 +433,7 @@ function toMinutes(t) {
 }
 
 function badTime(t) {
-  return `⚠️ Hora inválida: \`${t || ""}\`. Usa o formato HH:MM, ex.: \`11:40\`.`;
+  return `⚠️ Hora inválida: \`${t || ""}\`. Usa o formato HH:MM, ex.: \`07:00\`.`;
 }
 
 function positionSize({ capital, entrada, stop, risco = 1, max_posicao = 15 }) {

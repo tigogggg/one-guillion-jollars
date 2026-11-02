@@ -1,7 +1,7 @@
 name: Dicas do dia (Discord)
 
 # Started by the Cloudflare Worker at the time set with /horario (default
-# 11:40 Lisbon on weekdays), or by hand.
+# 07:00 Lisbon on weekdays), or by hand.
 on:
   workflow_dispatch:
     inputs:

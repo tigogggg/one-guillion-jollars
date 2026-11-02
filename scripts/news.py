@@ -211,7 +211,10 @@ def followed_symbols() -> list[str]:
             symbols += list(port["positions"]) + [o["symbol"] for o in port["pending"] if o["side"] == "buy"]
     for syms in discord_bot.load_follows().values():
         symbols += syms
-    return [s for s in dict.fromkeys(symbols) if "." not in s]  # European ETFs (.DE …) have no company news
+    from rankings import UCITS_ETFS
+
+    etfs = {t for t, _ in UCITS_ETFS}
+    return [s for s in dict.fromkeys(symbols) if s not in etfs]  # ETFs have no company news; European stocks do
 
 
 def biggest_movers(constituents: list[dict], n: int = MOVERS) -> list[str]:

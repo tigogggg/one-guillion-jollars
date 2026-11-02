@@ -1229,7 +1229,7 @@ function renderMine() {
   const s = SNAP, P = s.proposals, st = s.settings || { capital: 10000, risk: 1 };
   const f = $("settings");
   if (document.activeElement?.form !== f) { f.capital.value = st.capital; f.risk.value = st.risk; }
-  if (!P || !P.buys.length) { $("mine").innerHTML = '<p class="muted">Hoje não há propostas de compra dos agentes. Aparecem depois da liga dos dias úteis (12:15).</p>'; return; }
+  if (!P || !P.buys.length) { $("mine").innerHTML = '<p class="muted">Hoje não há propostas de compra dos agentes. Aparecem depois da liga dos dias úteis (07:30).</p>'; return; }
   $("mine").innerHTML = '<p class="muted small">Fecho de ' + esc(P.as_of) + ' · zona ' + esc(P.zone) + ' · para estudar e decidir tu, não é recomendação.</p><div class="cards">' + P.buys.map((b) => {
     const pl = b.plan, fx = pl.fx_eur, per = (pl.entry_max - pl.stop) * fx;
     let qty = per > 0 ? st.capital * st.risk / 100 / per : 0;

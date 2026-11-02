@@ -26,7 +26,9 @@ State lives in agents/state.json, committed by the workflow to the private repo 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import math
 import os
 import random
 import re
@@ -34,6 +36,7 @@ import statistics
 import sys
 import unicodedata
 from dataclasses import dataclass, field
+from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
@@ -57,12 +60,14 @@ from rankings import (
     trend_metrics,
 )
 
+ETF_SYMBOLS = frozenset(t for t, _ in UCITS_ETFS)
+
 REPO_AGENTS = WATCHLIST_DIR.parents[1] / "agents"
 CONFIG_PATH = REPO_AGENTS / "config.json"
 STATE_PATH = REPO_AGENTS / "state.json"
 
 FEE = 0.001  # commission and slippage, per side
-FX_FEE = 0.0015  # EUR/USD conversion at a typical EU broker, per side, for US stocks
+FX_FEE = 0.0015  # currency conversion at a typical EU broker, per side, for anything not quoted in euros
 TAX_RATE = 0.28  # Portuguese tax on a year's net realised gains, paid on the first run of the next year
 MIN_ORDER_EUR = 20.0
 # Reward: 1 point per 0.1% beaten (or lost) against the S&P 500 that day, a small bonus for being in profit,
@@ -118,6 +123,7 @@ PARAM_BOUNDS = {
     "tempo_max": (10, 60, int),
     "min_tecnico": (20.0, 55.0, float),
     "max_ext": (0.05, 0.35, float),
+    "gap_max": (0.02, 0.15, float),
     "peso_noticias": (1, 6, int),
     # market context (context.py), shared too; 0 = off
     "vix_max": (18.0, 45.0, float),
@@ -156,12 +162,14 @@ PARAM_BOUNDS = {
 }
 # Variables every strategy (but the Indexador) has, on top of its own. The defaults keep the original
 # behaviour; the training (pre-training, monthly mutation and the shadow copies) switches them on and tunes them.
-COMMON = {"stop_atr": 0, "trail_atr": 0, "tempo_max": 0, "min_tecnico": 0, "max_ext": 0, "peso_noticias": NEWS_VETO_DEFAULT,
+# gap_max is on from the start (8%): a buy is cancelled when the stock opens that far from the close it was decided on.
+COMMON = {"stop_atr": 0, "trail_atr": 0, "tempo_max": 0, "min_tecnico": 0, "max_ext": 0, "gap_max": 0.08,
+          "peso_noticias": NEWS_VETO_DEFAULT,
           "vix_max": 0, "vix_meio": 0, "epu_max": 0, "credito_max": 0, "juros_max": 0, "usd_max": 0, "filtro_spy": 0,
           "gpr_max": 0, "petroleo_max": 0, "ouro_max": 0, "filtro_setor": 0, "ema_filtro": 0, "stop_suporte": 0,
           "qualidade_fund_min": 0, "valor_fund_min": 0,
           "dias_resultados": EARNINGS_AVOID_DAYS_DEFAULT, "evita_macro": 0, "evita_geo": 0}
-OFFABLE = {"stop_atr", "trail_atr", "tempo_max", "min_tecnico", "max_ext", "vix_max", "vix_meio", "epu_max", "credito_max",
+OFFABLE = {"stop_atr", "trail_atr", "tempo_max", "min_tecnico", "max_ext", "gap_max", "vix_max", "vix_meio", "epu_max", "credito_max",
            "juros_max", "usd_max", "filtro_spy", "gpr_max", "petroleo_max", "ouro_max", "filtro_setor", "ema_filtro", "stop_suporte",
            "qualidade_fund_min", "valor_fund_min", "evita_macro", "evita_geo"}
 CONTEXT_RULES = {"vix_max", "vix_meio", "epu_max", "credito_max", "juros_max", "usd_max", "filtro_spy", "gpr_max", "petroleo_max", "ouro_max"}
@@ -188,6 +196,7 @@ class Market:
     league: dict[str, tuple[dict, dict]] = field(default_factory=dict)  # {agent id: (cfg, portfolio)}, for meta-agents
     priors: dict[str, dict] = field(default_factory=dict)  # pre-training: {strategy: {zone: avg daily excess return}}
     context: dict = field(default_factory=dict)  # context.py: vix, epu_pct, credit_dd, hy, rate_chg, usd_chg, spy_trend; live: macro
+    fx_rates: dict[str, pd.Series] = field(default_factory=dict)  # other currencies per euro (GBP, CHF, SEK, DKK, NOK)
 
 
 # --------------------------------------------------------------------------
@@ -278,6 +287,22 @@ EXCHANGE_CLOSE = {
     ".IR": ("Europe/Dublin", 16, 30), ".VI": ("Europe/Vienna", 17, 30),
 }
 CLOSE_MARGIN_MIN = 30
+# When each exchange's session starts (local time): before it, a bar dated today can only be pre-market noise.
+EXCHANGE_OPEN = {"": (9, 30), ".L": (8, 0), ".LS": (8, 0), ".IR": (8, 0), ".HE": (10, 0)}  # others: 9:00 local
+OPEN_MARGIN_MIN = 5
+
+
+def session_started(symbol: str, now: datetime) -> bool:
+    """Whether today's session at the symbol's exchange has begun (and its open is known)."""
+    from zoneinfo import ZoneInfo
+
+    ex = exchange_of(symbol)
+    if ex == "=X":
+        return True
+    tz = EXCHANGE_CLOSE[ex][0]
+    hour, minute = EXCHANGE_OPEN.get(ex, (9, 0))
+    local = now.astimezone(ZoneInfo(tz))
+    return local >= local.replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(minutes=OPEN_MARGIN_MIN)
 
 
 def exchange_of(symbol: str) -> str:
@@ -314,25 +339,70 @@ def complete_bars(hist: dict[str, pd.DataFrame], now: datetime, until: date | No
     return out
 
 
+EUROPE_PATH = Path(__file__).resolve().parents[1] / "data" / "universe" / "europe.csv"
+EU_LIQUID_SHARE = 0.75  # European stocks in play: the most traded 75% of the list (60-day traded value in euros)
+LIQUIDITY_DAYS = 60
+
+
+def load_europe() -> list[dict]:
+    """Large and liquid European companies (data/universe/europe.csv): symbol, name, GICS sector, country."""
+    with open(EUROPE_PATH, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def is_us(symbol: str) -> bool:
+    return exchange_of(symbol) == ""
+
+
+def liquid_europe(values: dict[str, float], share: float = EU_LIQUID_SHARE) -> set[str]:
+    """The most traded `share` of the European stocks, from their traded value in euros."""
+    ranked = sorted((s for s, v in values.items() if v == v and v > 0), key=values.get, reverse=True)
+    return set(ranked[: math.ceil(len(ranked) * share)])
+
+
+def us_breadth(stocks: dict[str, dict]) -> float:
+    """Share of S&P 500 stocks in a stage 2 uptrend: the market zone, as in the pre-training (US market only)."""
+    us = [m["stage2"] for s, m in stocks.items() if is_us(s)]
+    return sum(us) / max(len(us), 1)
+
+
 def load_market(now: datetime | None = None) -> Market:
     now = now or datetime.now(timezone.utc)
     constituents = load_constituents()
-    sector_of = {c["symbol"]: c["sector"] for c in constituents}
-    name_of = {c["symbol"]: c["name"] for c in constituents}
-    stock_hist = complete_bars(download_history(list(sector_of) + ["SPY"]), now)
+    europe = load_europe()
+    sector_of = {c["symbol"]: c["sector"] for c in constituents} | {c["symbol"]: c["sector"] for c in europe}
+    name_of = {c["symbol"]: c["name"] for c in constituents} | {c["symbol"]: c["name"] for c in europe}
+    raw = download_history(list(sector_of) + ["SPY"])
+    stock_hist = complete_bars({s: fix_pence(df) if currency_of(s) == "GBp" else df for s, df in raw.items()}, now)
     if "SPY" not in stock_hist:
         raise RuntimeError("Sem dados do Yahoo Finance (SPY).")
     # The decision day: the last full US session. Nothing later is seen, in any market (as in the backtest).
     as_of = stock_hist["SPY"].index[-1].date()
     stock_hist = complete_bars(stock_hist, now, as_of)
     etf_hist = complete_bars(download_history([t for t, _ in UCITS_ETFS]), now, as_of)
-    fx_hist = complete_bars(download_history(["EURUSD=X"]), now, as_of)
+    fx_hist = complete_bars(download_history(list(FX_SYMBOLS.values())), now, as_of)
     if "EURUSD=X" not in fx_hist:
         raise RuntimeError("Sem dados do Yahoo Finance (EUR/USD).")
+    fx_rates = {c: fx_hist[t]["Close"] for c, t in FX_SYMBOLS.items() if c != "USD" and t in fx_hist}
+    missing = [s for s in sector_of if s not in stock_hist]
+    if missing:
+        print(f"WARN: {len(missing)} ações sem dados do Yahoo: {', '.join(missing[:40])}", file=sys.stderr)
+    # Europe: only stocks whose currency can be converted, and only the most traded part of the list.
+    probe = Market(hist={}, fx=fx_hist["EURUSD=X"]["Close"], stocks={}, etfs={}, as_of=as_of, sessions=[],
+                   zone="Neutra", stage2_share=0.0, fx_rates=fx_rates)
+    traded = {}
+    for sym, df in stock_hist.items():
+        if sym == "SPY" or is_us(sym) or fx_series(probe, currency_of(sym)) is None and not is_eur(sym):
+            continue
+        tail = df.iloc[-LIQUIDITY_DAYS:]
+        traded[sym] = to_eur(probe, sym, float((tail["Close"] * tail["Volume"]).mean()), as_of)
+    in_play = liquid_europe(traded)
 
     stocks = {}
     for sym, df in stock_hist.items():
-        m = trend_metrics(df) if sym in sector_of else None
+        if sym not in sector_of or (not is_us(sym) and sym not in in_play):
+            continue
+        m = trend_metrics(df)
         if m:
             stocks[sym] = {**m, **extra_metrics(df), "sector": sector_of[sym], "name": name_of.get(sym, ""),
                             "stage2": is_stage2(m)}
@@ -354,11 +424,12 @@ def load_market(now: datetime | None = None) -> Market:
             etfs[sym] = {**m, "name": names.get(sym, sym)}
     add_trend_scores(etfs)
 
-    share = sum(m["stage2"] for m in stocks.values()) / max(len(stocks), 1)
+    share = us_breadth(stocks)
     spy = stock_hist["SPY"]
     market = Market(
         hist={**stock_hist, **etf_hist},
         fx=fx_hist["EURUSD=X"]["Close"],
+        fx_rates=fx_rates,
         stocks=stocks,
         etfs=etfs,
         as_of=spy.index[-1].date(),
@@ -407,15 +478,66 @@ def load_market(now: datetime | None = None) -> Market:
     return market
 
 
+# Quote currency by exchange (Yahoo quotes London in pence, GBp); every other listed exchange is in euros.
+CURRENCY_BY_EXCHANGE = {"": "USD", ".L": "GBp", ".SW": "CHF", ".ST": "SEK", ".CO": "DKK", ".OL": "NOK"}
+# Yahoo series of each currency per euro (EURGBP=X: pounds per euro).
+FX_SYMBOLS = {"USD": "EURUSD=X", "GBP": "EURGBP=X", "CHF": "EURCHF=X", "SEK": "EURSEK=X", "DKK": "EURDKK=X",
+              "NOK": "EURNOK=X"}
+CURRENCY_LABEL = {"USD": "USD", "GBp": "GBp", "CHF": "CHF", "SEK": "SEK", "DKK": "DKK", "NOK": "NOK", "EUR": "EUR"}
+# Taxes on buying shares (stock exchange / financial transaction taxes), on the amount bought, for companies of
+# that country: French FTT 0.4%, Italian FTT 0.1%, Spanish FTT 0.2%, UK stamp duty 0.5%, Irish stamp duty 1%.
+# ETFs and companies registered elsewhere (BUY_TAX_EXEMPT) pay none.
+BUY_TAX = {".PA": 0.004, ".MI": 0.001, ".MC": 0.002, ".L": 0.005, ".IR": 0.01}
+BUY_TAX_EXEMPT = {"STMPA.PA", "AIR.PA", "RACE.MI", "STLAM.MI", "TEN.MI", "FER.MC", "GLEN.L"}
+
+
+def currency_of(symbol: str) -> str:
+    ex = exchange_of(symbol)
+    return CURRENCY_BY_EXCHANGE.get(ex, "EUR")
+
+
 def is_eur(symbol: str) -> bool:
-    return symbol.endswith((".DE", ".AS", ".PA", ".MI"))
+    return currency_of(symbol) == "EUR"
+
+
+def buy_tax(symbol: str) -> float:
+    if symbol in BUY_TAX_EXEMPT or symbol in ETF_SYMBOLS:
+        return 0.0
+    return BUY_TAX.get(exchange_of(symbol), 0.0)
+
+
+def fx_series(mkt: Market, currency: str) -> pd.Series | None:
+    """Units of `currency` per euro over time (pence quotes use the pound)."""
+    if currency == "GBp":
+        currency = "GBP"
+    return mkt.fx if currency == "USD" else mkt.fx_rates.get(currency)
 
 
 def to_eur(mkt: Market, symbol: str, price: float, on: date) -> float:
-    if is_eur(symbol):
+    ccy = currency_of(symbol)
+    if ccy == "EUR":
         return price
-    rate = mkt.fx.asof(pd.Timestamp(on))
-    return price / float(mkt.fx.iloc[0] if pd.isna(rate) else rate)
+    series = fx_series(mkt, ccy)
+    if series is None or not len(series):
+        raise KeyError(f"sem câmbio para {ccy} ({symbol})")
+    rate = series.asof(pd.Timestamp(on))
+    eur = price / float(series.iloc[0] if pd.isna(rate) else rate)
+    return eur / 100 if ccy == "GBp" else eur
+
+
+def fix_pence(df: pd.DataFrame) -> pd.DataFrame:
+    """London quotes from Yahoo sometimes switch a day between pence and pounds (100x jumps): put them back in pence."""
+    close = df["Close"]
+    ref = close.rolling(11, center=True, min_periods=3).median()
+    ratio = close / ref
+    low, high = ratio < 0.02, ratio > 50
+    if not (low.any() or high.any()):
+        return df
+    df = df.copy()
+    for col in ("Open", "High", "Low", "Close"):
+        df.loc[low, col] = df.loc[low, col] * 100
+        df.loc[high, col] = df.loc[high, col] / 100
+    return df
 
 
 def bars_between(df: pd.DataFrame, after: date, until: date) -> pd.DataFrame:
@@ -472,6 +594,7 @@ def equity(port: dict, mkt: Market) -> float:
 
 
 def fees(symbol: str) -> float:
+    """Commission/slippage per side, plus currency conversion for anything not quoted in euros."""
     return FEE + (0.0 if is_eur(symbol) else FX_FEE)
 
 
@@ -505,7 +628,7 @@ def buy(port: dict, mkt: Market, order: dict, price: float, on: date) -> dict | 
     if eur < MIN_ORDER_EUR:
         return None
     symbol = order["symbol"]
-    fill = price * (1 + fees(symbol))
+    fill = price * (1 + fees(symbol) + buy_tax(symbol))
     qty = eur / to_eur(mkt, symbol, fill, on)
     port["cash"] -= eur
     pos = port["positions"].get(symbol)
@@ -553,6 +676,12 @@ def fill_pending(port: dict, mkt: Market) -> list[dict]:
                 done.append(sell(port, mkt, order["symbol"], price, on, order.get("reason", ""),
                                  order.get("fraction", 1.0), order.get("ctx")))
         else:
+            ref, limit = order.get("ref"), order.get("gap_max")
+            if ref and limit and abs(price / ref - 1) > limit:  # opened too far from the decision's close: cancel
+                port["cancelled"] = (port.get("cancelled", []) + [{
+                    "date": on.isoformat(), "symbol": order["symbol"], "gap": round(price / ref - 1, 4),
+                    "limit": limit}])[-50:]
+                continue
             t = buy(port, mkt, order, price, on)
             if t:
                 done.append(t)
@@ -560,8 +689,12 @@ def fill_pending(port: dict, mkt: Market) -> list[dict]:
     return done
 
 
-def check_exits(port: dict, mkt: Market) -> list[dict]:
-    """Stops and targets, bar by bar since each position was last checked."""
+def check_exits(port: dict, mkt: Market, open_day: date | None = None) -> list[dict]:
+    """Stops and targets, bar by bar since each position was last checked.
+
+    open_day: a session still under way (the intraday stop round). Its low and high so far can trigger an exit,
+    at the same price the daily check would use, but it is not marked as checked: the full day is checked again.
+    """
     done = []
     for symbol, pos in list(port["positions"].items()):
         df = mkt.hist.get(symbol)
@@ -578,7 +711,8 @@ def check_exits(port: dict, mkt: Market) -> list[dict]:
                 done.append(sell(port, mkt, symbol, max(float(bar["Open"]), pos["tp"]), on, "alvo",
                                  ctx={"tp": round(pos["tp"], 4), "entry": round(pos["entry"], 4), "high": round(float(bar["High"]), 4)}))
                 break
-            pos["checked"] = on.isoformat()
+            if on != open_day:
+                pos["checked"] = on.isoformat()
     return done
 
 
@@ -1221,7 +1355,7 @@ def skip_earnings(orders: list[dict], mkt: Market, days: int = EARNINGS_AVOID_DA
     """Drop buys of stocks that report within `days` (EARNINGS_AVOID_DAYS by default); return (kept, skipped)."""
     kept, skipped = [], []
     for o in orders:
-        if o["side"] == "buy" and not is_eur(o["symbol"]):
+        if o["side"] == "buy" and o["symbol"] not in ETF_SYMBOLS and o["symbol"] not in mkt.etfs:  # ETFs report no results
             if o["symbol"] not in mkt.earnings:
                 mkt.earnings[o["symbol"]] = earnings.next_earnings(o["symbol"], mkt.as_of)
             if days and earnings.within(mkt.earnings[o["symbol"]], days, mkt.as_of):
@@ -1395,7 +1529,7 @@ def shared_rules(orders: list[dict], port: dict, mkt: Market, p: dict) -> tuple[
             notes.append(f"{o['symbol']} ({gate})")
             continue
         c = mkt.context
-        if p.get("usd_max") and not is_eur(o["symbol"]) and c.get("usd_chg", 0) > p["usd_max"]:
+        if p.get("usd_max") and currency_of(o["symbol"]) == "USD" and c.get("usd_chg", 0) > p["usd_max"]:
             notes.append(f"{o['symbol']} (dólar caiu {c['usd_chg']:.1%} em 3 meses)")
             continue
         if p.get("vix_meio") and c.get("vix", 0) > p["vix_meio"]:
@@ -1463,6 +1597,9 @@ def decide(cfg: dict, port: dict, mkt: Market, params: dict, live: bool = True) 
         orders, skipped = risk_filter(orders, port, mkt)
         notes += skipped
     orders = [o for o in orders if o["side"] == "sell" or o["eur"] >= MIN_ORDER_EUR]
+    gap = params.get("gap_max") if cfg["strategy"] != "indexador" else 0
+    if gap:  # the close the buy was decided on, to cancel it if the next open is too far from it (fill_pending)
+        orders = [{**o, "ref": last_close(mkt, o["symbol"]), "gap_max": gap} if o["side"] == "buy" else o for o in orders]
     if live:
         orders = [{**o, "ctx": decision_context(o, port, mkt)} for o in orders]
     return orders, notes
@@ -1600,8 +1737,13 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
     for cfg in agents_today:
         port = state["agents"][cfg["id"]]
         params = port.setdefault("params", dict(cfg["params"]))
+        cancelled = len(port.get("cancelled", []))
         for t in fill_pending(port, mkt) + check_exits(port, mkt) + [x for x in [pay_taxes(port, mkt)] if x]:
             moves.append((cfg, t))
+        gaps = port.get("cancelled", [])[cancelled:]
+        if gaps:
+            avoided.append(f"{cfg['emoji']} {cfg['name']}: compra cancelada por gap na abertura: "
+                           + ", ".join(f"{g['symbol']} ({g['gap']:+.1%})" for g in gaps))
         trail_stops(port, mkt, effective(params, mkt.zone, cfg["strategy"]))
         score_day(port, mkt)
         if cfg["strategy"] != "indexador" and is_bankrupt(port, mkt):
@@ -1844,7 +1986,8 @@ def common_rules(params: dict, strategy: str) -> str:
         if params.get("por_zona"):
             rules.append("🧭 parâmetros próprios por zona de mercado: " + "; ".join(
                 f"{z}: " + ", ".join(f"{k} {v}" for k, v in d.items()) for z, d in params["por_zona"].items()))
-    rules.append(f"💶 custos {FEE:.1%} (+{FX_FEE:.2%} câmbio nos EUA), {TAX_RATE:.0%} de imposto sobre mais-valias anuais")
+    rules.append(f"💶 custos {FEE:.1%} (+{FX_FEE:.2%} câmbio fora do euro; na compra, impostos de bolsa de França, Itália, Espanha, "
+                 f"Reino Unido e Irlanda), {TAX_RATE:.0%} de imposto sobre mais-valias anuais")
     if strategy != "indexador":
         rules.append(f"💀 falência se perder {BANKRUPTCY:.0%}: o lugar passa para um filho do líder")
     return "\n".join(rules)
@@ -1955,7 +2098,7 @@ def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
             info = mkt.stocks.get(symbol) or mkt.etfs.get(symbol) or {}
             positions.append({
                 "symbol": symbol, "name": info.get("name", ""), "sector": info.get("sector", ""),
-                "currency": "EUR" if is_eur(symbol) else "USD", "qty": round(pos["qty"], 6),
+                "currency": currency_of(symbol), "qty": round(pos["qty"], 6),
                 "entry": round(pos["entry"], 4), "entry_date": pos.get("entry_date"), "price": round(price, 4) if price else None,
                 "cost_eur": round(pos["cost_eur"], 2), "value_eur": round(value, 2),
                 "pnl_eur": round(value - pos["cost_eur"], 2),
@@ -1988,7 +2131,8 @@ def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
             "invested_pct": round((eq - port["cash"]) / eq * 100, 2) if eq else 0.0,
             "realized": port.get("realized", {}),
             "taxes": round(sum(t["eur"] for t in trades if t["side"] == "imposto"), 2),
-            "fees_note": f"{FEE:.1%} por ordem, +{FX_FEE:.2%} de câmbio nas ações dos EUA",
+            "fees_note": f"{FEE:.1%} por ordem, +{FX_FEE:.2%} de câmbio fora do euro, + imposto de bolsa na compra em FR 0,4%, "
+                         "IT 0,1%, ES 0,2%, UK 0,5% e IE 1%",
             "buys": sum(t["side"] == "compra" for t in trades), "sells": sum(t["side"] == "venda" for t in trades),
             "wins": sum(t["side"] == "venda" and t["pnl_eur"] > 0 for t in trades),
             "positions": positions, "pending": [{**o, "why": strategy_docs.context_text(o.get("ctx"))} for o in port["pending"]],
@@ -2127,9 +2271,55 @@ LEAGUE_TITLE = "🤖 Liga dos agentes"
 MONTHLY_TITLE = "📆 Relatório mensal dos agentes"
 
 
+# --------------------------------------------------------------------------
+# Intraday stop round
+# --------------------------------------------------------------------------
+
+
+def round_market(state: dict, now: datetime) -> Market | None:
+    """A small market for the stop round: the held and pending symbols with today's session so far."""
+    from zoneinfo import ZoneInfo
+
+    symbols = sorted({s for port in state["agents"].values() for s in list(port.get("positions", {}))
+                      + [o["symbol"] for o in port.get("pending", [])]})
+    if not symbols:
+        return None
+    hist = download_history(symbols, period="1mo")
+    fx_hist = download_history(list(FX_SYMBOLS.values()), period="1mo")
+    if "EURUSD=X" not in fx_hist:
+        raise RuntimeError("Sem dados do Yahoo Finance (EUR/USD).")
+    hist = {s: fix_pence(df) if currency_of(s) == "GBp" else df for s, df in hist.items()}
+    today = now.astimezone(ZoneInfo("Europe/Lisbon")).date()
+    # A market that has not opened yet today has no real bar for today: keep only the days before
+    hist = {s: df if session_started(s, now) else df.loc[: pd.Timestamp(today) - pd.Timedelta(seconds=1)]
+            for s, df in hist.items()}
+    return Market(hist=hist, fx=fx_hist["EURUSD=X"]["Close"], stocks={}, etfs={}, as_of=today, sessions=[],
+                  zone="Neutra", stage2_share=0.0,
+                  fx_rates={c: fx_hist[t]["Close"] for c, t in FX_SYMBOLS.items() if c != "USD" and t in fx_hist})
+
+
+def stop_round(config: dict, state: dict, mkt: Market, now: datetime) -> list[tuple[dict, dict]]:
+    """During the sessions: fill the orders whose market has opened today (at that open, as the daily run would) and
+    sell the positions whose stop or target was reached so far today (at the stop or target). Prices and dates are
+    exactly the ones the daily run and the backtest use; only the time of the round is added, to show it sooner."""
+    from zoneinfo import ZoneInfo
+
+    clock = now.astimezone(ZoneInfo("Europe/Lisbon")).strftime("%H:%M")
+    moves = []
+    for cfg in active_agents(config):
+        port = state["agents"].get(cfg["id"])
+        if not port:
+            continue
+        done = fill_pending(port, mkt) + check_exits(port, mkt, open_day=mkt.as_of)
+        for t in done:
+            t["hora"] = clock
+            moves.append((cfg, t))
+    return moves
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("mode", choices=["daily", "config", "portal"])
+    parser.add_argument("mode", choices=["daily", "config", "portal", "stops"])
     parser.add_argument("args", nargs="?", default="{}", help="config: JSON with acao, nome, estrategia, capital, valor, emoji")
     parser.add_argument("--dry-run", action="store_true", help="Print instead of posting; state is still saved")
     a = parser.parse_args()
@@ -2137,6 +2327,24 @@ def main() -> int:
     config, state = load_config(), load_state()
     target = reply_target()
     follow_up = ([], {})
+    if a.mode == "stops":  # intraday: today's opens and the stops/targets reached so far; post only when something moved
+        now = datetime.now(timezone.utc)
+        mkt = round_market(state, now)
+        moves = stop_round(config, state, mkt, now) if mkt else []
+        print(f"Ronda: {len(moves)} movimentos")
+        if not moves:
+            return 0
+        save(config, state)
+        lines = [f"{cfg['emoji']} **{cfg['name']}** {'comprou' if t['side'] == 'compra' else 'vendeu'} {t['symbol']} "
+                 f"({eur(t['eur'])}{', ' + t['reason'] if t['side'] == 'venda' else ''}) · {t['date']} às {t['hora']}"
+                 for cfg, t in moves]
+        try:  # the portal shows the new positions now, not tomorrow
+            full = load_market()
+            league(config, state, full, f"🤖 Liga dos agentes · fecho de {full.as_of.isoformat()}")
+        except Exception as e:
+            print(f"WARN: portal: {e!r}", file=sys.stderr)
+        where = route("agentes") or {"thread_id": discord_bot.todays_thread()}
+        return send([embed("⏱️ Ronda dos agentes", "\n".join(lines)[:4000], color=BLUE)], {}, dry_run=a.dry_run, **where)
     if a.mode == "portal":  # the portal's league page from the current state: no trading, no post
         mkt = load_market()
         embeds, _ = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}")
