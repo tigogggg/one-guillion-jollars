@@ -94,6 +94,7 @@ SKIP = {
     "cetico": "não há histórico gratuito de notícias; só se avalia ao vivo",
     "conselho": "depende das carteiras dos outros agentes ao vivo",
     "maestro": "depende dos resultados dos outros agentes ao vivo",
+    "relampago": "negoceia dentro do dia: só o laboratório intradiário (barras de 30 minutos) o reproduz",
 }
 # The investor profile this run trains for (agents.PROFILES); the balanced one keeps pretrain.json.
 PROFILE = os.environ.get("PRETRAIN_PERFIL") or agents.DEFAULT_PROFILE

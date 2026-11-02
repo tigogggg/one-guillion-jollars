@@ -160,6 +160,7 @@ def in_region(mkt: "Market", region: int, held=()) -> "Market":
 REACTIVE, DAILY = "reativo", "diario"
 LIVE_ONLY = {"joalheiro", "jornalista", "catalisador", "cetico", "conselho", "maestro"}
 META = {"conselho", "maestro"}  # decide after the others, from their portfolios
+INTRADAY_ONLY = {"relampago"}  # trade within the day: the daily backtest skips them, the intraday lab replays them
 TRADES_KEPT = 200
 POINTS_LOG_KEPT = 60
 
@@ -179,6 +180,7 @@ PARAM_BOUNDS = {
     "alvo_pct": (0.03, 0.20, float),
     "max_dias": (5, 30, int),
     "folga": (0.05, 0.25, float),
+    "rompimento_max": (0.002, 0.03, float),
     "salto_pct": (0.03, 0.12, float),
     "limiar": (2, 9, int),
     "min_votos": (2, 4, int),
@@ -263,6 +265,7 @@ class Market:
     # backtest: every company's past earnings dates (earnings.load_history), so the earnings rule runs there too
     earnings_dates: dict[str, list[date]] | None = None
     closes: dict[str, float] | None = None  # as_of closes, precomputed by the backtest for speed
+    now: datetime | None = None  # the intraday rounds' clock (set by react), for strategies that trade within the day
     news: dict[str, dict] = field(default_factory=dict)  # news.py signals: {symbol: {score, importance, items}}
     league: dict[str, tuple[dict, dict]] = field(default_factory=dict)  # {agent id: (cfg, portfolio)}, for meta-agents
     priors: dict[str, dict] = field(default_factory=dict)  # pre-training: {strategy: {zone: avg daily excess return}}
@@ -1374,6 +1377,58 @@ def s_kamikaze(cfg, port, mkt, p):
     return rebalance(port, mkt, ranked[:n], 1.0 / n, set(), p["stop_pct"], "maior subida a 3 meses")
 
 
+ORB_MINUTES = 30  # the opening range: the first half hour of the New York session
+FLAT_BEFORE_CLOSE = 15  # minutes: a day trade is closed before the session ends
+
+
+def s_relampago(cfg, port, mkt, p):
+    """Opening-range breakout, a day trade (intraday rounds only: it needs the session's clock, mkt.now).
+
+    The first round after the first ORB_MINUTES of the New York session keeps each US stock's high and low so far
+    (the opening range). Later rounds buy the stocks whose price breaks above that high (by at most rompimento_max),
+    in an uptrend (above the 50-day average): stop at the middle of the range, target alvo_r times the risk.
+    Everything is sold before the close, and anything left from an earlier day at the first chance.
+    """
+    now = mkt.now
+    if now is None:  # the daily run and the daily backtest have no session clock
+        return []
+    today = mkt.as_of.isoformat()
+    orders = []
+    for s, pos in port["positions"].items():
+        if pos.get("entry_date", today) < today or session_minutes(s, now)[1] <= FLAT_BEFORE_CLOSE:
+            orders.append(order_sell(s, "fecha antes do fim da sessão"))
+    book = port.setdefault("orb", {})
+    if book.get("date") != today:
+        book.clear()
+        book.update(date=today, levels={})
+    levels = book["levels"]
+    if mkt.zone == "Queda":
+        return orders
+    picks = []
+    for s, m in mkt.stocks.items():
+        if exchange_of(s) != "" or s in port["positions"]:
+            continue
+        since_open, to_close = session_minutes(s, now)
+        df = mkt.hist.get(s)
+        if since_open < ORB_MINUTES or to_close <= NO_BUYS_BEFORE_CLOSE or df is None or not len(df) \
+                or df.index[-1].date() != mkt.as_of:
+            continue
+        if s not in levels:  # the range so far becomes the opening range; a breakout needs a later round
+            levels[s] = [round(float(df["High"].iloc[-1]), 4), round(float(df["Low"].iloc[-1]), 4)]
+            continue
+        hi, lo = levels[s]
+        if hi > lo and hi < m["price"] <= hi * (1 + p["rompimento_max"]) and m["price"] > m["sma50"]:
+            picks.append(s)
+    eq = equity(port, mkt)
+    for s in sorted(picks, key=lambda s: mkt.stocks[s]["price"] / levels[s][0])[: max(free_slots(port, p["n"]), 0)]:
+        hi, lo = levels[s]
+        price = mkt.stocks[s]["price"]
+        stop = (hi + lo) / 2
+        orders.append(order_buy(s, eq / p["n"], f"rompeu o intervalo de abertura ({lo:.2f}-{hi:.2f})",
+                                stop=round(stop, 4), tp=round(price + p["alvo_r"] * (price - stop), 4)))
+    return orders
+
+
 def s_deriva(cfg, port, mkt, p):
     """Post-gap drift: buy stocks that gapped up on heavy volume in the last days and held the gap."""
     orders = [order_sell(s, f"{p['max_dias']} sessões") for s, pos in port["positions"].items()
@@ -1568,6 +1623,7 @@ STRATEGIES = {
     "conselho": (s_conselho, "Compra o que vários agentes apoiam", {"n": 6, "min_votos": 2, "stop_pct": 0.10}),
     "maestro": (s_maestro, "Copia os agentes que melhor se portam no regime de mercado atual", {"n": 8, "lideres": 3, "janela": 20, "cada": 5}),
     "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5, "ignora_resultados": True, "ignora_risco": True}),
+    "relampago": (s_relampago, "Rompimento do intervalo de abertura, dentro do dia (ORB)", {"n": 4, "alvo_r": 1.5, "rompimento_max": 0.01}),
 }
 
 
@@ -2718,6 +2774,7 @@ def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime, live:
     sold = {t["symbol"] for t in port["trades"] if t["side"] == "venda" and t["date"] == today}
     pending = {o["symbol"] for o in port["pending"]}
     reserved = sum(o["eur"] for o in port["pending"] if o["side"] == "buy")
+    mkt.now = now
     port["cash"] -= reserved
     try:
         orders, notes = decide(cfg, port, mkt, params, live=live)

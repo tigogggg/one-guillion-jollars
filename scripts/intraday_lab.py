@@ -455,7 +455,8 @@ def lab_strategies(only: set[str] | None) -> dict[str, dict]:
     config, state = agents.load_config(), agents.load_state()
     out = {}
     for strategy, (_, _, defaults) in agents.STRATEGIES.items():
-        if strategy in ETF_STRATEGIES or strategy in pretrain.SKIP or (only and strategy not in only):
+        if (strategy in ETF_STRATEGIES or (strategy in pretrain.SKIP and strategy not in agents.INTRADAY_ONLY)
+                or (only and strategy not in only)):
             continue
         cfg = next((c for c in agents.active_agents(config)
                     if c["strategy"] == strategy and agents.mode_of(c) == agents.REACTIVE), None)

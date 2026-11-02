@@ -156,6 +156,12 @@ DOCS = {
         "Vende com {alvo_pct} de lucro, no stop de {stop_pct}, ou ao fim de {max_dias} sessões.",
         "1/{n} do património por posição.",
     ),
+    "relampago": (
+        "Day trade clássico: o rompimento do intervalo de abertura (ORB). Os primeiros 30 minutos da sessão de Nova Iorque marcam o intervalo; um rompimento por cima costuma ter continuação no mesmo dia.",
+        "Nas rondas do dia, compra ações dos EUA acima da MM50 cujo preço passa o máximo dos primeiros 30 minutos (no máximo {rompimento_max} acima).",
+        "Stop a meio do intervalo de abertura, alvo de {alvo_r} vezes o risco; vende tudo antes do fecho (nunca fica de um dia para o outro).",
+        "1/{n} do património por posição.",
+    ),
     "deriva": (
         "Momentum de eventos: depois de resultados ou notícias fortes, as ações tendem a continuar a subir durante semanas.",
         "Compra ações que abriram ≥ {salto_pct} acima do fecho anterior com volume ≥ 2× a média nos últimos 4 dias, e que se mantêm acima do mínimo desse dia e da MM50.",
