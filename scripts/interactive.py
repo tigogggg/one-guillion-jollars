@@ -93,8 +93,14 @@ def portal_url() -> str | None:
 
 
 def publish_section(name: str, data) -> bool:
-    """One section of the portal (news, market), read by the Worker when the portal opens."""
-    return discord_bot.kv_put(f"portal:{name}", data)
+    """One section of the portal (news, market), read by the Worker when the portal opens. portal:version changes too,
+    so open portal pages know to refresh themselves."""
+    ok = discord_bot.kv_put(f"portal:{name}", data)
+    if ok:
+        from datetime import datetime, timezone
+
+        discord_bot.kv_put("portal:version", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    return ok
 
 
 def leaders(series: dict[str, list[tuple]], n: int = 5, always: tuple[str, ...] = ("Indexador",)) -> set[str]:

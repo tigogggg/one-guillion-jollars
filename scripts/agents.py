@@ -1986,11 +1986,24 @@ def pct(x: float) -> str:
     return f"{x * 100:+.1f}%"
 
 
-def day_change(port: dict) -> float:
+def day_change(port: dict, eq: float | None = None, mkt: Market | None = None) -> float:
+    """Today's change: during the rounds, the value now against the last close; else the last day of the history."""
     h = port["history"]
+    if eq is not None and mkt is not None and h and h[-1]["date"] < mkt.as_of.isoformat() and h[-1]["equity"]:
+        return (eq - (port["deposits"] - h[-1]["deposits"])) / h[-1]["equity"] - 1
     if len(h) < 2 or not h[-2]["equity"]:
         return 0.0
     return (h[-1]["equity"] - (h[-1]["deposits"] - h[-2]["deposits"])) / h[-2]["equity"] - 1
+
+
+def with_now(port: dict, eq: float, mkt: Market) -> list[tuple[str, float]]:
+    """The agent's return per day (history, recorded at each day's close), plus the value of this moment when the
+    market is newer than the last close (the intraday rounds), so the chart and the periods show today's moves."""
+    points = [(h["date"], (h["equity"] / h["deposits"] - 1) * 100) for h in port["history"]]
+    now = mkt.as_of.isoformat()
+    if port.get("deposits") and (not points or points[-1][0] < now):
+        points.append((now, (eq / port["deposits"] - 1) * 100))
+    return points
 
 
 def league(config: dict, state: dict, mkt: Market, title: str, moves=(), training=(), avoided=(), events=()) -> tuple[list[dict], dict]:
@@ -2007,7 +2020,7 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
         total = eq / port["deposits"] - 1
         lines.append(
             f"{medals[i] if i < 3 else f'`{i + 1:>2}`'} {cfg['emoji']} **{cfg['name']}** · {eur(eq)} ({pct(total)})"
-            f" · hoje {pct(day_change(port))} · ⭐ **{port['points']}** · {len(port['positions'])} pos."
+            f" · hoje {pct(day_change(port, eq, mkt))} · ⭐ **{port['points']}** · {len(port['positions'])} pos."
         )
     fields = [("🧭 Mercado", f"{ZONE_ICON[mkt.zone]} zona **{mkt.zone}** · {mkt.stage2_share * 100:.0f}% das ações do S&P 500 em tendência de alta")]
     if moves:
@@ -2035,10 +2048,7 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
                    + (f" ({eur(o['eur'])})" if o["side"] == "buy" else "") for o in port["pending"]]
         fields.append((f"📣 Sinais do líder: {cfg['emoji']} {cfg['name']} na próxima abertura", " · ".join(signals)[:1024]))
 
-    series = {
-        cfg["name"]: [(h["date"], (h["equity"] / h["deposits"] - 1) * 100) for h in port["history"]]
-        for cfg, port, _ in rows
-    }
+    series = {cfg["name"]: with_now(port, eq, mkt) for cfg, port, eq in rows}
     refs = reference_lines(series)
     top = interactive.leaders(series)
     files = {"agentes.png": lines_chart(series, "Rentabilidade desde o início (a cores: os 5 melhores e o Indexador)",
@@ -2329,7 +2339,7 @@ def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
             "lineage": cfg.get("lineage_name"), "points": port["points"],
             "deposits": round(port["deposits"], 2), "cash": round(port["cash"], 2), "equity": round(eq, 2),
             "return_pct": round((eq / port["deposits"] - 1) * 100, 2) if port["deposits"] else 0.0,
-            "day_pct": round(day_change(port) * 100, 2), "max_dd_pct": round(max_dd * 100, 2),
+            "day_pct": round(day_change(port, eq, mkt) * 100, 2), "max_dd_pct": round(max_dd * 100, 2),
             "sharpe": round(stats["sharpe"], 2), "sessions": stats["sessions"],
             "invested_pct": round((eq - port["cash"]) / eq * 100, 2) if eq else 0.0,
             "realized": port.get("realized", {}),

@@ -585,3 +585,13 @@ def test_a_rebalance_whose_buys_were_all_blocked_is_tried_again():
     mkt.context = {"vix": 20}
     orders, _ = agents.decide(cfg, port, mkt, cfg["params"], live=False)
     assert orders and port["last_rebalance"] == DATES[1].date().isoformat()
+
+
+def test_league_series_and_today_include_the_value_of_this_round():
+    port = new_portfolio(1000, DATES[0].date())
+    port["history"] = [{"date": "2026-10-29", "equity": 1000.0, "deposits": 1000}]
+    mkt = market({}, DATES[4].date())
+    assert agents.with_now(port, 1050.0, mkt)[-1] == ("2026-10-30", pytest.approx(5.0))
+    assert agents.day_change(port, 1050.0, mkt) == pytest.approx(0.05)
+    port["history"].append({"date": "2026-10-30", "equity": 1050.0, "deposits": 1000})
+    assert len(agents.with_now(port, 1050.0, mkt)) == 2  # the close of today is already there

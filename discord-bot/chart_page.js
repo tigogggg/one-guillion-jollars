@@ -35,6 +35,13 @@ export async function chartResponse(env, id, schedule) {
 
 // The portal: /p/<token> (the server's shared link) or / for a signed-in member.
 // session (session.js currentSession) shows the member's name and their portfolio inside the portal.
+// What the open portal pages compare to know there is something new: the latest league and pre-training charts and
+// the time any portal section was last published (scripts/interactive.py).
+export async function portalVersion(env) {
+  const keys = ["chart-latest:liga", "chart-latest:pretreino", "portal:version"];
+  return (await Promise.all(keys.map((k) => env.CONFIG.get(k)))).map((v) => v || "").join("|");
+}
+
 export async function portalResponse(env, token, schedule, wantManifest = false, session = null) {
   if (token !== null) {
     const saved = await env.CONFIG.get("portal:token", "json");
@@ -56,7 +63,8 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
   const ptId = await env.CONFIG.get("chart-latest:pretreino", "json");
   const pretrain = ptId && ptId !== latest ? await env.CONFIG.get(`chart:${ptId}`, "json") : null;
   const user = session ? { name: session.data.name || "membro", wallet: `/c/${session.tok}` } : null;
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution,
+  const version = await portalVersion(env);
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution, version,
                                                                        manifest: token === null ? "/manifest.webmanifest" : `/p/${token}/manifest.webmanifest` }));
 }
 
@@ -313,6 +321,7 @@ ${portal ? `<section data-tab="carteira" hidden>
 </section>` : ""}
 <script>
 const DATA = ${safeJson(data)};
+const PORTAL_VERSION = ${safeJson(extras.version || null)};
 const UPCOMING = ${safeJson(upcoming)};
 const NEWS = ${safeJson(extras.news || null)};
 const MARKET = ${safeJson(extras.market || null)};
@@ -704,6 +713,42 @@ function openTab(name) {
   try { history.replaceState(null, "", "#" + name); } catch (e) {}
 }
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
+
+// ---- automatic refresh: the portal checks every minute (while visible) whether anything new was published ----
+(function autoRefresh() {
+  if (!PORTAL_VERSION) return;
+  try {  // back where the person was after a refresh
+    const y = sessionStorage.getItem("portal-scroll");
+    if (y !== null) { sessionStorage.removeItem("portal-scroll"); setTimeout(() => window.scrollTo(0, +y), 300); }
+  } catch (e) {}
+  const busy = () => {
+    const a = document.activeElement;
+    const tab = (document.querySelector("#tabs .tab.on") || {}).dataset?.tab;
+    return (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || tab === "carteira";
+  };
+  const refresh = () => {
+    try { sessionStorage.setItem("portal-scroll", String(window.scrollY)); } catch (e) {}
+    location.reload();
+  };
+  const check = async () => {
+    if (document.visibilityState !== "visible") return;
+    try {
+      const r = await fetch("/versao", { cache: "no-store" });
+      if (!r.ok) return;
+      const { v } = await r.json();
+      if (!v || v === PORTAL_VERSION) return;
+      if (!busy()) return refresh();
+      let bar = $("newdata");  // editing something: offer it instead of losing what was typed
+      if (!bar) {
+        bar = document.body.appendChild(Object.assign(document.createElement("button"), { id: "newdata", textContent: "🔄 Há dados novos · atualizar" }));
+        bar.style.cssText = "position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:50;padding:10px 16px;border-radius:999px;border:0;cursor:pointer;background:#3b82f6;color:#fff;font:inherit;box-shadow:0 4px 16px rgba(0,0,0,.3)";
+        bar.addEventListener("click", refresh);
+      }
+    } catch (e) {}
+  };
+  setInterval(check, 60000);
+  document.addEventListener("visibilitychange", check);
+})();
 openTab(location.hash && document.querySelector('#tabs .tab[data-tab="' + location.hash.slice(1) + '"]') ? location.hash.slice(1)
   : document.querySelector("#tabs .tab").dataset.tab);
 document.addEventListener("click", (e) => {  // glossary terms: tap to read (phones have no hover)

@@ -17,7 +17,7 @@
 
 import { loginRoute, rememberDiscord } from "./login.js";
 import { currentSession, loginActive } from "./session.js";
-import { chartResponse, portalResponse, staticResponse } from "./chart_page.js";
+import { chartResponse, portalResponse, portalVersion, staticResponse } from "./chart_page.js";
 import { portfolioCommand, portfolioRoute } from "./portfolio.js";
 import { ICONS } from "./icons.js";
 import { dailyBackup } from "./store.js";
@@ -198,6 +198,10 @@ async function route(request, env, ctx) {
     }
     if (request.method === "GET" && path.startsWith("/static/")) {
       return staticResponse(path) || new Response("Não encontrado.", { status: 404 });
+    }
+    if (request.method === "GET" && path === "/versao" && env.CONFIG) {  // open portal pages poll this to refresh
+      return new Response(JSON.stringify({ v: await portalVersion(env) }),
+        { headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
     }
     if (request.method === "GET" && path === "/sw.js") {
       return new Response(SERVICE_WORKER, { headers: { "Content-Type": "text/javascript", "Cache-Control": "no-cache" } });
