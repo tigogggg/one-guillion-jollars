@@ -10,7 +10,7 @@ as they stood each week. Each run adds what it saw:
 - resultados/YYYY-MM-DD.json    the next earnings date known that day for the stocks the run looked up
 - fundamentais-eu/YYYY-MM-DD.json.gz  Yahoo's fundamentals of the European stocks (weekly)
 
-And in a second private repo (one-guillion-jollars-arquivo, checked out at arquivo-intradiario/), each reactive
+And on the private repo's branch arquivo-intradiario (checked out at arquivo-intradiario/), each reactive
 round's prices of every market in session: YYYY/MM-DD/HHMM.csv.gz, our own intraday history of Europe and the US.
 
     uv run python scripts/market_archive.py fundamentais     # the weekly European fundamentals
@@ -29,7 +29,7 @@ import pandas as pd
 
 REPO = Path(__file__).resolve().parents[1]
 ARCHIVE = REPO / "agents" / "arquivo"
-INTRADAY = REPO / "arquivo-intradiario"  # checkout of the private repo one-guillion-jollars-arquivo (when configured)
+INTRADAY = REPO / "arquivo-intradiario"  # checkout of the private repo's branch arquivo-intradiario
 # Yahoo's .info fields worth keeping (valuation, quality, growth, debt, size)
 FUNDAMENTAL_FIELDS = (
     "marketCap", "enterpriseValue", "trailingPE", "forwardPE", "priceToBook", "priceToSalesTrailing12Months",

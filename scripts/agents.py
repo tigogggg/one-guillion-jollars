@@ -2996,7 +2996,7 @@ def main() -> int:
         now = datetime.now(timezone.utc)
         mkt = load_market(now, live=True)
         print(f"Ronda: mercado carregado em {(datetime.now(timezone.utc) - now).total_seconds():.0f} s")
-        try:  # our own intraday history (private repo one-guillion-jollars-arquivo), when it is checked out
+        try:  # our own intraday history (private repo, branch arquivo-intradiario), when it is checked out
             import market_archive
 
             market_archive.intraday(mkt, now)
