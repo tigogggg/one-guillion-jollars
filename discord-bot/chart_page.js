@@ -329,10 +329,8 @@ ${portal ? `<section data-tab="propostas" hidden><div id="props"></div></section
 <section data-tab="noticias" hidden><div id="news"></div></section>
 <section data-tab="oportunidades" hidden><div id="opps"></div></section>` : ""}
 <section data-tab="${portal ? "estado" : "agenda"}" hidden>
-  ${portal ? '<div id="status"></div>' : ""}
-  <h2>⏱️ Próximas atualizações</h2>
-  <div id="countdowns" class="grid"></div>
-  <p class="muted small">Horários de Lisboa, os mesmos do /horario no Discord. Cada tarefa demora alguns minutos a chegar.</p>
+  ${portal ? '<div id="status"></div><p class="muted small">Horários de Lisboa (salvo indicação), os mesmos do /horario no Discord. Cada tarefa demora alguns minutos a chegar.</p>'
+    : '<h2>⏱️ Próximas atualizações</h2><div id="countdowns" class="grid"></div><p class="muted small">Horários de Lisboa, os mesmos do /horario no Discord. Cada tarefa demora alguns minutos a chegar.</p>'}
 </section>
 ${portal ? `<section data-tab="ajuda" hidden><div id="glossary"></div></section>` : ""}
 ${portal ? `<section data-tab="pesquisa" hidden><div id="q-out"></div></section>` : ""}
@@ -509,6 +507,7 @@ function timesText(times) {
   return times.length + "× por dia útil: " + times.join(" · ");
 }
 function drawCountdowns() {
+  if (!$("countdowns")) return;  // the portal shows the schedule in 🩺 Estado's table
   const now = Date.now();
   $("countdowns").innerHTML = UPCOMING.map((j) =>
     '<div class="tile"><div class="k">' + esc(j.label) + '</div><div class="v">' + left(j.at - now) + '</div><div class="s">' +
