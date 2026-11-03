@@ -75,7 +75,7 @@ on:
         options: [equilibrado, conservador, arrojado]
         default: equilibrado
       seguintes:
-        description: "Perfis a treinar a seguir, um depois do outro (auto = conservador e arrojado depois do equilibrado; vazio = nenhum)"
+        description: "Perfis a treinar a seguir, um depois do outro (auto = conservador e arrojado depois do equilibrado; nenhum = só este)"
         required: false
         default: "auto"
       serie:
@@ -361,6 +361,7 @@ jobs:
           if [ "$SEGUINTES" = auto ]; then
             if [ "$PRETRAIN_PERFIL" = equilibrado ]; then SEGUINTES="conservador,arrojado"; else SEGUINTES=""; fi
           fi
+          [ "$SEGUINTES" = nenhum ] && SEGUINTES=""  # an empty input becomes the default (auto) when dispatched by the API
           SEGUINTES=$(echo "$SEGUINTES" | tr -d ' ')
           # a single run by hand, with no profiles after it: nothing to chain or announce
           if [ "$REPETIR" -le 0 ] && [ -z "$SEGUINTES" ] && [ "$ACTOR" != "github-actions[bot]" ]; then exit 0; fi
