@@ -17,7 +17,7 @@ Reply to him in **pt-PT**, short and clear; commit messages in English.
 - Tests: `uv run pytest -q tests` (must pass before pushing).
 - Data in git: `data/context/*.csv`, `data/fundamentals/fundamentals.csv.gz` (refreshed weekly by `context-data.yml`).
 - Agents state: `agents/config.json`, `agents/state.json`, `agents/pretrain.json` (latest pre-training),
-  `agents/pretrain_history.json` (one entry per run), `agents/search.json` (search intensity: 2× both locally and in Actions, where each strategy has its own 4-core runner).
+  `agents/pretrain_history.json` (one entry per run), `agents/search.json` (search intensity: 2× locally, 6× in Actions since the Rust engine, where each strategy has its own 4-core runner).
   `agents/` is NOT in this public repo: it is a clone of the private repo `tigogggg/one-guillion-jollars-dados`
   (gitignored here; commit and push inside `agents/`). Workflows check it out with the deploy key `DADOS_DEPLOY_KEY`.
   Pre-training artifacts are encrypted with `BACKUP_KEY`; Actions logs are public, so never print results there.
@@ -54,6 +54,8 @@ Intraday reactivity (`reatividade` 0/1/2, `espera_min`, `esticado_max`) is train
 series ends; results and history in `agents/lab/reatividade*.json`.
 A run only replaces a strategy's parameters if the exam (last year, out of sample) does not get worse by more than
 10 points (`EXAM_SLACK`) and training + exam together improve by at least 5% and 5 points (`CHANGE_MARGIN`, `CHANGE_MIN`; weekly runs on Sundays must not swap for noise); the last 3 choices always stay candidates.
+Before each run's search, a walk-forward check (`pretrain.walk_forward`, 3 folds) runs the same search on the data up to each of the last years and judges it on that unseen year against the original parameters; if it does not hold up, the agent keeps its parameters.
+The day loop runs in the Rust engine (`engine/`, `scripts/engine.py`, `docs/ENGINE.md`); `OGJ_ENGINE=python` forces the Python reference.
 In Actions the profiles run one after another (input `seguintes`, default: conservador and arrojado after equilibrado). If a merge failed:
 `--retomar out/local/<run folder>`. Logs: `out/local/<run>/<strategy>.log`.
 

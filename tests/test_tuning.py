@@ -197,3 +197,26 @@ def test_a_candidate_stops_once_it_cannot_beat_the_original_in_enough_years(monk
     calls.clear()
     years, _ = pretrain._years_vs(("x", {"v": 9.0}, base))
     assert len(calls) == 10 and years == [9.0] * 10
+
+
+def test_walk_forward_checks_the_search_on_years_it_did_not_see(monkeypatch):
+    days = list(range(10 * 150))
+    monkeypatch.setattr(pretrain, "_MARKETS", days)
+    monkeypatch.setattr(pretrain, "EXAM_SESSIONS", 150)
+    seen = []
+
+    def fake_search(strategy, markets, fold=False, keep_live=False):
+        seen.append((len(markets), fold))
+        return strategy, {"default": {"n": 5}, "chosen": {"n": 3}}
+
+    gains = iter([5.0, -2.0, 4.0])  # per unseen year: new minus original
+
+    def fake_sim(strategy, params, markets, detail=True):
+        return {"points": next(gains) if params == {"n": 3} else 0.0}
+
+    monkeypatch.setattr(pretrain, "_search", fake_search)
+    monkeypatch.setattr(pretrain, "simulate", lambda s, p, m, detail=True: {"points": 0.0} if p == {"n": 5} else fake_sim(s, p, m))
+    monkeypatch.setattr(pretrain, "_MARKETS", [type("M", (), {"as_of": __import__("datetime").date(2020, 1, 1)})()] * 1500)
+    wf = pretrain.walk_forward("foguetao")
+    assert [n for n, _ in seen] == [1350, 1200, 1050] and all(f for _, f in seen)  # each fold stops before its test year
+    assert wf["wins"] == 2 and wf["losses"] == 1 and wf["passed"]

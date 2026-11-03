@@ -28,7 +28,8 @@ scripts/pretrain.py ──► scripts/engine.py ──► ogj_engine (Rust: engi
 1. Engine core and the first strategy (Foguetão) — done: ~50x faster per simulation than the Python loop.
 2. Every trainable strategy (15) — done. A training on the test markets: 64 s in Python, 1.3 s with the engine,
    same choices; on GitHub a strategy's job went from 20-45 min to about 3 min (mostly loading the data).
-3. The pre-training's search in Rust too (candidates on all cores with rayon, smarter search).
+3. Use the speed for better training — started: 3x more candidates in Actions, and a walk-forward check of the
+   search itself (the same search on the data up to each of the last 3 years, judged on that unseen year).
 4. The live rounds (`agents.react`, the live-only strategies), then the Python engine is removed.
 
 ## Build

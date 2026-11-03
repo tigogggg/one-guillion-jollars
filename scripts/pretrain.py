@@ -894,27 +894,66 @@ def yearly_blocks(markets: list[Market]) -> list[list[Market]]:
 
 
 def train_strategy(strategy: str) -> tuple[str, dict]:
-    """Train one strategy; its candidates are scored on all the cores when it trains alone (see WORKERS)."""
-    global _POOL
-    markets = _MARKETS
-    split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
-    _SEGMENTS.update(blocks=yearly_blocks(markets[:split]), train=markets[:split], valid=markets[split:])
+    """Train one strategy; its candidates are scored on all the cores when it trains alone (see WORKERS).
+
+    First the walk-forward check (WF_FOLDS): the same search, without the earlier choices, run on the data up to each
+    of the last years and judged on that unseen year against the strategy's original parameters. When the search
+    does not hold up out of sample, the agent keeps what it trades with (the search only fits noise for it)."""
     import engine
 
     if engine.enabled(strategy):  # the Rust engine's copy of the data, built before forking so the workers share it
-        engine.data_for(markets)
+        engine.data_for(_MARKETS)
+    wf = walk_forward(strategy) if WF_FOLDS and strategy != "indexador" else None
+    name, r = _search(strategy, _MARKETS, keep_live=bool(wf) and not wf["passed"])
+    if wf:
+        r["walk_forward"] = wf
+    return name, r
+
+
+WF_FOLDS = 3  # unseen years the search is checked on (0: off)
+
+
+def walk_forward(strategy: str) -> dict:
+    """The search, run on the data up to each of the last WF_FOLDS years (no earlier choices: they saw those years),
+    against the original parameters on that year. Passes when it gains on average and in at least as many years as
+    it loses."""
+    full = _MARKETS
+    folds = []
+    for k in range(1, WF_FOLDS + 1):
+        end = len(full) - (k - 1) * EXAM_SESSIONS
+        test, past = full[end - EXAM_SESSIONS:end], full[:end - EXAM_SESSIONS]
+        if len(past) < 4 * EXAM_SESSIONS:
+            break
+        _, r = _search(strategy, past, fold=True)
+        new = simulate(strategy, r["chosen"], test, detail=False)["points"]
+        original = simulate(strategy, r["default"], test, detail=False)["points"]
+        folds.append({"test": [test[0].as_of.isoformat(), test[-1].as_of.isoformat()], "new": new, "original": original,
+                      "changed": r["chosen"] != r["default"]})
+    gains = [f["new"] - f["original"] for f in folds]
+    wins, losses = sum(g > 0 for g in gains), sum(g < 0 for g in gains)
+    passed = not folds or (sum(gains) >= 0 and wins >= losses)
+    return {"folds": folds, "wins": wins, "losses": losses, "mean_gain": round(sum(gains) / max(len(gains), 1), 1),
+            "passed": passed}
+
+
+def _search(strategy: str, markets: list[Market], fold: bool = False, keep_live: bool = False) -> tuple[str, dict]:
+    """One search over these markets (its last year is the exam), on the worker processes when there are any."""
+    global _POOL
+    split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
+    _SEGMENTS.update(blocks=yearly_blocks(markets[:split]), train=markets[:split], valid=markets[split:])
     n = _workers()
     if n <= 1:
-        return _train_strategy(strategy)
+        return _train_strategy(strategy, markets, fold, keep_live)
     with multiprocessing.get_context("fork").Pool(n) as pool:  # forked now, so the workers share _SEGMENTS
         _POOL = pool
         try:
-            return _train_strategy(strategy)
+            return _train_strategy(strategy, markets, fold, keep_live)
         finally:
             _POOL = None
 
 
-def _train_strategy(strategy: str) -> tuple[str, dict]:
+def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bool = False,
+                    keep_live: bool = False) -> tuple[str, dict]:
     """Pick parameters that are consistently good, robust, survive the crises and hold up on the exam year.
 
     1. Generation 1: the original and random variants (shared rules included). Each runs every training year
@@ -929,7 +968,7 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
        parameters are tried in that zone only; the best is kept if it adds 2% to the training points and does
        not lose on the exam.
     """
-    markets = _MARKETS
+    markets = markets or _MARKETS
     train_mk, blocks, valid = _SEGMENTS["train"], _SEGMENTS["blocks"], _SEGMENTS["valid"]
     windows = crisis_windows(train_mk)
     low_turnover = strategy in agents.LOW_TURNOVER
@@ -940,10 +979,11 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
 
     pool = variants(strategy, VARIANTS_LONG if len(blocks) > LONG_YEARS else VARIANTS)
     n_random = len(pool)
-    claude = claude_candidates(strategy, pool[0]) if strategy != "indexador" else []
+    claude = claude_candidates(strategy, pool[0]) if strategy != "indexador" and not fold else []
     pool += [c["params"] for c in claude]
-    history = previous_choices(strategy) if strategy != "indexador" else []
-    incumbents = incumbent_candidates(strategy, pool[0]) if strategy != "indexador" else []
+    # a walk-forward fold searches as if those years had not happened: the earlier choices saw them
+    history = previous_choices(strategy) if strategy != "indexador" and not fold else []
+    incumbents = incumbent_candidates(strategy, pool[0]) if strategy != "indexador" and not fold else []
     first_incumbent = len(pool)
     pool += incumbents
     # The original first (every candidate is judged against it), then the new candidates, which stop early once they
@@ -1089,6 +1129,11 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
     if live and chosen != live[0] and new_obj < live[2] + max(abs(live[2]) * CHANGE_MARGIN, CHANGE_MIN):
         keep(*live)
         kept_previous["margin"] = CHANGE_MARGIN
+    if live and chosen != live[0] and keep_live:  # the search did not hold up out of sample (walk_forward)
+        keep(*live)
+        kept_previous["walk_forward"] = True
+    if fold:  # only the choice matters
+        return strategy, {"default": pool[0], "chosen": chosen}
 
     final_years = run_years(chosen)[0] if strategy != "indexador" else base
     final_obj = new_obj if new_obj is not None else overall(final_years, chosen_valid["points"])
@@ -1323,7 +1368,9 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
             f" · Sharpe {y.get('sharpe', 0):.1f}" + (f" · 💀 faliu {y['bankrupt']}" if y.get("bankrupt") else "") +
             f" · exame: {v['best']['points']:+g} vs {v['default']['points']:+g}"
             + (f" · vs S&P 500: **{r['overall']:+g}** ({r['years_beating_index']}/{r['years_total']} anos acima)"
-               if "overall" in r else "") + f" · {verdict}"
+               if "overall" in r else "")
+            + ((" · treino confirmado fora da amostra" if r["walk_forward"]["passed"] else " · ⚠️ treino não se confirma fora da amostra")
+               if (r.get("walk_forward") or {}).get("folds") else "") + f" · {verdict}"
         )
     fields = [("🧪 Como foi feito",
                f"Treino {results['train'][0]} a {results['train'][1]} · exame {results['valid'][0]} a {results['valid'][1]}.\n"
