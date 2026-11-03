@@ -6,7 +6,7 @@ use crate::pyround::{py_max, py_min, round_to};
 
 pub const SUPPORTED: &[&str] = &[
     "indexador", "guardiao", "rotador", "foguetao", "analista", "quant", "monge", "abutre", "pendulo", "cacador", "sniper",
-    "campeao", "pescador", "deriva", "kamikaze",
+    "campeao", "pescador", "deriva", "kamikaze", "estratega",
 ];
 
 /// Strategies that trade only ETFs or other agents' portfolios (agents.NO_REGION).
@@ -90,6 +90,7 @@ pub fn run(strategy: &str, port: &mut Port, m: &Mkt, p: &P, region: i64) -> Vec<
         "cacador" => cacador(port, m, p, region),
         "sniper" => sniper(port, m, p, region),
         "campeao" => campeao(port, m, p, region),
+        "estratega" => estratega(port, m, p, region),
         "pescador" => pescador(port, m, p, region),
         "deriva" => deriva(port, m, p, region),
         "kamikaze" => kamikaze(port, m, p, region),
@@ -414,6 +415,84 @@ fn campeao(port: &mut Port, m: &Mkt, p: &P, region: i64) -> Vec<Order> {
         if sec >= 0 { m.data.sectors_pt[sec as usize].clone() } else { String::new() }
     }).collect();
     rebalance(port, m, &targets, m.exposure() / targets.len() as f64, &[], p.get("stop_pct"), &format!("setor forte: {}", names.join(", ")))
+}
+
+/// agents.agenda_scores: the political-agenda score of each of these sectors.
+fn agenda_scores(m: &Mkt, sectors: &[i32], p: &P) -> Vec<f64> {
+    let d = m.data;
+    let get = |ix: &Vec<i32>, sec: i32| -> Option<f64> {
+        let i = ix[sec as usize];
+        if i < 0 { return None; }
+        let x = d.ctx_val[m.d * d.n_ctx + i as usize];
+        if x.is_nan() { None } else { Some(x) }
+    };
+    let rs: Vec<Option<f64>> = sectors.iter().map(|&sec| get(&d.sector_rs, sec)).collect();
+    let known: Vec<f64> = rs.iter().filter_map(|x| *x).collect();
+    let mean = if known.is_empty() { 0.0 } else { crate::pyround::py_sum(known.iter().copied()) / known.len() as f64 };
+    let sd = if known.is_empty() { 0.0 } else {
+        let sq: Vec<f64> = known.iter().map(|&x| (x - mean) * (x - mean)).collect();
+        (crate::pyround::py_sum(sq.iter().copied()) / known.len() as f64).sqrt()
+    };
+    sectors.iter().zip(rs.iter()).map(|(&sec, r)| {
+        let mom = match r { Some(x) if sd > 0.0 => (x - mean) / sd, _ => 0.0 };
+        p.req("peso_gasto") * get(&d.sector_gov, sec).unwrap_or(0.0)
+            + p.req("peso_incerteza") * get(&d.sector_epub, sec).unwrap_or(0.0)
+            + p.req("peso_momentum") * mom
+            - p.req("peso_capex") * get(&d.sector_capex, sec).unwrap_or(0.0)
+    }).collect()
+}
+
+fn estratega(port: &mut Port, m: &Mkt, p: &P, region: i64) -> Vec<Order> {
+    if !due(port, m, p.req("cada")) {
+        return Vec::new();
+    }
+    let v = View::new(port, m, region);
+    let mut sectors: Vec<i32> = Vec::new();
+    let mut members: Vec<Vec<usize>> = Vec::new();
+    for &r in &v.list {
+        let sec = v.rows.sector[r];
+        if sec < 0 || m.data.sector_has_key[sec as usize] == 0 {
+            continue;
+        }
+        match sectors.iter().position(|&x| x == sec) {
+            Some(i) => members[i].push(r),
+            None => {
+                sectors.push(sec);
+                members.push(vec![r]);
+            }
+        }
+    }
+    let keep: Vec<usize> = (0..sectors.len()).filter(|&i| members[i].len() >= 5).collect();
+    let secs: Vec<i32> = keep.iter().map(|&i| sectors[i]).collect();
+    let score = agenda_scores(m, &secs, p);
+    let mut order: Vec<usize> = (0..secs.len()).collect();
+    sort_by_key(&mut order, |k| score[k], true);
+    let top: Vec<usize> = order.into_iter().filter(|&k| score[k] > 0.0).take(p.req("setores") as usize).collect();
+    let mut targets: Vec<usize> = Vec::new();
+    for &k in &top {
+        let mut ranked = members[keep[k]].clone();
+        sort_by_key(&mut ranked, |r| 1000.0 * (v.rows.stage2[r] as i32 as f64) + v.rows.trend[r], true);
+        targets.extend(ranked.into_iter().take(p.req("por_setor") as usize).map(|r| v.sym(r)));
+    }
+    let Some(&core) = m.data.by_name.get("SXR8.DE") else { return Vec::new() };
+    let nucleo = p.req("nucleo");
+    let zone = if p.on("segue_zona") { m.exposure() } else { 1.0 };
+    let weight = (1.0 - nucleo) * zone / py_max(targets.len() as f64, 1.0);
+    let names: Vec<String> = top.iter().map(|&k| m.data.sectors_pt[secs[k] as usize].clone()).collect();
+    let mut orders = rebalance(port, m, &targets, weight, &[core], p.get("stop_pct"), &format!("agenda: {}", names.join(", ")));
+    let eq = equity(port, m);
+    let pos = port.positions.get(&core);
+    let current = match pos { Some(pos) => position_value(m, core, pos) / eq, None => 0.0 };
+    let target = nucleo + (1.0 - nucleo) * (if targets.is_empty() { 1.0 } else { 0.0 });
+    let folga = p.req("folga");
+    if current < target - folga {
+        orders.push(order_buy(core, (target - current) * eq, "núcleo S&P 500", None, None));
+    } else if pos.is_some() && current > target + folga {
+        let mut o = order_sell(core, "núcleo S&P 500");
+        o.fraction = (current - target) / current;
+        orders.push(o);
+    }
+    orders
 }
 
 fn time_sells(port: &Port, m: &Mkt, max_days: f64) -> Vec<Order> {

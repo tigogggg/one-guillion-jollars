@@ -10,7 +10,8 @@ Reply to him in **pt-PT**, short and clear; commit messages in English.
   The whole site requires sign-in; `/` is the portal. Deployed by `.github/workflows/deploy-worker.yml` on push.
 - `scripts/`: Python (run with `uv run python scripts/...`). Agents league (`agents.py`), pre-training / backtest
   (`pretrain.py`), market context (`context.py`: VIX, policy uncertainty, credit, rates, dollar, geopolitical risk,
-  oil, gold, sector ETFs), SEC fundamentals point-in-time (`fundamentals.py`), opportunities (`opportunities.py`),
+  oil, gold, sector ETFs), political agenda by sector (`policy.py`: federal contract spending, policy-uncertainty
+  exposure, investment growth; used by the Estratega), SEC fundamentals point-in-time (`fundamentals.py`), opportunities (`opportunities.py`),
   proposals (`proposals.py`), news + Claude geopolitics + SEC 8-Ks (`news.py`), US House members' disclosed trades
   (`congress.py`), Claude agent review (`agent_review.py`),
   platform update notes (`updates.py`), evolution history (`evolution.py`), local training (`train_local.py`).

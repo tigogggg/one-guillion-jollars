@@ -46,7 +46,7 @@ import pandas as pd
 import agents
 
 ALL = ["guardiao", "rotador", "foguetao", "analista", "quant", "monge", "abutre", "pendulo", "cacador", "sniper",
-       "campeao", "pescador", "deriva", "kamikaze"]
+       "campeao", "pescador", "deriva", "kamikaze", "estratega"]
 # Diversified teams: who sits at the desks differs; the rest (manager, risk, execution) each team searches in PARAMS.
 # "auto:<rule>": members chosen from the training years only (never the exam).
 TEAMS = {

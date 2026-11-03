@@ -259,3 +259,25 @@ def test_the_desks_insights_are_recorded_without_changing_the_run(markets):
     for d, s in bought:  # every buy follows an insight on the decision day before (the order fills at the next open)
         prev = max((x for x in days if x < d), default=None)
         assert (prev, s) in signalled
+
+
+def test_the_estratega_trades_exactly_like_python(markets, monkeypatch):
+    import dataclasses
+
+    keys = ["sec_XLV", "sec_XLE", "sec_XLF", "sec_XLI"]
+    agenda = []
+    for k, m in enumerate(markets):
+        ctx = dict(m.context)
+        for j, key in enumerate(keys):  # the agenda signals move at different speeds; some missing early on
+            if k > 40 * j:
+                ctx[f"{key}_gov"] = round(math.sin(k / (30 + 7 * j)), 5)
+            ctx[f"{key}_epub"] = round(math.cos(k / (50 + 11 * j)), 5)
+            if j != 2:
+                ctx[f"{key}_capex"] = round(0.5 * math.sin(k / 80 + j), 5)
+            ctx[f"{key}_rs"] = round(0.05 * math.sin(k / (25 + 5 * j)), 5)
+        agenda.append(dataclasses.replace(m, context=ctx))
+    base = {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES["estratega"][2]}
+    compare("estratega", base, agenda, monkeypatch, min_trades=10)
+    compare("estratega", {**base, "nucleo": 0.2, "setores": 2, "cada": 7, "segue_zona": 1, "stop_pct": 0.1, "peso_capex": 0},
+            agenda, monkeypatch, min_trades=10)
+    compare("estratega", {**base, **SHARED}, agenda, monkeypatch, min_trades=1)

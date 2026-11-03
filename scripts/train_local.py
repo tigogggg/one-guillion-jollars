@@ -36,7 +36,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 PY = [sys.executable]
 STRATEGIES = ["guardiao", "rotador", "foguetao", "analista", "quant", "monge", "abutre", "pendulo", "cacador", "sniper",
-              "campeao", "pescador", "deriva", "kamikaze", "indexador"]
+              "campeao", "pescador", "deriva", "kamikaze", "estratega", "indexador"]
 
 
 AGENTS = REPO / "agents"  # clone of the private data repo

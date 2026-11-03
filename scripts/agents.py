@@ -296,6 +296,12 @@ PARAM_BOUNDS = {
     "so_tendencia": (0, 1, int),
     # Abutre: how far below the 52-week high a quality stock must be
     "queda_min": (0.10, 0.45, float),
+    # Estratega: the core in the S&P 500, the weights of the political-agenda signals by sector (policy.py)
+    "nucleo": (0.0, 0.8, float),
+    "peso_gasto": (0.0, 2.0, float),
+    "peso_incerteza": (0.0, 2.0, float),
+    "peso_capex": (0.0, 2.0, float),
+    "segue_zona": (0, 1, int),
     # Pêndulo: minimum momentum of the best equity ETF to stay in equities
     "limiar_mom": (0.0, 0.08, float),
 }
@@ -1496,6 +1502,62 @@ def s_campeao(cfg, port, mkt, p):
                      "setor forte: " + ", ".join(SECTORS_PT.get(s, s) for s in top))
 
 
+def agenda_scores(mkt: Market, sectors: list[str], p: dict) -> dict[str, float]:
+    """Each sector's political-agenda score (policy.py): where public contract spending is growing more than usual,
+    the least exposed to policy uncertainty, the strongest over 3 months against the S&P 500 (as a z-score across these
+    sectors), minus the growth of its companies' investment (a guard). A missing signal counts 0."""
+    import context
+
+    keys = {sec: context.sector_key(sec) for sec in sectors}
+    rs = [mkt.context.get(f"{keys[sec]}_rs") for sec in sectors]
+    known = [x for x in rs if x is not None]
+    mean = sum(known) / len(known) if known else 0.0
+    sd = math.sqrt(sum((x - mean) * (x - mean) for x in known) / len(known)) if known else 0.0
+    out = {}
+    for sec, r in zip(sectors, rs):
+        k = keys[sec]
+        mom = (r - mean) / sd if r is not None and sd > 0 else 0.0
+        out[sec] = (p["peso_gasto"] * (mkt.context.get(f"{k}_gov") or 0.0)
+                    + p["peso_incerteza"] * (mkt.context.get(f"{k}_epub") or 0.0)
+                    + p["peso_momentum"] * mom
+                    - p["peso_capex"] * (mkt.context.get(f"{k}_capex") or 0.0))
+    return out
+
+
+def s_estratega(cfg, port, mkt, p):
+    """A core in the S&P 500 (nucleo of the equity) and the rest in the best stocks of the sectors the political agenda
+    favours (agenda_scores above 0), every `cada` sessions."""
+    import context
+
+    if not due(port, mkt, p["cada"]):
+        return []
+    by_sector: dict[str, list[str]] = {}
+    for s, m in mkt.stocks.items():
+        if context.sector_key(m["sector"]):
+            by_sector.setdefault(m["sector"], []).append(s)
+    sectors = [sec for sec, syms in by_sector.items() if len(syms) >= 5]
+    score = agenda_scores(mkt, sectors, p)
+    top = [sec for sec in sorted(sectors, key=score.get, reverse=True) if score[sec] > 0][: p["setores"]]
+    targets = []
+    for sec in top:
+        # the strongest trends first, those in a stage 2 uptrend before the rest
+        ranked = sorted(by_sector[sec], key=lambda s: 1000 * mkt.stocks[s]["stage2"] + mkt.stocks[s]["trend_score"], reverse=True)
+        targets += ranked[: p["por_setor"]]
+    core = BENCHMARK
+    weight = (1 - p["nucleo"]) * (exposure(mkt) if p["segue_zona"] else 1.0) / max(len(targets), 1)
+    orders = rebalance(port, mkt, targets, weight, {core}, p.get("stop_pct"),
+                       "agenda: " + ", ".join(SECTORS_PT.get(s, s) for s in top))
+    eq = equity(port, mkt)
+    pos = port["positions"].get(core)
+    current = position_value(mkt, core, pos) / eq if pos else 0.0
+    target = p["nucleo"] + (1 - p["nucleo"]) * (0.0 if targets else 1.0)  # no favoured sector: all in the index
+    if current < target - p["folga"]:
+        orders.append(order_buy(core, (target - current) * eq, "núcleo S&P 500"))
+    elif pos and current > target + p["folga"]:
+        orders.append(order_sell(core, "núcleo S&P 500", fraction=(current - target) / current))
+    return orders
+
+
 def s_pescador(cfg, port, mkt, p):
     orders = [order_sell(s, f"{p['max_dias']} sessões") for s, pos in port["positions"].items()
               if sessions_since(mkt, pos["entry_date"]) >= p["max_dias"]]
@@ -1761,6 +1823,9 @@ STRATEGIES = {
     "cacador": (s_cacador, "Rompimentos com volume", {"n": 5, "risco_pct": 0.02, "alvo_r": 3.0, "max_pos": 0.30}),
     "sniper": (s_sniper, "Contração de volatilidade (VCP)", {"n": 4, "risco_pct": 0.01, "aperto_pct": 0.06, "max_pos": 0.30}),
     "campeao": (s_campeao, "Melhores ações dos setores mais fortes", {"setores": 2, "por_setor": 2, "stop_pct": 0.12, "cada": 5}),
+    "estratega": (s_estratega, "S&P 500 como núcleo e o resto nos setores para onde vai o dinheiro público e o investimento",
+                  {"nucleo": 0.5, "setores": 3, "por_setor": 3, "cada": 21, "folga": 0.05, "segue_zona": 0,
+                   "peso_gasto": 1.0, "peso_incerteza": 1.0, "peso_momentum": 1.0, "peso_capex": 0.5}),
     "pescador": (s_pescador, "Compra quedas em ações em tendência", {"n": 5, "queda_pct": 0.05, "alvo_pct": 0.06, "stop_pct": 0.07, "max_dias": 10}),
     "jornalista": (s_jornalista, "Negoceia notícias analisadas pelo Claude", {"n": 5, "limiar": 4, "stop_pct": 0.08, "max_dias": 10}),
     "deriva": (s_deriva, "Segue saltos com volume (deriva pós-notícia/resultados)", {"n": 5, "salto_pct": 0.04, "max_dias": 20}),

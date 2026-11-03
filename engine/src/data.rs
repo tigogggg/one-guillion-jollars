@@ -82,6 +82,11 @@ pub struct Data {
     /// Context columns of each sector's trend and relative strength (filtro_setor), -1 when unknown.
     pub sector_trend: Vec<i32>,
     pub sector_rs: Vec<i32>,
+    /// The political-agenda fields of each sector (policy.py): context column or -1; whether it has a sector ETF.
+    pub sector_gov: Vec<i32>,
+    pub sector_epub: Vec<i32>,
+    pub sector_capex: Vec<i32>,
+    pub sector_has_key: Vec<u8>,
     pub days: Vec<i32>,
     pub zone: Vec<u8>,
     pub sessions: Vec<i32>,

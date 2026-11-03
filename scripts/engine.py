@@ -208,10 +208,13 @@ def build(markets: list, symbols: list[str] | None = None, sectors: list[str] | 
 
     sectors = sorted(sector_ix, key=sector_ix.get)
     trend_ix, rs_ix = [], []
+    agenda: dict[str, list[int]] = {"gov": [], "epub": [], "capex": []}
     for sec in sectors:
         key = context.sector_key(sec)
         trend_ix.append(ctx_fields.index(f"{key}_trend") if key and f"{key}_trend" in ctx_fields else -1)
         rs_ix.append(ctx_fields.index(f"{key}_rs") if key and f"{key}_rs" in ctx_fields else -1)
+        for suffix, ix in agenda.items():
+            ix.append(ctx_fields.index(f"{key}_{suffix}") if key and f"{key}_{suffix}" in ctx_fields else -1)
     zones = {z: i for i, z in enumerate(agents.ZONES)}
     data = {
         "fields": fields, "nullable": np.array([1 if f in nullable else 0 for f in fields], dtype=np.uint8),
@@ -225,6 +228,9 @@ def build(markets: list, symbols: list[str] | None = None, sectors: list[str] | 
         "sym_defensive": np.array([1 if s in agents.DEFENSIVE_ETFS else 0 for s in symbols], dtype=np.uint8),
         "sectors": sectors, "sectors_pt": [agents.SECTORS_PT.get(x, x) for x in sectors], "sector_unknown": sector_ix.get("Unknown", -1),
         "sector_trend": np.array(trend_ix, dtype=np.int32), "sector_rs": np.array(rs_ix, dtype=np.int32),
+        "sector_gov": np.array(agenda["gov"], dtype=np.int32), "sector_epub": np.array(agenda["epub"], dtype=np.int32),
+        "sector_capex": np.array(agenda["capex"], dtype=np.int32),
+        "sector_has_key": np.array([1 if context.sector_key(sec) else 0 for sec in sectors], dtype=np.uint8),
         "days": np.array([day_num(m.as_of) for m in markets], dtype=np.int32),
         "zone": np.array([zones[m.zone] for m in markets], dtype=np.uint8),
         "sessions": np.array([day_num(d) for d in markets[-1].sessions], dtype=np.int32),

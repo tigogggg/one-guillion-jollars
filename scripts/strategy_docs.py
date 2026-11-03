@@ -68,7 +68,7 @@ PARAMS = {
 }
 
 PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext", "gap_max",
-              "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max", "queda_min", "limiar_mom"}
+              "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max", "queda_min", "limiar_mom", "nucleo"}
 
 # strategy: (idea, buys when, sells when, position size)
 DOCS = {
@@ -197,6 +197,12 @@ DOCS = {
         "A cada {cada} sessões copia a carteira combinada dos {lideres} agentes que mais batem o S&P 500 na zona atual do mercado (alta, neutra, cautelosa ou queda): pelo registo ao vivo nessa zona (15+ dias) ou, até lá, pelo pré-treino.",
         "Vende o que sai das carteiras dos líderes; fica em dinheiro se nenhum agente bater o S&P 500 nesta zona.",
         "Os pesos das posições dos líderes, até {n} ações.",
+    ),
+    "estratega": (
+        "Segue o dinheiro: o S&P 500 como base e o resto nos setores para onde vai o dinheiro público, com menos risco político, mais fortes e sem excesso de investimento.",
+        "A cada {cada} sessões dá a cada setor uma nota: o gasto federal em contratos a crescer mais do que o costume (peso {peso_gasto}), pouca exposição à incerteza política (peso {peso_incerteza}), a força a 3 meses face ao S&P 500 (peso {peso_momentum}), menos o crescimento do investimento das empresas (peso {peso_capex}). Compra as {por_setor} ações mais fortes dos {setores} setores com melhor nota (acima de 0).",
+        "Vende as que saem da seleção; sem setores favorecidos, fica todo no S&P 500.",
+        "{nucleo} no S&P 500 (núcleo, com folga de {folga}); o resto em partes iguais pelas ações escolhidas.",
     ),
     "kamikaze": (
         "Muito agressivo: tudo nas maiores subidas recentes, sem travões.",

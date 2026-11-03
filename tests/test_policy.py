@@ -23,7 +23,6 @@ def test_public_spending_is_a_cross_sector_surprise_known_three_months_later():
     assert sig.index[0] == idx[0] + pd.offsets.MonthEnd(policy.GOV_LAG_MONTHS)  # known only 3 months after
     after = sig.loc[idx[40] + pd.offsets.MonthEnd(3)]
     assert after["sec_C"] > 1 and after["sec_A"] < 0
-    assert sig.loc[: idx[35] + pd.offsets.MonthEnd(3)].abs().max().max() < 1e-9 or True  # flat before: no surprise
     assert np.nanmean(after) == pytest.approx(0, abs=1e-9)
 
 
