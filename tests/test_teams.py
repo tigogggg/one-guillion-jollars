@@ -46,3 +46,26 @@ def test_teams_run_end_to_end_and_are_graded_like_the_strategies(monkeypatch):
     for t in r["teams"].values():
         assert t["configs"] == 4 and len(t["walk_forward"]["folds"]) == 3 and t["membros"]
         assert set(teams.PARAMS) <= set(t["params"]) and 0 <= t["exposure"] <= 1.5
+
+
+def test_the_population_evolves_keeping_the_paths_good_in_training_and_validation(monkeypatch, tmp_path):
+    from test_engine import markets as fixture
+
+    markets = fixture.__wrapped__()
+    monkeypatch.setattr(pretrain, "_MARKETS", markets)
+    monkeypatch.setattr(teams, "POPULATION_DIR", tmp_path)
+    monkeypatch.setattr(teams, "VAL_YEARS", 1)
+    monkeypatch.setattr(teams, "desk_params", lambda s, p: {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST},
+                                                            **agents.STRATEGIES[s][2]})
+    r = teams.evolve(markets, "equilibrado", 1000.0, generations=2)
+    state = __import__("json").loads((tmp_path / "equipas_populacao-equilibrado.json").read_text())
+    assert state["generation"] == 2 and len(state["teams"]) == teams.POP_SIZE and len(r["kept"]) == teams.KEEP
+    assert any(t["origem"].startswith(("mutação", "cruzamento")) for t in state["teams"])
+    again = teams.evolve(markets, "equilibrado", 1000.0, generations=1)  # it carries on from where it stopped
+    assert again["generation"] == 3
+
+
+def test_risk_parity_gives_each_desk_the_same_risk():
+    cov = np.array([[0.04, 0.0], [0.0, 0.01]])
+    w = teams.risk_parity(cov)
+    assert w[1] == pytest.approx(2 * w[0], rel=1e-3)  # half the volatility, twice the weight

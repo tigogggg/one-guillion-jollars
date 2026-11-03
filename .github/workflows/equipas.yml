@@ -1,5 +1,5 @@
 name: Equipas
-run-name: "Equipas de agentes (${{ inputs.perfis || 'todos os perfis' }})"
+run-name: "Equipas de agentes: ${{ inputs.modo || 'evoluir' }} (${{ inputs.perfis || 'todos os perfis' }})"
 
 # The teams (scripts/teams.py): the strategies as signal desks under a portfolio manager and a risk manager, each
 # team searching its parameters on the training years, judged on the exam year and walk-forward, compared with the
@@ -21,9 +21,17 @@ on:
         required: false
         default: "0"
       mesas:
-        description: "Parâmetros das mesas: treinadas (os dos agentes) ou padrao (os originais, sem otimismo do treino)"
+        description: "Parâmetros das mesas: padrao (os originais: a validação não foi vista pelo treino) ou treinadas"
         required: false
-        default: "treinadas"
+        default: "padrao"
+      modo:
+        description: "evoluir (população de 20 equipas, as 10 melhores dão origem a novas) ou procura (8 equipas fixas)"
+        required: false
+        default: "evoluir"
+      geracoes:
+        description: "Gerações por execução (modo evoluir)"
+        required: false
+        default: "5"
 
 permissions:
   contents: read
@@ -84,7 +92,9 @@ jobs:
           PRETRAIN_PERFIL: ${{ matrix.perfil }}
           EQUIPAS_PROCURA: ${{ inputs.procura || '80' }}
           EQUIPAS_SEMENTE: ${{ inputs.semente || '0' }}
-          EQUIPAS_MESAS: ${{ inputs.mesas || 'treinadas' }}
+          EQUIPAS_MESAS: ${{ inputs.mesas || 'padrao' }}
+          EQUIPAS_MODO: ${{ inputs.modo || 'evoluir' }}
+          EQUIPAS_GERACOES: ${{ inputs.geracoes || '5' }}
         run: uv run python scripts/teams.py --perfil "${{ matrix.perfil }}" --contexto ctx/context.csv
       - name: Guardar no repositório privado
         working-directory: agents

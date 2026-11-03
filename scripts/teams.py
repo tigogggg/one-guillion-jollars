@@ -17,6 +17,12 @@ A team (TEAMS):
 Grading, the same for teams, desks alone and the index: each training year's profile grade minus the index's
 (agents.relative_points), from one continuous run; the exam is the last year; `overall` as in the pre-training. Taxes
 are inside the curves (paid when due); the index's, deferred, are not (at the end: after-tax returns of all).
+Two modes (EQUIPAS_MODO): "evoluir" (default): a population of POP_SIZE teams with different defaults; each
+generation judges them on the training years and on validation (the VAL_YEARS before the exam, which stays sealed),
+keeps the KEEP that do well in both and breeds as many new teams from them (mutations, crossings); the population is
+saved (agents/lab/equipas_populacao-<profile>.json) and carries on in the next run. "procura": the eight fixed TEAMS,
+each searching its parameters at random.
+
 Results go to the private repo (agents/lab/equipas-<profile>-<date>.json, equipas_historico-<profile>.json), never to the Actions log.
 
     uv run python scripts/teams.py --contexto ctx/context.csv            # (PRICE_CACHE_DIR with the prices)
@@ -62,7 +68,8 @@ TEAMS = {
 PARAMS = {
     # capital across the desks: the same; by 12-month return; inverse 3-month volatility; 12-month Sharpe; the 3 best;
     # a mild tilt (x1.5 above the desks' average return, x0.5 below; Ehsani & Linnainmaa vs Goyal & Wahal)
-    "gestor": ["igual", "momento", "risco", "sharpe", "top3", "inclinacao"],
+    # risk parity: each desk the same share of the team's risk (covariance of the last 12 months, shrunk to the diagonal)
+    "gestor": ["igual", "momento", "risco", "sharpe", "top3", "inclinacao", "paridade"],
     "corte_mesa": [0, 1],          # pod rule: a desk down more than its yearly volatility gets half, 1.5x: nothing
     "normalizar": [1, 0],          # 1: the desks' picks fill the exposure (no cash left because a desk is half in cash)
     "consenso": [0.0, 0.5, 1.0],   # extra weight for a stock several desks hold (x (1 + c x (desks - 1)))
@@ -87,7 +94,7 @@ MAX_DESK = 0.4
 OUT_DIR = agents.REPO_AGENTS / "lab"
 
 
-DESKS = os.environ.get("EQUIPAS_MESAS") or "treinadas"  # "padrao": the strategies' original parameters (never fitted)
+DESKS = os.environ.get("EQUIPAS_MESAS") or "padrao"  # "padrao": the strategies' original parameters (never fitted)
 
 
 def desk_params(strategy: str, profile: str) -> dict:
@@ -218,6 +225,14 @@ def manager(style: str, equities: np.ndarray, i: int) -> np.ndarray:
                 break
             a[free] += spare * a[free] / a[free].sum()
         return a / a.sum()
+    if style == "paridade":
+        if i < MOMENTUM_DAYS:
+            return equal
+        seg = equities[i - MOMENTUM_DAYS:i + 1]
+        rets = np.nan_to_num(seg[1:] / seg[:-1] - 1)
+        cov = np.cov(rets, rowvar=False)
+        cov = 0.7 * cov + 0.3 * np.diag(np.diag(cov)) + np.eye(m) * 1e-8  # shrinkage towards the diagonal
+        return risk_parity(cov)
     if style == "risco":
         if i < VOL_DAYS + 1:
             return equal
@@ -226,6 +241,23 @@ def manager(style: str, equities: np.ndarray, i: int) -> np.ndarray:
         a = 1 / vol
         return a / a.sum()
     return equal
+
+
+def risk_parity(cov: np.ndarray, iters: int = 100) -> np.ndarray:
+    """Equal risk contribution weights (w_i (cov w)_i the same for every i), by the fixed point w_i ∝ 1 / (cov w)_i
+    (Spinu's cyclical rule simplified), long only, summing to 1."""
+    m = cov.shape[0]
+    w = np.full(m, 1.0 / m)
+    for _ in range(iters):
+        mrc = cov @ w
+        new = 1 / np.maximum(mrc, 1e-12)
+        new /= new.sum()
+        new = 0.5 * w + 0.5 * new
+        if np.abs(new - w).max() < 1e-9:
+            w = new
+            break
+        w = new
+    return w / w.sum()
 
 
 def drawdown(eq: np.ndarray) -> float:
@@ -489,7 +521,8 @@ def configs(rng: np.random.Generator, n: int, extra: dict | None = None) -> list
     return out
 
 
-def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, seed: int = 0) -> dict:
+def prepare(markets: list, profile: str, capital: float) -> dict:
+    """The desks' day loops, their weights, prices in euros, the index and the yearly blocks (shared by every team)."""
     import pretrain
 
     split = max(len(markets) - pretrain.EXAM_SESSIONS, len(markets) * 2 // 3)
@@ -513,6 +546,17 @@ def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, s
         alone[s]["continuous_overall"] = alone[s]["overall"]
         if s in reports:
             alone[s].update({k: v for k, v in reports[s].items() if v is not None})
+    return {"split": split, "blocks": blocks, "desks": desks, "symbols": symbols, "close": close, "open": open_,
+            "weights": weights, "bench": bench, "index": index, "alone": alone}
+
+
+def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, seed: int = 0) -> dict:
+    import pretrain
+
+    ctx = prepare(markets, profile, capital)
+    split, blocks, desks, symbols = ctx["split"], ctx["blocks"], ctx["desks"], ctx["symbols"]
+    close, open_, weights, bench = ctx["close"], ctx["open"], ctx["weights"], ctx["bench"]
+    index, alone = ctx["index"], ctx["alone"]
     rng = np.random.default_rng(seed)
     teams = {}
     for key, team in TEAMS.items():
@@ -553,6 +597,152 @@ def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, s
             "index": index, "alone": alone, "teams": teams}
 
 
+# --------------------------------------------------------------------------
+# A population of teams that evolves: not a competition, a way to find paths that hold up and grow new teams from them
+# --------------------------------------------------------------------------
+
+POP_SIZE = 20
+KEEP = 10  # the "correct paths" kept each generation; as many new teams are bred from them
+VAL_YEARS = 6  # validation: the years before the exam (the exam is sealed: reported, never used)
+GENERATIONS = int(os.environ.get("EQUIPAS_GERACOES") or 5)
+FAMILIES = {  # members of the first generation's teams
+    "todos": ALL, "robusta": TEAMS["robusta"]["membros"], "tendencia": TEAMS["tendencia"]["membros"],
+    "qualidade": TEAMS["qualidade"]["membros"], "etf": TEAMS["etf"]["membros"],
+}
+# The first generation: 20 different defaults (families x styles from the research: equal weight with a volatility
+# cap, inverse volatility, risk parity, mild momentum tilt, pod cuts, trend gate with a refuge, core and satellites,
+# consensus, monthly bands...).
+STYLES = [
+    {"gestor": "igual", "vol_alvo": 0.15, "cada": 21, "banda": 0.04},
+    {"gestor": "risco", "max_nome": 0.06, "cada": 21},
+    {"gestor": "paridade", "cada": 21, "ajuste": 0.5},
+    {"gestor": "inclinacao", "corte_mesa": 1},
+    {"gestor": "igual", "tendencia": 1, "queda": 0.5, "refugio": "EUNH.DE", "cada": 21},
+    {"gestor": "igual", "consenso": 1.0, "min_mesas": 2, "max_posicoes": 20},
+    {"gestor": "momento", "travao_dd": 0.15},
+    {"gestor": "sharpe", "colheita": 1, "cada": 5},
+]
+POPULATION_DIR = OUT_DIR
+
+
+def first_generation(rng: np.random.Generator) -> list[dict]:
+    base = {k: v[0] for k, v in PARAMS.items()}
+    out = []
+    fams = list(FAMILIES)
+    for n in range(POP_SIZE):
+        fam = fams[n % len(fams)]
+        style = STYLES[(n * 3 + n // len(fams)) % len(STYLES)]
+        params = {**base, **style}
+        if n in (7, 13):  # two core-and-satellite teams
+            params["nucleo"] = 0.5
+        out.append({"id": f"g0-{n + 1:02d}", "familia": fam, "membros": list(FAMILIES[fam]), "params": params,
+                    "origem": "geração 0"})
+    return out
+
+
+def mutate_team(team: dict, rng: np.random.Generator, gen: int, n: int) -> dict:
+    """A child: 1 to 3 parameters changed (any value of PARAMS), sometimes a desk in or out."""
+    params = dict(team["params"])
+    for k in rng.choice(list(PARAMS), size=int(rng.integers(1, 4)), replace=False):
+        params[k] = PARAMS[k][int(rng.integers(len(PARAMS[k])))]
+    if "nucleo" in params and rng.random() < 0.3:
+        params["nucleo"] = float(rng.choice([0.3, 0.5, 0.6]))
+    members = list(team["membros"])
+    if rng.random() < 0.4:
+        out = [s for s in ALL if s not in members]
+        if rng.random() < 0.5 and len(members) > 3:
+            members.remove(str(rng.choice(members)))
+        elif out:
+            members.append(str(rng.choice(out)))
+    return {"id": f"g{gen}-{n:02d}", "familia": team["familia"], "membros": members, "params": params,
+            "origem": f"mutação de {team['id']}"}
+
+
+def cross_teams(a: dict, b: dict, rng: np.random.Generator, gen: int, n: int) -> dict:
+    """A child of two: each parameter from one of them, the desks of one of them."""
+    params = {k: (a["params"] if rng.random() < 0.5 else b["params"]).get(k, PARAMS[k][0]) for k in PARAMS}
+    core = [x["params"]["nucleo"] for x in (a, b) if "nucleo" in x["params"]]
+    if core and rng.random() < 0.5:
+        params["nucleo"] = core[0]
+    src = a if rng.random() < 0.5 else b
+    return {"id": f"g{gen}-{n:02d}", "familia": src["familia"], "membros": list(src["membros"]), "params": params,
+            "origem": f"cruzamento de {a['id']} e {b['id']}"}
+
+
+def judge(team: dict, ctx: dict, markets: list, capital: float) -> dict:
+    """Its yearly points (as the pre-training): training years, validation (the VAL_YEARS before the exam), exam."""
+    import pretrain
+
+    members = [s for s in team["membros"] if s in ctx["desks"]]
+    pts = team_points(team["params"], members, ctx["desks"], ctx["weights"], markets, ctx["symbols"], ctx["open"],
+                      ctx["close"], capital, ctx["blocks"])
+    train, val, exam = pts[:-1 - VAL_YEARS], pts[-1 - VAL_YEARS:-1], pts[-1]
+    return {"train": round(pretrain.weighted(train), 1), "val": round(float(np.mean(val)), 1),
+            "val_wins": int(sum(v > 0 for v in val)), "val_years": [round(v, 1) for v in val], "exam": round(exam, 1),
+            "overall": round(pretrain.overall(pts[:-1], exam), 1)}
+
+
+def select(pop: list[dict]) -> list[dict]:
+    """The KEEP teams that do well in the training years and in validation at once (mean of the two ranks): a path
+    is "correct" when it is not good in only one of them."""
+    by_train = sorted(pop, key=lambda t: -t["score"]["train"])
+    by_val = sorted(pop, key=lambda t: -t["score"]["val"])
+    rank = {t["id"]: (by_train.index(t) + by_val.index(t)) / 2 for t in pop}
+    return sorted(pop, key=lambda t: (rank[t["id"]], -t["score"]["val"]))[:KEEP]
+
+
+def evolve(markets: list, profile: str, capital: float, generations: int = GENERATIONS, seed: int = 0) -> dict:
+    import pretrain
+
+    path = POPULATION_DIR / f"equipas_populacao-{profile}.json"
+    try:
+        state = json.loads(path.read_text())
+    except (OSError, ValueError):
+        state = {"generation": 0, "teams": None, "log": []}
+    rng = np.random.default_rng(seed + 1000 * state["generation"])
+    ctx = prepare(markets, profile, capital)
+    pop = state["teams"] or first_generation(rng)
+    gen = state["generation"]
+    log = state.get("log", [])
+    for _ in range(generations):
+        for t in pop:  # every generation judges everyone again (the desks may have new parameters)
+            t["score"] = judge(t, ctx, markets, capital)
+        keep = select(pop)
+        log.append({"generation": gen, "at": datetime.now(timezone.utc).isoformat(timespec="minutes"),
+                    "kept": [t["id"] for t in keep],
+                    "best_val": max(t["score"]["val"] for t in pop), "median_val": float(np.median([t["score"]["val"] for t in pop])),
+                    "best_train": max(t["score"]["train"] for t in pop)})
+        print(f"Geração {gen}: avaliada", flush=True)
+        gen += 1
+        children = []
+        for n in range(POP_SIZE - KEEP):
+            if n % 2 == 0:
+                children.append(mutate_team(keep[n % KEEP], rng, gen, n + 1))
+            else:
+                a, b = rng.choice(KEEP, size=2, replace=False)
+                children.append(cross_teams(keep[a], keep[b], rng, gen, n + 1))
+        pop = [dict(t, sobreviveu=t.get("sobreviveu", 0) + 1) for t in keep] + children
+    for t in pop:
+        if "score" not in t or t["id"].startswith(f"g{gen}-"):
+            t["score"] = judge(t, ctx, markets, capital)
+    keep = select(pop)
+    # the paths kept, in detail: 20 years in one go, after tax (the exam's numbers are reported, never used)
+    detail = []
+    for t in keep:
+        members = [s for s in t["membros"] if s in ctx["desks"]]
+        r = run_team(t["params"], members, ctx["desks"], ctx["weights"], markets, ctx["symbols"], ctx["open"], ctx["close"], capital)
+        g = grade(r["curve"], ctx["bench"], ctx["blocks"], r["tax_owed"], r["trades"])
+        detail.append({**{k: t[k] for k in ("id", "familia", "membros", "params", "origem")}, "score": t["score"],
+                       "sobreviveu": t.get("sobreviveu", 0), "return_after_tax": g["return_after_tax"],
+                       "max_drawdown": g["max_drawdown"], "exposure": round(r["exposure"], 3), "trades": r["trades"]})
+    state = {"generation": gen, "profile": profile, "broker": agents.BROKER, "teams": pop, "log": log[-200:],
+             "trials": state.get("trials", 0) + generations * POP_SIZE}
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=1, default=float) + "\n")
+    return {"at": datetime.now(timezone.utc).isoformat(timespec="minutes"), "profile": profile, "broker": agents.BROKER,
+            "generation": gen, "trials": state["trials"], "days": [markets[0].as_of.isoformat(), markets[-1].as_of.isoformat()],
+            "index": ctx["index"], "alone": ctx["alone"], "kept": detail, "log": log[-generations:]}
+
+
 def save(result: dict) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     profile = result["profile"]
@@ -584,6 +774,13 @@ def main() -> int:
     markets = pretrain.build_markets(a.anos, a.contexto)
     pretrain._MARKETS[:] = markets  # the engine's data registry
     seed = int(os.environ.get("EQUIPAS_SEMENTE") or 0)
+    if (os.environ.get("EQUIPAS_MODO") or "evoluir") == "evoluir":
+        result = evolve(markets, a.perfil, agents.real_capital(), seed=seed)
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        (OUT_DIR / f"equipas_evolucao-{a.perfil}-{date.today().isoformat()}.json").write_text(
+            json.dumps(result, ensure_ascii=False, indent=1, default=float) + "\n")
+        print("Equipas: geração guardada no repositório privado.", flush=True)
+        return 0
     result = analyse(markets, a.perfil, agents.real_capital(), seed=seed)
     result["seed"] = seed
     result["desks"] = DESKS
