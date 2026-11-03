@@ -318,24 +318,36 @@ pub fn trail_stops(port: &mut Port, m: &Mkt, p: &P) {
     }
 }
 
-/// agents.pay_taxes
+/// Days since 1970-01-01 of a calendar date (Howard Hinnant's days_from_civil).
+pub fn day_of(y: i32, m: u32, d: u32) -> i32 {
+    let y = if m <= 2 { y as i64 - 1 } else { y as i64 };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m as i64 - 3 } else { m as i64 + 9 };
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    (era * 146_097 + doe - 719_468) as i32
+}
+
+pub const TAX_DUE: (u32, u32) = (8, 31);
+
+/// agents.pay_taxes: each year's net realised gains, once that year's IRS is due (31 August of the next year).
 pub fn pay_taxes(port: &mut Port, m: &Mkt) -> Option<Trade> {
-    let &(last, _) = port.hist.last()?;
-    if year_of(last) >= year_of(m.day) {
-        return None;
+    let mut last = None;
+    let years: Vec<(i32, f64)> = port.realized.iter().map(|(&y, &g)| (y, g)).collect();
+    for (year, gain) in years {
+        if gain <= 0.0 || port.taxed.contains(&year) || m.day < day_of(year + 1, TAX_DUE.0, TAX_DUE.1) {
+            continue;
+        }
+        let tax = round_to(gain * TAX_RATE, 2);
+        port.cash -= tax;
+        port.taxed.push(year);
+        let t = Trade { day: m.day, side: 2, sym: None, qty: 0.0, price: 0.0, eur: tax, pnl: -tax,
+                        reason: format!("{}% sobre {:.0} € de mais-valias de {} (IRS)", (TAX_RATE * 100.0).round(), gain, year), ret: None, held: None };
+        port.trades.push(t.clone());
+        last = Some(t);
     }
-    let year = year_of(last);
-    let gain = port.realized.get(&year).copied().unwrap_or(0.0);
-    if gain <= 0.0 || port.taxed.contains(&year) {
-        return None;
-    }
-    let tax = round_to(gain * TAX_RATE, 2);
-    port.cash -= tax;
-    port.taxed.push(year);
-    let t = Trade { day: m.day, side: 2, sym: None, qty: 0.0, price: 0.0, eur: tax, pnl: -tax,
-                    reason: format!("{}% sobre {:.0} € de mais-valias de {}", (TAX_RATE * 100.0).round(), gain, year), ret: None, held: None };
-    port.trades.push(t.clone());
-    Some(t)
+    last
 }
 
 /// agents.benchmark_return between the ends of two market days (the benchmark's close at each).
@@ -394,7 +406,7 @@ pub fn tax_owed_if_sold(port: &Port, m: &Mkt) -> f64 {
     let this_year = year_of(m.day);
     let open_gain = py_sum(port.positions.iter().map(|(&s, p)| position_value(m, s, p) - p.cost_eur));
     let mut owed = py_max(0.0, port.realized.get(&this_year).copied().unwrap_or(0.0) + open_gain);
-    owed += py_sum(port.realized.iter().filter(|(&y, _)| y < this_year && !port.taxed.contains(&y) && y == this_year - 1)
+    owed += py_sum(port.realized.iter().filter(|(&y, _)| y < this_year && !port.taxed.contains(&y))
         .map(|(_, &g)| py_max(0.0, g)));
     owed * TAX_RATE
 }

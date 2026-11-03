@@ -63,6 +63,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn civil_dates() {
+        assert_eq!(crate::engine::day_of(1970, 1, 1), 0);
+        assert_eq!(crate::engine::day_of(2026, 8, 31), 20696);
+    }
+
+    #[test]
     fn rounding_matches_python() {
         assert_eq!(round_to(2.675, 2), 2.67); // 2.675 is 2.67499999... in binary
         assert_eq!(round_to(0.125, 2), 0.12); // exact half: to even

@@ -27,7 +27,7 @@ def test_plan_uses_two_atr_stop_and_a_target_at_2_5_r_after_costs_and_tax():
     assert p["entry_max"] == 100.5 and p["stop"] == 96.0 and p["target"] == 100.5 + 2.5 * 4.5
     assert p["rr"] == 2.5 and p["currency"] == "USD" and abs(p["fx_eur"] - 1 / 1.10) < 1e-4
     gross = (p["target"] / p["entry_max"] - 1)
-    assert abs(p["net_target_pct"] - (gross - 2 * (0.001 + 0.0015)) * 0.72 * 100) < 0.01
+    assert abs(p["net_target_pct"] - (gross - 2 * (0.001 + 0.005)) * 0.72 * 100) < 0.01
 
 
 def test_agent_weight_follows_the_rules():

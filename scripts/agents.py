@@ -68,9 +68,14 @@ REPO_AGENTS = WATCHLIST_DIR.parents[1] / "agents"
 CONFIG_PATH = REPO_AGENTS / "config.json"
 STATE_PATH = REPO_AGENTS / "state.json"
 
-FEE = 0.001  # commission and slippage, per side
-FX_FEE = 0.0015  # currency conversion at a typical EU broker, per side, for anything not quoted in euros
-TAX_RATE = 0.28  # Portuguese tax on a year's net realised gains, paid on the first run of the next year
+# Costs as at XTB, from Portugal: no commission on stocks and ETFs up to 100 000 EUR a month, so FEE is the spread and
+# slippage per side; 0.5% currency conversion per side for anything not quoted in euros (0.8% at weekends).
+FEE = 0.001
+FX_FEE = 0.005
+TAX_RATE = 0.28  # Portuguese tax on a year's net realised gains (autonomous taxation: a year's losses offset only that year)
+# The tax of a year is paid with the IRS of the next one (return by 30 June, payment by 31 August): until then the
+# money stays invested.
+TAX_DUE = (8, 31)
 MIN_ORDER_EUR = 20.0
 # Reward: 1 point per 0.1% beaten (or lost) against the S&P 500 that day, a small bonus for being in profit,
 # and a daily penalty while the agent is more than DD_FREE below its best level.
@@ -905,7 +910,7 @@ def tax_owed_if_sold(port: dict, mkt: Market) -> float:
     taxed = port.get("taxed", [])
     open_gain = sum(position_value(mkt, s, p) - p.get("cost_eur", 0.0) for s, p in port["positions"].items())
     owed = max(0.0, realized.get(this_year, 0.0) + open_gain)
-    owed += sum(max(0.0, g) for y, g in realized.items() if y < this_year and y not in taxed and int(y) == mkt.as_of.year - 1)
+    owed += sum(max(0.0, g) for y, g in realized.items() if y < this_year and y not in taxed)  # IRS not yet due
     return owed * TAX_RATE
 
 
@@ -1047,20 +1052,19 @@ def check_exits(port: dict, mkt: Market, open_day: date | None = None) -> list[d
 
 
 def pay_taxes(port: dict, mkt: Market) -> dict | None:
-    """On the first run of a year, pay TAX_RATE on last year's net realised gains (losses pay nothing)."""
-    hist = port["history"]
-    if not hist or int(hist[-1]["date"][:4]) >= mkt.as_of.year:
-        return None
-    year = hist[-1]["date"][:4]
-    gain = port.get("realized", {}).get(year, 0.0)
-    if gain <= 0 or year in port.setdefault("taxed", []):
-        return None
-    tax = round(gain * TAX_RATE, 2)
-    port["cash"] -= tax
-    port["taxed"].append(year)
-    trade = {"date": mkt.as_of.isoformat(), "side": "imposto", "symbol": "-", "qty": 0, "price": 0,
-             "eur": tax, "pnl_eur": -tax, "reason": f"{TAX_RATE:.0%} sobre {gain:.0f} € de mais-valias de {year}"}
-    port["trades"] = (port["trades"] + [trade])[-TRADES_KEPT:]
+    """Pay TAX_RATE on each year's net realised gains (losses pay nothing) once that year's IRS is due (TAX_DUE of the
+    next year). Returns the last tax trade, or None."""
+    trade = None
+    taxed = port.setdefault("taxed", [])
+    for year, gain in sorted(port.get("realized", {}).items()):
+        if gain <= 0 or year in taxed or mkt.as_of < date(int(year) + 1, *TAX_DUE):
+            continue
+        tax = round(gain * TAX_RATE, 2)
+        port["cash"] -= tax
+        taxed.append(year)
+        trade = {"date": mkt.as_of.isoformat(), "side": "imposto", "symbol": "-", "qty": 0, "price": 0,
+                 "eur": tax, "pnl_eur": -tax, "reason": f"{TAX_RATE:.0%} sobre {gain:.0f} € de mais-valias de {year} (IRS)"}
+        port["trades"] = (port["trades"] + [trade])[-TRADES_KEPT:]
     return trade
 
 
@@ -2302,7 +2306,7 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
         fields=fields,
         image="agentes.png",
         footer="Simulação com dinheiro fictício e preços reais: os agentes reativos negoceiam ao preço de cada ronda nos "
-        "mercados abertos; os diários, à abertura seguinte. 0,1% de custos (+0,15% câmbio fora do euro; imposto de bolsa "
+        "mercados abertos; os diários, à abertura seguinte. 0,1% de custos (+0,5% câmbio fora do euro, como na XTB; imposto de bolsa "
         "na compra em FR, IT, ES, UK e IE), 28% de imposto sobre as mais-valias de cada ano. Pontos: ±1 por cada 0,1% acima/abaixo do "
         "S&P 500 no dia, +2 por dia em lucro, penalização acima de 10% de queda desde o máximo. Falência a -50%: o lugar "
         "passa para um filho do líder. Não é recomendação de compra.",

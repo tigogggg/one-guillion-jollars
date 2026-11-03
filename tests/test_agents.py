@@ -42,8 +42,8 @@ def test_buy_fills_at_next_open_in_eur_with_fee():
     done = fill_pending(port, market(hist, DATES[2].date()))
     pos = port["positions"]["AAA"]
     assert done[0]["date"] == "2026-10-27"  # Tuesday's open, not Monday's close
-    assert pos["entry"] == pytest.approx(11 * 1.0025)  # 0.1% costs + 0.15% currency conversion
-    assert pos["qty"] == pytest.approx(500 / (11 * 1.0025 / 1.25))  # USD stock bought in EUR
+    assert pos["entry"] == pytest.approx(11 * 1.006)  # 0.1% spread + 0.5% currency conversion (XTB)
+    assert pos["qty"] == pytest.approx(500 / (11 * 1.006 / 1.25))  # USD stock bought in EUR
     assert port["cash"] == 500
 
 
@@ -247,15 +247,16 @@ def test_points_are_relative_to_the_sp500_and_penalise_drawdown():
     assert score_day(port, market(hist, DATES[2].date())) == -10 - 5
 
 
-def test_taxes_on_last_years_gains_only():
+def test_a_years_tax_is_paid_with_the_next_years_irs():
     port = new_portfolio(1000, DATES[0].date())
-    port["realized"] = {"2025": 400.0}
+    port["realized"] = {"2025": 400.0, "2026": -50.0}
     port["history"] = [{"date": "2025-12-31", "equity": 1400, "deposits": 1000}]
     port["cash"] = 1400
-    t = agents.pay_taxes(port, market({}, date(2026, 1, 2)))
-    assert t["eur"] == 112 and port["cash"] == 1288
-    port["history"].append({"date": "2026-01-02", "equity": 1288, "deposits": 1000})
-    assert agents.pay_taxes(port, market({}, date(2026, 1, 5))) is None  # paid once
+    assert agents.pay_taxes(port, market({}, date(2026, 1, 2))) is None  # in January the money stays invested
+    assert agents.pay_taxes(port, market({}, date(2026, 8, 28))) is None
+    t = agents.pay_taxes(port, market({}, date(2026, 8, 31)))
+    assert t["eur"] == 112 and port["cash"] == 1288 and "IRS" in t["reason"]
+    assert agents.pay_taxes(port, market({}, date(2026, 9, 1))) is None  # paid once; 2026 lost money: nothing
 
 
 def test_risk_filter_sizes_by_volatility_caps_sectors_and_brakes():
