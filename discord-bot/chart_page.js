@@ -724,11 +724,80 @@ function openTab(name) {
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
 
 // ---- automatic refresh: the portal checks every minute (while visible) whether anything new was published ----
+// What the person is looking at survives the refresh: each chart's shown and hidden lines and its zoom, the open
+// sections, the choices in the lists and boxes, and where the page and its tables were scrolled to.
+const VIEW_KEY = "portal-view";
+function detailsKey(d) {
+  const sum = d.querySelector("summary");
+  return d.id || ("s:" + (sum ? sum.textContent.trim().slice(0, 80) : ""));
+}
+function snapshotView() {
+  const v = { scroll: window.scrollY, charts: {}, details: [], fields: {}, scrolls: {} };
+  document.querySelectorAll(".js-plotly-plot").forEach((el) => {
+    if (!el.id || !el.data) return;
+    const vis = {};
+    el.data.forEach((t) => { const k = t.meta || t.name; if (k) vis[k] = t.visible === undefined ? true : t.visible; });  // meta: the name before the legend adds results
+    const ranges = {};
+    ["xaxis", "yaxis"].forEach((ax) => {
+      const a = (el.layout || {})[ax];
+      if (a && a.autorange === false && a.range) ranges[ax + ".range"] = a.range.slice();
+    });
+    v.charts[el.id] = { vis: vis, ranges: ranges };
+  });
+  const seen = {};
+  document.querySelectorAll("details").forEach((d) => {
+    const k = detailsKey(d); seen[k] = (seen[k] || 0) + 1;
+    if (d.open) v.details.push(k + "#" + seen[k]);
+  });
+  document.querySelectorAll("select[id], input[id]").forEach((el) => {
+    if (/^(password|file|hidden|button|submit)$/.test(el.type)) return;
+    v.fields[el.id] = el.type === "checkbox" || el.type === "radio" ? el.checked : el.value;
+  });
+  document.querySelectorAll(".scroll").forEach((el, i) => { if (el.scrollLeft) v.scrolls[i] = el.scrollLeft; });
+  return v;
+}
+function restoreView(v) {
+  const doneCharts = new WeakSet(), doneFields = {}, doneDetails = {};
+  const step = () => {
+    Object.keys(v.fields).forEach((id) => {  // first the choices (they may redraw a chart or a list)
+      const el = $(id);
+      if (!el || doneFields[id]) return;
+      doneFields[id] = true;
+      const want = v.fields[id];
+      if (el.type === "checkbox" || el.type === "radio") { if (el.checked === want) return; el.checked = want; }
+      else { if (el.value === want || (el.tagName === "SELECT" && ![...el.options].some((o) => o.value === want))) return; el.value = want; }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const seen = {};
+    document.querySelectorAll("details").forEach((d) => {
+      const k = detailsKey(d); seen[k] = (seen[k] || 0) + 1;
+      const key = k + "#" + seen[k];
+      if (!doneDetails[key] && v.details.indexOf(key) >= 0) { d.open = true; doneDetails[key] = true; }
+    });
+    Object.keys(v.charts).forEach((id) => {
+      const el = $(id);
+      if (!el || !el.data || !window.Plotly || doneCharts.has(el.data)) return;
+      doneCharts.add(el.data);
+      const c = v.charts[id], idx = [], vis = [];
+      el.data.forEach((t, i) => { const k = t.meta || t.name; if (k && k in c.vis) { idx.push(i); vis.push(c.vis[k]); } });
+      if (idx.length) Plotly.restyle(el, { visible: vis }, idx);
+      if (Object.keys(c.ranges).length) Plotly.relayout(el, c.ranges);
+    });
+  };
+  let n = 0;
+  const timer = setInterval(() => { step(); if (++n >= 40) clearInterval(timer); }, 250);  // charts and lists appear as they load
+  setTimeout(() => {
+    window.scrollTo(0, v.scroll || 0);
+    document.querySelectorAll(".scroll").forEach((el, i) => { if (v.scrolls[i]) el.scrollLeft = v.scrolls[i]; });
+  }, 600);
+}
+
 (function autoRefresh() {
   if (!PORTAL_VERSION) return;
-  try {  // back where the person was after a refresh
-    const y = sessionStorage.getItem("portal-scroll");
-    if (y !== null) { sessionStorage.removeItem("portal-scroll"); setTimeout(() => window.scrollTo(0, +y), 300); }
+  try {  // back to what the person was looking at, after a refresh
+    const saved = sessionStorage.getItem(VIEW_KEY);
+    if (saved !== null) { sessionStorage.removeItem(VIEW_KEY); restoreView(JSON.parse(saved)); }
   } catch (e) {}
   const busy = () => {
     const a = document.activeElement;
@@ -736,7 +805,7 @@ $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab");
     return (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || tab === "carteira";
   };
   const refresh = () => {
-    try { sessionStorage.setItem("portal-scroll", String(window.scrollY)); } catch (e) {}
+    try { sessionStorage.setItem(VIEW_KEY, JSON.stringify(snapshotView())); } catch (e) {}
     location.reload();
   };
   const check = async () => {
