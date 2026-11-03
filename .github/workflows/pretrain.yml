@@ -82,6 +82,14 @@ on:
         description: "(antigo, ignorado)"
         required: false
         default: ""
+      ciclos:
+        description: "Voltar a treinar os perfis todos, até N vezes, enquanto alguma escolha mudar (0 = uma volta)"
+        required: false
+        default: "0"
+      mudou:
+        description: "(interno) alguma escolha mudou nesta volta"
+        required: false
+        default: ""
 
 # The profile reaches every job (scripts/pretrain.py reads PRETRAIN_PERFIL); its report is agents/pretrain.json
 # (balanced) or agents/pretrain-<profile>.json.
@@ -337,6 +345,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           REPETIR: ${{ inputs.repetir || '10' }}
           SEGUINTES: ${{ inputs.seguintes }}
+          CICLOS: ${{ inputs.ciclos || '0' }}
+          MUDOU: ${{ inputs.mudou }}
           ACTOR: ${{ github.actor }}
           ESTADO: ${{ job.status }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -367,12 +377,20 @@ jobs:
           if [ "$REPETIR" -le 0 ] && [ -z "$SEGUINTES" ] && [ "$ACTOR" != "github-actions[bot]" ]; then exit 0; fi
           # the next profile in the queue starts its own series (same number of runs)
           proximo_perfil() {
-            if [ -z "$SEGUINTES" ]; then  # the last profile: the intraday lab trains the reactivity on the new parameters
+            if [ -z "$SEGUINTES" ]; then  # the last profile of a round
+              if [ "$CICLOS" -gt 0 ] && [ -n "$MUDOU" ]; then  # something changed: all the profiles again
+                gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f perfil=equilibrado -f seguintes=auto \
+                  -f repetir="$REPETIR" -f ciclos="$((CICLOS - 1))"
+                echo "Pedi outra volta aos perfis (faltam até $((CICLOS - 1)) depois dela)."
+                return 0
+              fi
+              # the choices are settled: the intraday lab trains the reactivity on the new parameters
               gh workflow run intraday-lab.yml --ref "$GITHUB_REF_NAME" -f modo=reatividade && echo "Pedi o treino da reatividade."
               return 0
             fi
             next="${SEGUINTES%%,*}"; rest="${SEGUINTES#"$next"}"; rest="${rest#,}"
-            gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f perfil="$next" -f seguintes="$rest" -f repetir="$REPETIR"
+            gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f perfil="$next" -f seguintes="${rest:-nenhum}" -f repetir="$REPETIR" \
+              -f ciclos="$CICLOS" -f mudou="$MUDOU"
             echo "Pedi o pré-treino do perfil seguinte ($next)."
           }
           if [ "$ESTADO" != success ]; then
@@ -383,6 +401,7 @@ jobs:
           changed=$(jq -rn --slurpfile a "$RUNNER_TEMP/antes.json" --slurpfile b "$RUNNER_TEMP/depois.json" \
             '[$b[0] | to_entries[] | select($a[0][.key] != .value) | .key] | join(", ")')
           echo "Estratégias com parâmetros novos: ${changed:-nenhuma}"
+          [ -n "$changed" ] && MUDOU=1
           # the series ran inside each strategy's machine (--repeticoes): on to the next profile
           proximo_perfil
           avisar ok "série feita em cada estratégia até a escolha estabilizar" || true
