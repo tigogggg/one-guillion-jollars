@@ -67,22 +67,35 @@ def warn(message: str) -> None:
 # downloads (GitHub Actions: context-data workflow)
 # --------------------------------------------------------------------------
 
+_BODY = 0  # which request form the API accepted (kept for the next requests)
+
+
 def spending(key: str, codes: list[str], first: str, last: str, tries: int = 3) -> pd.Series | None:
     """Monthly contract obligations of these NAICS codes between two dates (calendar month ends)."""
-    body = {"group": "month", "spending_level": "transactions",
-            "filters": {"time_period": [{"start_date": first, "end_date": last}],
-                        "award_type_codes": ["A", "B", "C", "D"], "naics_codes": {"require": codes, "exclude": []}}}
+    global _BODY
+    filters = {"time_period": [{"start_date": first, "end_date": last}], "award_type_codes": ["A", "B", "C", "D"],
+               "naics_codes": {"require": codes}}
+    bodies = [{"group": "month", "filters": filters},  # the API's own defaults
+              {"group": "month", "spending_level": "transactions", "filters": filters},
+              {"group": "month", "filters": {**filters, "naics_codes": codes}}]  # the legacy list form
+    rows = None
     for attempt in range(tries):
+        body = bodies[_BODY % len(bodies)]
         try:
             resp = requests.post(SPENDING_URL, json=body, timeout=90)
+            if resp.status_code in (400, 422):  # the request's shape: the next form, and say why
+                warn(f"USAspending {key} {first}: {resp.status_code} {resp.text[:300]}")
+                _BODY += 1
+                continue
             resp.raise_for_status()
             rows = resp.json()["results"]
             break
         except (requests.RequestException, ValueError, KeyError) as e:
             if attempt == tries - 1:
                 warn(f"USAspending {key} {first}: {e}")
-                return None
             time.sleep(5 * (attempt + 1))
+    if rows is None:
+        return None
     out = {}
     for r in rows:
         tp = r["time_period"]  # fiscal year (October-September) and month of the fiscal year (1 = October)
@@ -100,6 +113,7 @@ def download_spending(budget_s: float = 1500) -> pd.DataFrame | None:
     last_fy = today.year + (1 if today.month >= 10 else 0)
     t0 = time.time()
     cols = {}
+    failures = 0
     for key, codes in NAICS.items():
         have = old[key].dropna() if old is not None and key in old else pd.Series(dtype=float)
         parts = [have]
@@ -116,11 +130,22 @@ def download_spending(budget_s: float = 1500) -> pd.DataFrame | None:
             s = spending(key, codes, first.date().isoformat(), last.date().isoformat())
             if s is not None and len(s):
                 parts.append(s)
+                failures = 0
+            else:
+                failures += 1
+            if failures >= 6:
+                break
+        if failures >= 6:
+            warn("USAspending: 6 pedidos falhados seguidos, desisto por agora")
+            break
         merged = pd.concat(parts)
         merged = merged[~merged.index.duplicated(keep="last")].sort_index()
         if len(merged):
             cols[key] = merged
         print(f"USAspending {key}: {len(merged)} meses ({time.time() - t0:.0f} s)", flush=True)
+    if failures >= 6 and old is not None:  # keep the cached sectors not reached
+        for key in old:
+            cols.setdefault(key, old[key].dropna())
     return pd.DataFrame(cols) if cols else None
 
 
@@ -129,7 +154,7 @@ def download_epu() -> pd.DataFrame | None:
 
     cols = {}
     for series in EPU_CATEGORIES:
-        s = context.fred(series, tries=4, timeout=120)
+        s = context.fred_in_pieces(series, 1985, years=10)  # one long request times out from the cloud
         if s is not None and len(s):
             cols[series] = s
     return pd.DataFrame(cols) if cols else None
@@ -145,10 +170,10 @@ def capex_growth(fund: pd.DataFrame, sector_of: dict[str, str]) -> pd.DataFrame:
     fund = fund[fund["key"].notna()]
     months = pd.date_range(fund["available"].min() + pd.offsets.MonthEnd(0), pd.Timestamp.today(), freq="ME")
     out = pd.DataFrame(index=months, columns=sorted(fund["key"].unique()), dtype=float)
-    groups = {s: g.sort_values("available") for s, g in fund.groupby("symbol")}
+    groups = [g.sort_values("available") for _, g in fund.groupby("symbol")]
     for t in months:
         now, before = {}, {}
-        for s, g in groups.items():
+        for g in groups:
             known = g[g["available"] <= t]
             if not len(known):
                 continue
@@ -162,15 +187,19 @@ def capex_growth(fund: pd.DataFrame, sector_of: dict[str, str]) -> pd.DataFrame:
             k = last["key"]
             now[k] = now.get(k, 0.0) + abs(float(last["capex"]))
             before[k] = before.get(k, 0.0) + abs(float(prev.iloc[-1]["capex"]))
-        for k in now:
+        for k, v in now.items():
             if before.get(k, 0) > 0:
-                out.loc[t, k] = now[k] / before[k] - 1
+                out.loc[t, k] = v / before[k] - 1
     return out
 
 
 def refresh() -> dict[str, str]:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     done = {}
+    gov = download_spending(budget_s=1200)
+    if gov is not None:
+        gov.to_csv(CACHE_DIR / "gasto_publico.csv")
+        done["gasto_publico"] = f"{gov.index.min().date()} a {gov.index.max().date()} ({gov.shape[1]} setores)"
     epu = download_epu()
     if epu is not None:
         epu.to_csv(CACHE_DIR / "epu_categorias.csv")
@@ -185,10 +214,6 @@ def refresh() -> dict[str, str]:
         done["capex_setor"] = f"{cap.index.min().date()} a {cap.index.max().date()}"
     except Exception as e:  # noqa: BLE001 - the other files are still worth keeping
         warn(f"capex por setor: {e}")
-    gov = download_spending()
-    if gov is not None:
-        gov.to_csv(CACHE_DIR / "gasto_publico.csv")
-        done["gasto_publico"] = f"{gov.index.min().date()} a {gov.index.max().date()} ({gov.shape[1]} setores)"
     return done
 
 
@@ -261,7 +286,7 @@ def fields(raw: dict[str, pd.Series], days: pd.DatetimeIndex) -> pd.DataFrame:
     epu = cached("epu_categorias")
     spy = raw.get("spy")
     if epu is not None and len(epu) and spy is not None:
-        month = lambda s: s.resample("ME").last().pct_change()  # noqa: E731
+        month = lambda s: s.resample("ME").last().pct_change()
         etfs = {}
         for sector, tickers in context.SECTOR_ETFS.items():
             px = None
