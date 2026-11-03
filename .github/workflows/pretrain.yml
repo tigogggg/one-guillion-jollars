@@ -384,8 +384,10 @@ jobs:
                 echo "Pedi outra volta aos perfis (faltam até $((CICLOS - 1)) depois dela)."
                 return 0
               fi
-              # the choices are settled: the intraday lab trains the reactivity on the new parameters
+              # the choices are settled: the intraday lab trains the reactivity on the new parameters, and the
+              # population of teams evolves a few more generations (scripts/teams.py)
               gh workflow run intraday-lab.yml --ref "$GITHUB_REF_NAME" -f modo=reatividade && echo "Pedi o treino da reatividade."
+              gh workflow run equipas.yml --ref "$GITHUB_REF_NAME" && echo "Pedi a evolução das equipas."
               return 0
             fi
             next="${SEGUINTES%%,*}"; rest="${SEGUINTES#"$next"}"; rest="${rest#,}"
