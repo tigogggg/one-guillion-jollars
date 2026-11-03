@@ -797,11 +797,11 @@ async function history(env, data) {
 // ---------------------------------------------------------------------------
 
 // The portfolio page. On /perfil (opts.profile) it is the member's profile: the site's top bar, who they are, and a
-// sidebar with the portfolio's sections, 👀 Seguir, ⚙️ Definições and 🔒 Conta e privacidade. Elsewhere (a link opened
+// sidebar with the profile's parts (⚙️ Definições, 👀 Seguir, 🔒 Privacidade) and the portfolio's sections. Elsewhere (a link opened
 // without the owner's session, while sign-in is off) it keeps its own header and tab bar.
 const WALLET_TABS = [["resumo", "📊 Resumo"], ["posicoes", "💼 Posições"], ["operacoes", "🧾 Operações"], ["adicionar", "➕ Adicionar"],
                      ["propostas", "🧠 Propostas para ti"], ["importar", "📥 Importar"], ["analise", "🤖 Análise do Claude"]];
-const PROFILE_TABS = [["seguir", "👀 Seguir"], ["definicoes", "⚙️ Definições"], ["conta", "🔒 Conta e privacidade"]];
+const PROFILE_TABS = [["definicoes", "⚙️ Definições"], ["seguir", "👀 Seguir"], ["conta", "🔒 Privacidade"]];
 const START_TABS = [["", "🏠 Hoje"], ["corrida", "🏁 Corrida"], ["pretreino", "⏪ Pré-treino"], ["agentes", "🧾 Agentes"], ["propostas", "🧠 Propostas"],
                     ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"], ["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]];
 
@@ -821,16 +821,16 @@ function portfolioPage(data, tok, opts = {}) {
 </div>
 <div class="profile-layout">
 <nav class="side" id="tabs" aria-label="Perfil">
-  <p class="side-h">💼 Carteira</p>
-  ${WALLET_TABS.map((t, i) => tabButton(t, i === 0)).join("")}
   <p class="side-h">👤 Perfil</p>
   ${PROFILE_TABS.map((t) => tabButton(t, false)).join("")}
+  <p class="side-h">💼 Carteira</p>
+  ${WALLET_TABS.map((t, i) => tabButton(t, i === 0)).join("")}
 </nav>
 <div class="side-main">
 <section data-tab="definicoes" hidden>
   <h2>⚙️ Definições</h2>
   <form id="display-name" class="panel profile-form" autocomplete="off">
-    <label for="dn-input"><b>🪪 Nome a apresentar</b> <span class="muted small">· é assim que os outros membros te veem</span></label>
+    <label for="dn-input"><b>🏷️ Nome a apresentar</b> <span class="muted small">· é assim que os outros membros te veem</span></label>
     <div class="row-btns"><input id="dn-input" name="name" maxlength="24" value="${esc(data.display_name || "")}" placeholder="${esc(data.name || "o teu nome no Discord")}">
       <button class="btn" type="submit">GUARDAR</button></div>
     <p class="muted small" id="dn-msg">2 a 24 caracteres, sem @ nem links, diferente dos agentes e dos outros membros. Vazio usa o teu nome do Discord${data.name ? " (" + esc(data.name) + ")" : ""}.</p>
@@ -885,11 +885,15 @@ function portfolioPage(data, tok, opts = {}) {
   </div>
 </section>
 <section data-tab="resumo">
-  <div id="totals" class="grid"></div>
+  <div class="resumo-layout">
+    <div class="resumo-main">
+      <h2>📈 Evolução</h2>
+      <div id="chart" class="chart"></div>
+      <p class="muted small" id="chart-note">Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.</p>
+    </div>
+    <div id="totals" class="totals-col"></div>
+  </div>
   <div id="accounts"></div>
-  <h2>📈 Evolução</h2>
-  <div id="chart" class="chart"></div>
-  <p class="muted small" id="chart-note">Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.</p>
 </section>
 <section data-tab="posicoes" hidden><div id="positions"></div><div id="verdict-rules"></div><h2>✅ Posições fechadas</h2><div id="closed"></div></section>
 <section data-tab="analise" hidden>

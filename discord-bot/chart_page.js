@@ -286,7 +286,7 @@ export function page(title, body, head = "", opts = {}) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>${esc(title)}</title>
-<link rel="icon" type="image/png" href="/favicon.png?v=1gj">
+<link rel="icon" type="image/png" href="/favicon.png?v=2">
 <link rel="stylesheet" href="${STATIC_PATHS.css}">
 ${head}
 </head>
@@ -443,11 +443,17 @@ a.home { color:inherit; text-decoration:none; }
 .side-h { margin:6px 2px 0; font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
 .side-h:first-child { margin-top:0; }
 .side-main > section > h2:first-child, .side-main > section > .grid:first-child { margin-top:0; }
+.resumo-layout { display:grid; grid-template-columns:minmax(0,1fr) 230px; gap:16px; align-items:start; }
+.resumo-main > h2:first-child { margin-top:0; }
+.totals-col { display:flex; flex-direction:column; gap:8px; }
+.totals-col .tile { margin:0; }
 @media (max-width:760px) {
   .profile-layout { grid-template-columns:1fr; gap:10px; }
   .side { position:static; flex-direction:row; overflow-x:auto; padding:8px; scrollbar-width:none; }
   .side::-webkit-scrollbar { display:none; }
   .side .tab { width:auto; white-space:nowrap; } .side-h { display:none; }
+  .resumo-layout { grid-template-columns:1fr; }
+  .totals-col { display:grid; grid-template-columns:1fr 1fr; order:-1; }
 }
 .topbar .userbar { justify-self:end; }
 @media (max-width:640px) { .topbar { grid-template-columns:1fr auto; padding-right:48px; } .topbar .logo { width:3.5em; height:3.5em; } .topbar .userbar { grid-column:1 / -1; justify-self:start; } }
