@@ -414,8 +414,10 @@ How the agents trade, live and in the pre-training alike:
   US session). The 07:30 run decides before any market opens; orders fill at
   that day's opens.
 - **Currencies and costs**: prices are converted to euros with Yahoo's EURxxx=X
-  rates (London quotes are in pence); 0.1% per side (spread; XTB charges no commission), +0.5% conversion outside
-  the euro, and buy-side taxes: France 0.4%, Italy 0.1%, Spain 0.2%, UK stamp
+  rates (London quotes are in pence); the active broker's costs (`config.json` `corretora`: `xtb` by default,
+  `trading212`, `ibkr`; see `agents.BROKERS`): spread per side, conversion outside the euro and, at Interactive
+  Brokers, a commission per order (Europe 0.05% + fees, min 1.25 EUR, max 29 EUR; US 0.0035 USD a share, min
+  0.35 USD), and buy-side taxes: France 0.4%, Italy 0.1%, Spain 0.2%, UK stamp
   duty 0.5%, Ireland 1% (foreign-registered companies and ETFs exempt).
 - **Gaps**: a buy is cancelled when the stock opens more than `gap_max` (8% by
   default, tuned by the training) away from the close it was decided on.
@@ -612,7 +614,10 @@ per agent.
 - Risk (all agents without `ignora_risco`): buy size scaled down for stocks
   with daily volatility above 2% (to half at 4%), at most 40% of equity per
   sector, no new buys while 20% or more below the best level.
-- Costs (as at XTB, from Portugal): 0.1% spread per side, plus 0.5% currency conversion for anything not in euros; 28% tax
+- Costs of the active broker (`agents.BROKERS`, config `corretora`): XTB 0.1% spread + 0.5% conversion; Trading 212
+  0.1% + 0.15%; Interactive Brokers 0.05% + 0.03% and a commission per order with a minimum. Each pre-training report
+  also gives every strategy's verdict with each broker's costs (`corretoras`); runs with another broker are another
+  scale (`pretrain.same_scale`), like another objective; 28% tax
   on each year's net realised gains, paid with the next year's IRS (31 August).
 - Pre-training replays the S&P 500 as it was on each day (fja05680/sp500
   membership; delisted stocks only when Yahoo still has prices), uses the same

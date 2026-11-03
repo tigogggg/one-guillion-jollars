@@ -53,6 +53,8 @@ the next profile starts. Every report also says whether the many agents add anyt
 Intraday reactivity (`reatividade` 0/1/2, `espera_min`, `esticado_max`) is trained by the Alpaca lab
 (`intraday_lab.py --reatividade`, workflow `intraday-lab.yml` modo=reatividade), dispatched when the last profile's
 series ends; results and history in `agents/lab/reatividade*.json`.
+Costs are the broker's in `agents/config.json` `corretora` (`xtb`, `trading212`, `ibkr`; `agents.BROKERS`): training,
+points and the league use them, and each report compares every strategy's verdict with each broker (`corretoras`).
 A run only replaces a strategy's parameters if the exam (last year, out of sample) does not get worse by more than
 10 points (`EXAM_SLACK`) and training + exam together improve by at least 5% and 5 points (`CHANGE_MARGIN`, `CHANGE_MIN`; weekly runs on Sundays must not swap for noise); the last 3 choices always stay candidates.
 Before each run's search, a walk-forward check (`pretrain.walk_forward`, 3 folds) runs the same search on the data up to each of the last years and judges it on that unseen year against the original parameters; if it does not hold up, the agent keeps its parameters.

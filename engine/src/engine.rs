@@ -178,6 +178,19 @@ fn year_of(day: i32) -> i32 {
     (if month <= 2 { y + 1 } else { y }) as i32
 }
 
+/// agents.commission: the broker's commission of one order, in euros.
+pub fn commission(m: &Mkt, s: usize, value_eur: f64, qty: f64, on: i32) -> f64 {
+    let sym = &m.data.symbols[s];
+    if sym.com_share > 0.0 {
+        py_min(py_max(m.data.to_eur(s, sym.com_share_min, on), m.data.to_eur(s, sym.com_share, on) * qty),
+               sym.com_share_max_pct * value_eur)
+    } else if sym.com_pct > 0.0 || sym.com_min > 0.0 {
+        py_min(py_max(sym.com_pct * value_eur, sym.com_min), sym.com_max)
+    } else {
+        0.0
+    }
+}
+
 pub fn sell(port: &mut Port, m: &Mkt, s: usize, price: f64, on: i32, reason: &str, fraction: f64) -> Trade {
     let sym = &m.data.symbols[s];
     let (qty, cost, entry_date) = {
@@ -185,7 +198,8 @@ pub fn sell(port: &mut Port, m: &Mkt, s: usize, price: f64, on: i32, reason: &st
         (pos.qty * fraction, pos.cost_eur * fraction, pos.entry_date)
     };
     let fill = price * (1.0 - sym.fee);
-    let proceeds = qty * m.data.to_eur(s, fill, on);
+    let gross = qty * m.data.to_eur(s, fill, on);
+    let proceeds = gross - commission(m, s, gross, qty, on);
     port.cash += proceeds;
     let year = year_of(on);
     let before = port.realized.get(&year).copied().unwrap_or(0.0);
@@ -213,7 +227,8 @@ pub fn buy(port: &mut Port, m: &Mkt, o: &Order, price: f64, on: i32) -> Option<T
     }
     let sym = &m.data.symbols[o.sym];
     let fill = price * (1.0 + sym.fee + sym.buy_tax);
-    let qty = eur / m.data.to_eur(o.sym, fill, on);
+    let unit = m.data.to_eur(o.sym, fill, on);
+    let qty = (eur - commission(m, o.sym, eur, eur / unit, on)) / unit;
     port.cash -= eur;
     if let Some(pos) = port.positions.get_mut(&o.sym) {
         pos.entry = (pos.entry * pos.qty + fill * qty) / (pos.qty + qty);

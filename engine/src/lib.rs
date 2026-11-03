@@ -73,10 +73,12 @@ impl EngineData {
         let is_us = arr::<u8>(d, "sym_is_us")?;
         let is_etf = arr::<u8>(d, "sym_is_etf")?;
         let defensive = arr::<u8>(d, "sym_defensive")?;
+        let com = arr::<f64>(d, "sym_com")?; // 6 per symbol (engine.py)
         let symbols: Vec<Symbol> = (0..names.len()).map(|i| Symbol {
             name: names[i].clone(), ccy: if ccy[i] < 0 { None } else { Some(ccy[i] as usize) }, pence: pence[i] != 0,
             currency_usd: usd[i] != 0, fee: fee[i], buy_tax: buy_tax[i], is_us: is_us[i] != 0, is_etf: is_etf[i] != 0,
-            defensive: defensive[i] != 0,
+            defensive: defensive[i] != 0, com_pct: com[6 * i], com_min: com[6 * i + 1], com_max: com[6 * i + 2],
+            com_share: com[6 * i + 3], com_share_min: com[6 * i + 4], com_share_max_pct: com[6 * i + 5],
         }).collect();
         let by_name = names.iter().enumerate().map(|(i, n)| (n.clone(), i)).collect();
         let n_syms = symbols.len();

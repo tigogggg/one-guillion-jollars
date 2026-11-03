@@ -63,6 +63,7 @@ def append(report: dict, seed: str = "") -> None:
         return
     e["perfil"] = report.get("perfil", "equilibrado")
     e["objetivo"] = report.get("objetivo")
+    e["corretora"] = report.get("corretora", "xtb")
     e["trained"] = report.get("trained") or sorted(e["strategies"])  # what this run trained (a series trains fewer)
     history = load() + [e]
     HISTORY_PATH.write_text(json.dumps(history[-KEEP:], ensure_ascii=False, indent=1) + "\n")
@@ -73,14 +74,15 @@ def compact(history: list[dict]) -> dict:
     Only the balanced profile's runs (the others train for other investors and are not one series). The exam points
     of runs scored with another objective than the latest (pretrain.OBJECTIVE) are on another scale: left out."""
     history = [h for h in history if h.get("perfil", "equilibrado") == "equilibrado"]
-    latest = history[-1].get("objetivo") if history else None
+    scale = lambda h: (h.get("objetivo"), h.get("corretora", "xtb"))  # noqa: E731 - another broker is another scale
+    latest = scale(history[-1]) if history else None
     runs = [{"at": h["at"], "source": h.get("source", "")} for h in history]
     series: dict[str, list] = {}
     changes: dict[str, list] = {}
     for i, h in enumerate(history):
         for s, r in h["strategies"].items():
             row = {k: r.get(k) for k in ("ret", "dd", "sharpe", "exam", "exam0", "adopted", "kept")}
-            if h.get("objetivo") != latest:
+            if scale(h) != latest:
                 row["exam"] = row["exam0"] = None
             series.setdefault(s, [None] * len(history))[i] = row
             prev = next((history[j]["strategies"].get(s) for j in range(i - 1, -1, -1) if s in history[j]["strategies"]), None)

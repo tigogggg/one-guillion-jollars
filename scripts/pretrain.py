@@ -768,6 +768,20 @@ def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: lis
     return chosen, tries, exam_result
 
 
+def broker_comparison(strategy: str, params: dict) -> dict[str, float]:
+    """The verdict ("overall") of these parameters with each broker's costs (the search used the active broker's):
+    to see which broker suits the league, and how much each one's costs take."""
+    active, out = agents.BROKER, {}
+    try:
+        for b in agents.BROKERS:
+            agents.set_broker(b)
+            years = [simulate(strategy, params, blk, detail=False)["points"] for blk in _SEGMENTS["blocks"]]
+            out[b] = round(overall(years, simulate(strategy, params, _SEGMENTS["valid"], detail=False)["points"]), 1)
+    finally:
+        agents.set_broker(active)
+    return out
+
+
 def overall(years: list[float], exam: float) -> float:
     """What a run tries to raise: every year judged alike, the exam year as the latest one (recency-weighted). The
     exam used to weigh as much as all the training years: a series of runs then learnt that one year by heart."""
@@ -1173,6 +1187,7 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
         "claude": claude_log,
         # the verdict against the S&P 500 (agents.relative_points, every year, the exam the latest): above 0 beats it
         "overall": round(final_obj, 1),
+        "corretoras": broker_comparison(strategy, chosen) if strategy != "indexador" and not fold else None,
         "years_beating_index": sum(y > 0 for y in final_years) + (chosen_valid["points"] > 0),
         "years_total": len(final_years) + 1,
         "history": history,
@@ -1341,6 +1356,26 @@ OBJECTIVE = 3  # 1: league points; 2: profile grade minus the index's; 3: below 
 BENCH_AFTER = 10  # pre-trainings (of a profile, with this objective) a strategy gets to beat the S&P 500
 
 
+def broker_lines(results: dict, by_strategy: dict) -> list[str]:
+    """Each strategy's verdict vs the S&P 500 with each broker's costs, and how many beat the index with each."""
+    rows = {s: r["corretoras"] for s, r in results.get("strategies", {}).items() if r.get("corretoras")}
+    if not rows:
+        return []
+    names = list(agents.BROKERS)
+    lines = ["Acima de 0: " + " · ".join(f"{agents.broker_name(b)} {sum(v.get(b, 0) > 0 for v in rows.values())}/{len(rows)}"
+                                          for b in names)]
+    for s, v in sorted(rows.items(), key=lambda kv: -max(kv[1].values())):
+        cfg = by_strategy.get(s, {"emoji": "🤖", "name": s})
+        lines.append(f"{cfg['emoji']} {cfg['name']}: " + " · ".join(f"{agents.broker_name(b).split()[0]} {v[b]:+.0f}"
+                                                                    for b in names if b in v))
+    return lines
+
+
+def same_scale(report: dict) -> bool:
+    """Scored like now: the same objective and the same broker's costs (another broker is another scale)."""
+    return report.get("objetivo") == OBJECTIVE and report.get("corretora", agents.DEFAULT_BROKER) == agents.BROKER
+
+
 def bench(results: dict, today: date) -> list[str]:
     """The league keeps only what beats the index. A strategy whose verdict for this profile ("overall", every year
     against the S&P 500) is still at or below 0 after BENCH_AFTER pre-trainings leaves the league (its agents of this
@@ -1349,7 +1384,7 @@ def bench(results: dict, today: date) -> list[str]:
 
     runs: dict[str, int] = {}
     for e in evolution.load():
-        if e.get("perfil", agents.DEFAULT_PROFILE) == PROFILE and e.get("objetivo") == OBJECTIVE:
+        if e.get("perfil", agents.DEFAULT_PROFILE) == PROFILE and same_scale(e):
             for s in e.get("trained") or e.get("strategies", {}):
                 runs[s] = runs.get(s, 0) + 1
     config, state = agents.load_config(), agents.load_state()
@@ -1418,6 +1453,9 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
                "*O período inclui os anos em que os parâmetros foram escolhidos, por isso é otimista; "
                "o veredicto é \"vs S&P 500\": todos os anos de treino e o exame (o ano mais recente, fora do treino), os "
                "recentes a pesar mais. Acima de 0 bate o índice; quem não o bate ao fim de 10 pré-treinos sai da liga.")]
+    brokers = broker_lines(results, by_strategy)
+    if brokers:
+        fields.append((f"💶 Com cada corretora (treino com {agents.broker_name()})", "\n".join(brokers)[:1024]))
     import ensemble
 
     together = ensemble.summary_lines(ensemble.analyse(results))
@@ -1558,10 +1596,11 @@ def finish(results: dict, today: date, apply_params: bool, dry_run: bool, partia
     trained = sorted(results["strategies"])
     if partial and REPORT_PATH.exists():
         previous = json.loads(REPORT_PATH.read_text()).get("strategies", {})
-        if json.loads(REPORT_PATH.read_text()).get("objetivo") != OBJECTIVE:  # scored another way: not comparable
+        if not same_scale(json.loads(REPORT_PATH.read_text())):  # scored another way: not comparable
             previous = {s: r for s, r in previous.items() if "skipped" in r}
         results = {**results, "strategies": {**previous, **results["strategies"]}}
     results["perfil"], results["objetivo"], results["trained"] = PROFILE, OBJECTIVE, trained
+    results["corretora"] = agents.BROKER
     REPORT_PATH.write_text(json.dumps(results, indent=1, default=str) + "\n")
     import evolution
 

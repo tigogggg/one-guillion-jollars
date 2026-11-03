@@ -15,6 +15,14 @@ pub struct Symbol {
     pub currency_usd: bool,
     pub fee: f64,
     pub buy_tax: f64,
+    /// The broker's commission per order (agents.commission): a share of the value in euros with a minimum and a
+    /// maximum, or (com_share > 0) per share in the quote currency with a minimum and a maximum share of the value.
+    pub com_pct: f64,
+    pub com_min: f64,
+    pub com_max: f64,
+    pub com_share: f64,
+    pub com_share_min: f64,
+    pub com_share_max_pct: f64,
     pub is_us: bool,
     pub is_etf: bool,
     /// agents.DEFENSIVE_ETFS (bonds, gold)

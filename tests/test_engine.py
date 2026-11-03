@@ -145,6 +145,33 @@ def test_foguetao_trades_exactly_like_python(markets, params, monkeypatch):
     compare("foguetao", params, markets, monkeypatch)
 
 
+@pytest.mark.parametrize("broker", ["ibkr", "trading212"])
+@pytest.mark.parametrize("strategy", ["foguetao", "sniper", "rotador", "pescador"])
+def test_each_broker_costs_the_same_in_python_and_in_the_engine(markets, strategy, broker, monkeypatch):
+    """The commission per order (IBKR: minimum per order, US per share) and the other conversion fees: same trades."""
+    agents.set_broker(broker)
+    try:
+        params = {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST},
+                  **(PARAMS[1] if strategy == "foguetao" else agents.STRATEGIES[strategy][2])}
+        if strategy == "sniper":
+            params["aperto_pct"] = 0.15
+        compare(strategy, params, markets, monkeypatch, min_trades=1)
+    finally:
+        agents.set_broker(agents.DEFAULT_BROKER)
+
+
+def test_the_commission_of_an_order():
+    agents.set_broker("ibkr")
+    try:
+        assert agents.commission(None, "SAP.DE", 100.0, 1.0, None) == 1.25  # minimum
+        assert agents.commission(None, "SAP.DE", 10_000.0, 1.0, None) == pytest.approx(6.0)  # 0.06%
+        assert agents.commission(None, "SAP.DE", 100_000.0, 1.0, None) == 29.0  # maximum
+    finally:
+        agents.set_broker(agents.DEFAULT_BROKER)
+    assert agents.commission(None, "SAP.DE", 100.0, 1.0, None) == 0.0
+    assert agents.set_broker("nenhuma") == agents.DEFAULT_BROKER
+
+
 def test_a_slice_of_the_days_reuses_the_data_and_matches(markets, monkeypatch):
     params = {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **PARAMS[1]}
     part = markets[100:350]

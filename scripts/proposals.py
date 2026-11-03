@@ -24,8 +24,9 @@ from datetime import date
 
 import pandas as pd
 
-from agents import (BENCHMARK, DEFAULT_PROFILE, FEE, FX_FEE, LIVE_ONLY, META, REPO_AGENTS, TAX_RATE, Market, active_agents, profile_of,
-                    benchmark_return, buy_tax, currency_of, fx_series, is_eur, last_close, live_stats)
+from agents import fees as agents_fees
+from agents import (BENCHMARK, DEFAULT_PROFILE, LIVE_ONLY, META, REPO_AGENTS, TAX_RATE, Market, active_agents, profile_of,
+                    benchmark_return, buy_tax, currency_of, fx_series, last_close, live_stats)
 import opportunities
 
 LOG_PATH = REPO_AGENTS / "proposals.json"
@@ -145,7 +146,7 @@ def plan(mkt: Market, symbol: str, orders: list[dict]) -> dict | None:
     agent_tps = sorted(o["tp"] for o in orders if o.get("tp") and o["tp"] > entry)
     if agent_tps:
         target = agent_tps[len(agent_tps) // 2]
-    costs = 2 * (FEE + (0.0 if is_eur(symbol) else FX_FEE)) + buy_tax(symbol)
+    costs = 2 * agents_fees(symbol) + buy_tax(symbol)
     gross = target / entry - 1
     net = (gross - costs) * (1 - TAX_RATE) if gross > costs else gross - costs
     loss = -(risk / entry) - costs

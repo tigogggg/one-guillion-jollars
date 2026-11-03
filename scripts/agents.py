@@ -68,10 +68,53 @@ REPO_AGENTS = WATCHLIST_DIR.parents[1] / "agents"
 CONFIG_PATH = REPO_AGENTS / "config.json"
 STATE_PATH = REPO_AGENTS / "state.json"
 
-# Costs as at XTB, from Portugal: no commission on stocks and ETFs up to 100 000 EUR a month, so FEE is the spread and
-# slippage per side; 0.5% currency conversion per side for anything not quoted in euros (0.8% at weekends).
-FEE = 0.001
-FX_FEE = 0.005
+# Costs per broker, from Portugal (config.json "corretora", or OGJ_CORRETORA; the training, the points and the league
+# all use the active one). spread: spread and slippage per side; fx: currency conversion per side for anything not
+# quoted in euros; commission per order: in Europe a share of the value with a minimum and a maximum in euros; US
+# stocks per share, with a minimum and a maximum share of the value (in dollars).
+# - XTB: no commission on stocks and ETFs up to 100 000 EUR a month; 0.5% conversion (0.8% at weekends).
+# - Trading 212: no commission; 0.15% conversion.
+# - Interactive Brokers (IBKR Pro, tiered): Europe 0.05% (min 1.25 EUR, max 29 EUR; Lisbon too) + ~0.01% exchange and
+#   clearing fees; US 0.0035 USD a share (min 0.35 USD, max 1% of the value); conversion ~0.03%; it routes to the
+#   exchange itself, so a smaller spread. The minimum is per order: it weighs on small accounts.
+BROKERS = {
+    "xtb": {"nome": "XTB", "spread": 0.001, "fx": 0.005},
+    "trading212": {"nome": "Trading 212", "spread": 0.001, "fx": 0.0015},
+    "ibkr": {"nome": "Interactive Brokers", "spread": 0.0005, "fx": 0.0003,
+             "eu": {"pct": 0.0006, "min_eur": 1.25, "max_eur": 29.0},
+             "us": {"por_acao": 0.0035, "min": 0.35, "max_pct": 0.01}},
+}
+DEFAULT_BROKER = "xtb"
+BROKER = DEFAULT_BROKER
+FEE = BROKERS[BROKER]["spread"]
+FX_FEE = BROKERS[BROKER]["fx"]
+
+
+def set_broker(name: str | None) -> str:
+    """Use this broker's costs from now on (unknown or empty: the default)."""
+    global BROKER, FEE, FX_FEE
+    BROKER = name if name in BROKERS else DEFAULT_BROKER
+    FEE, FX_FEE = BROKERS[BROKER]["spread"], BROKERS[BROKER]["fx"]
+    return BROKER
+
+
+def broker_name(name: str | None = None) -> str:
+    return BROKERS[name or BROKER]["nome"]
+
+
+def costs_text() -> str:
+    """The active broker's costs, for the league card and the portal."""
+    b = BROKERS[BROKER]
+    parts = [f"spread {FEE:.2%}", f"+{FX_FEE:.2%} de câmbio fora do euro"]
+    if b.get("eu"):
+        e = b["eu"]
+        parts.append(f"comissão na Europa {e['pct']:.2%} (mín. {e['min_eur']:.2f} €, máx. {e['max_eur']:.0f} €)")
+    if b.get("us"):
+        u = b["us"]
+        parts.append(f"nos EUA {u['por_acao']} $ por ação (mín. {u['min']:.2f} $)")
+    else:
+        parts.append("sem comissão")
+    return f"{b['nome']}: " + ", ".join(parts)
 TAX_RATE = 0.28  # Portuguese tax on a year's net realised gains (autonomous taxation: a year's losses offset only that year)
 # The tax of a year is paid with the IRS of the next one (return by 30 June, payment by 31 August): until then the
 # money stays invested.
@@ -915,8 +958,25 @@ def tax_owed_if_sold(port: dict, mkt: Market) -> float:
 
 
 def fees(symbol: str) -> float:
-    """Commission/slippage per side, plus currency conversion for anything not quoted in euros."""
+    """Spread/slippage per side, plus currency conversion for anything not quoted in euros."""
     return FEE + (0.0 if is_eur(symbol) else FX_FEE)
+
+
+def commission_terms(symbol: str) -> dict:
+    """The active broker's commission for this listing: {} (none), Europe's or the US's terms."""
+    b = BROKERS[BROKER]
+    return (b.get("us") if is_us(symbol) else b.get("eu")) or {}
+
+
+def commission(mkt: Market, symbol: str, value_eur: float, qty: float, on: date) -> float:
+    """The broker's commission of one order, in euros."""
+    c = commission_terms(symbol)
+    if not c:
+        return 0.0
+    if "por_acao" in c:
+        return min(max(to_eur(mkt, symbol, c["min"], on), to_eur(mkt, symbol, c["por_acao"], on) * qty),
+                   c["max_pct"] * value_eur)
+    return min(max(c["pct"] * value_eur, c["min_eur"]), c["max_eur"])
 
 
 def sell(port: dict, mkt: Market, symbol: str, price: float, on: date, reason: str, fraction: float = 1.0,
@@ -924,7 +984,8 @@ def sell(port: dict, mkt: Market, symbol: str, price: float, on: date, reason: s
     pos = port["positions"][symbol]
     qty = pos["qty"] * fraction
     fill = price * (1 - fees(symbol))
-    proceeds = qty * to_eur(mkt, symbol, fill, on)
+    gross = qty * to_eur(mkt, symbol, fill, on)
+    proceeds = gross - commission(mkt, symbol, gross, qty, on)
     cost = pos["cost_eur"] * fraction
     port["cash"] += proceeds
     realized = port.setdefault("realized", {})
@@ -950,7 +1011,8 @@ def buy(port: dict, mkt: Market, order: dict, price: float, on: date) -> dict | 
         return None
     symbol = order["symbol"]
     fill = price * (1 + fees(symbol) + buy_tax(symbol))
-    qty = eur / to_eur(mkt, symbol, fill, on)
+    unit = to_eur(mkt, symbol, fill, on)
+    qty = (eur - commission(mkt, symbol, eur, eur / unit, on)) / unit
     port["cash"] -= eur
     pos = port["positions"].get(symbol)
     if pos:
@@ -1720,6 +1782,16 @@ def load_config() -> dict:
     return json.loads(CONFIG_PATH.read_text())
 
 
+def _configured_broker() -> str | None:
+    try:
+        return json.loads(CONFIG_PATH.read_text()).get("corretora")
+    except (OSError, ValueError):
+        return None
+
+
+set_broker(os.environ.get("OGJ_CORRETORA") or _configured_broker())
+
+
 def load_state() -> dict:
     return json.loads(STATE_PATH.read_text()) if STATE_PATH.exists() else {"agents": {}}
 
@@ -2456,7 +2528,7 @@ def common_rules(params: dict, strategy: str) -> str:
         if params.get("por_zona"):
             rules.append("🧭 parâmetros próprios por zona de mercado: " + "; ".join(
                 f"{z}: " + ", ".join(f"{k} {v}" for k, v in d.items()) for z, d in params["por_zona"].items()))
-    rules.append(f"💶 custos {FEE:.1%} (+{FX_FEE:.2%} câmbio fora do euro; na compra, impostos de bolsa de França, Itália, Espanha, "
+    rules.append(f"💶 custos {costs_text()} (na compra, impostos de bolsa de França, Itália, Espanha, "
                  f"Reino Unido e Irlanda), {TAX_RATE:.0%} de imposto sobre mais-valias anuais")
     if strategy != "indexador":
         rules.append(f"💀 falência se perder {BANKRUPTCY:.0%}: o lugar passa para um filho do líder")
@@ -2603,7 +2675,7 @@ def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
             "invested_pct": round((eq - port["cash"]) / eq * 100, 2) if eq else 0.0,
             "realized": port.get("realized", {}),
             "taxes": round(sum(t["eur"] for t in trades if t["side"] == "imposto"), 2),
-            "fees_note": f"{FEE:.1%} por ordem, +{FX_FEE:.2%} de câmbio fora do euro, + imposto de bolsa na compra em FR 0,4%, "
+            "fees_note": f"{costs_text()}, + imposto de bolsa na compra em FR 0,4%, "
                          "IT 0,1%, ES 0,2%, UK 0,5% e IE 1%",
             "buys": sum(t["side"] == "compra" for t in trades), "sells": sum(t["side"] == "venda" for t in trades),
             "wins": sum(t["side"] == "venda" and t["pnl_eur"] > 0 for t in trades),

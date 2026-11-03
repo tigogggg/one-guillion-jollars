@@ -92,6 +92,14 @@ def test_train_strategy_runs_end_to_end_on_synthetic_markets(monkeypatch):
     assert r["greedy"] and all({"param", "value", "train_gain", "kept"} <= set(t) for t in r["greedy"])
 
 
+def test_the_report_compares_the_choice_with_each_broker(monkeypatch):
+    _synthetic_training(monkeypatch)
+    _, r = pretrain.train_strategy("foguetao")
+    assert set(r["corretoras"]) == set(agents.BROKERS) and agents.BROKER == agents.DEFAULT_BROKER
+    lines = pretrain.broker_lines({"strategies": {"foguetao": r}}, {})
+    assert lines[0].startswith("Acima de 0: XTB") and "foguetao" in lines[1]
+
+
 def test_the_live_parameters_change_only_for_a_clear_gain(monkeypatch):
     _synthetic_training(monkeypatch)
     monkeypatch.setattr(pretrain, "previous_choices", lambda s: [{"chosen": {"n": 3, "stop_pct": 0.2}, "until": None}])

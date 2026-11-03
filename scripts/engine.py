@@ -219,6 +219,7 @@ def build(markets: list, symbols: list[str] | None = None, sectors: list[str] | 
         "sym_usd": np.array(usd, dtype=np.uint8),
         "sym_fee": np.array([agents.fees(s) for s in symbols], dtype=float),
         "sym_buy_tax": np.array([agents.buy_tax(s) for s in symbols], dtype=float),
+        "sym_com": np.array([_commission_row(s) for s in symbols], dtype=float).ravel(),
         "sym_is_us": np.array([1 if agents.is_us(s) else 0 for s in symbols], dtype=np.uint8),
         "sym_is_etf": np.array([1 if s in agents.ETF_SYMBOLS else 0 for s in symbols], dtype=np.uint8),
         "sym_defensive": np.array([1 if s in agents.DEFENSIVE_ETFS else 0 for s in symbols], dtype=np.uint8),
@@ -292,8 +293,25 @@ def _slice_of(full: list, ids: dict, markets: list) -> int | None:
     return i
 
 
+_OTHER_BROKERS: dict[str, dict] = {}  # data_for's data built with the other brokers' costs (broker_comparison)
+
+
+def _commission_row(symbol: str) -> list[float]:
+    """agents.commission_terms as 6 numbers for the engine (com_pct, com_min, com_max, com_share, its min, max %)."""
+    c = agents.commission_terms(symbol)
+    if "por_acao" in c:
+        return [0.0, 0.0, 0.0, c["por_acao"], c["min"], c["max_pct"]]
+    if c:
+        return [c["pct"], c["min_eur"], c["max_eur"], 0.0, 0.0, 0.0]
+    return [0.0] * 6
+
+
 def data_for(markets: list):
     """(engine data, first day's index) for a slice of the registered markets, building them on first use."""
+    if _DATA and _DATA.get("broker") != agents.BROKER:  # built with another broker's costs: kept, the other built
+        _OTHER_BROKERS[_DATA["broker"]] = dict(_DATA)
+        _DATA.clear()
+        _DATA.update(_OTHER_BROKERS.pop(agents.BROKER, {}))
     if _DATA:
         i = _slice_of(_DATA["markets"], _DATA["ids"], markets)
         if i is not None:
@@ -304,7 +322,7 @@ def data_for(markets: list):
     ids = {id(m): k for k, m in enumerate(full)}
     if _slice_of(full, ids, markets) is None:
         full, ids = markets, {id(m): k for k, m in enumerate(markets)}
-    _DATA.update(markets=full, ids=ids, data=build(full))
+    _DATA.update(markets=full, ids=ids, data=build(full), broker=agents.BROKER)
     return _DATA["data"], _slice_of(full, ids, markets)
 
 
