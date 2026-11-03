@@ -498,6 +498,10 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .agent-item:hover { background:#241c55; }
 .agent-item.on { border-color:var(--accent); background:#3a0f45; box-shadow:0 0 8px rgba(255,46,136,.4); }
 .chap-tools { display:flex; gap:6px; justify-content:flex-end; margin:-4px 0 6px; }
+.sheet-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 12px; margin:1.4rem 0 .6rem; }
+.sheet-head h2, .sheet-head .chap-tools { margin:0; }
+details.params summary { cursor:pointer; color:var(--neon); }
+.tile .v.adopted { color:var(--up); }
 details.chap { border-top:1px solid var(--line); padding:2px 0; }
 details.chap > summary { cursor:pointer; padding:8px 2px; font-weight:700; font-size:1.02rem; }
 details.chap[open] > summary { color:var(--neon); }
@@ -792,7 +796,10 @@ function chapters(panel) {
   tools.className = "chap-tools";
   tools.innerHTML = '<button class="chip" data-chap="1">Abrir tudo</button><button class="chip" data-chap="0">Fechar tudo</button>';
   tools.addEventListener("click", (e) => { const b = e.target.closest("[data-chap]"); if (b) all.forEach((d) => { d.open = b.dataset.chap === "1"; }); });
-  panel.querySelector("h2").after(tools);
+  const title = panel.querySelector("h2"), head = document.createElement("div");  // the name and the buttons on one line
+  head.className = "sheet-head";
+  title.before(head);
+  head.append(title, tools);
 }
 if (window.Plotly) $("chart").on("plotly_click", (ev) => { const a = byName[ev.points[0].data.meta || ev.points[0].data.name]; if (a) show(agents.indexOf(a), true); });
 
@@ -893,11 +900,20 @@ function liveHtml(a) {
 function backtestHtml(a) {
   const b = a.backtest, mc = b.monte_carlo || {};
   const exam = Object.entries(b.exam || {});
+  // Parameters: how many changed (older reports have no "default"), the full list folded away, the changed ones in bold.
+  const params = Object.entries(b.chosen || {}).filter(([, v]) => v === null || typeof v !== "object");
+  const before = b.default && Object.keys(b.default).length ? b.default : null;
+  const isNew = ([k, v]) => before && before[k] !== v;
+  const changed = before ? params.filter(isNew).length : null;
+  const paramsTile = tile("Parâmetros", b.adopted ? (changed != null ? changed + (changed === 1 ? " novo adotado" : " novos adotados") : "novos adotados") : "mantidos",
+    params.length ? '<details class="params"><summary>ver os ' + params.length + '</summary>' +
+      params.map((p) => (isNew(p) ? "<b>" + esc(p[0]) + " " + esc(p[1]) + "</b>" : esc(p[0]) + " " + esc(p[1]))).join(" · ") + '</details>' : "",
+    b.adopted ? "adopted" : "");
   return '<div class="grid">' +
     tile("Rentabilidade no período", fmtPct(b.return_pct, 0), b.bankrupt ? "💀 faliu em " + esc(b.bankrupt) : "sem falência", cls(b.return_pct)) +
     tile("Queda máxima", fmtPct(-b.max_dd_pct, 0), "", "down") +
     tile("Sharpe", fmtNum(b.sharpe), (b.trades ?? "—") + (b.trades === 1 ? " operação" : " operações")) +
-    tile("Parâmetros", b.adopted ? "novos adotados" : "mantidos", Object.entries(b.chosen || {}).map(([k, v]) => esc(k) + " " + esc(v)).join(" · ")) + '</div>' +
+    paramsTile + '</div>' +
     (exam.length ? '<h3>📝 Exame (último ano, fora do treino)</h3>' + table(["Parâmetros", "Pontos", "Rentabilidade", "Queda máx.", "Sharpe", "Operações"],
       exam.map(([k, x]) => [k === "best" ? "escolhidos" : "originais", fmtNum(x.points, 0), fmtPct(x.return_pct), fmtPct(-x.max_dd_pct), fmtNum(x.sharpe), x.trades ?? "—"]), [1, 2, 3, 4, 5]) : "") +
     (Object.keys(b.crises || {}).length ? '<h3>💥 Crises</h3>' + table(["Crise", "Rentabilidade", "Queda máx.", "Falência"],

@@ -1570,7 +1570,7 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
             "backtest": {
                 "return_pct": round(y["return"] * 100, 1), "max_dd_pct": round(y["max_drawdown"] * 100, 1),
                 "sharpe": y.get("sharpe"), "trades": y.get("trades"), "bankrupt": y.get("bankrupt"),
-                "adopted": r.get("adopted"), "chosen": r.get("chosen") or {},
+                "adopted": r.get("adopted"), "chosen": r.get("chosen") or {}, "default": r.get("default") or {},
                 "exam": {k: {**x, "return_pct": round(x.get("return", 0) * 100, 1),
                              "max_dd_pct": round(x.get("max_drawdown", 0) * 100, 1)} for k, x in v.items()},
                 "years": (r.get("train", {}).get("best") or {}).get("years", []),
