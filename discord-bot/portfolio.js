@@ -21,6 +21,57 @@ const SYMBOL = /^[A-Z0-9][A-Z0-9.\-^=]{0,14}$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const UA = { "User-Agent": "Mozilla/5.0 (compatible; CoutoTradingBot/1.0)" };
 
+// Display name ("Nome a apresentar"): what other members see. 2-24 characters, no @ or links, not an agent's
+// name, and unique among members (KV display-name:<key> -> Discord id, the key without case, accents or symbols).
+const NAME_MIN = 2, NAME_MAX = 24;
+const NAME_LINK = /:\/\/|www\.|discord\.gg|\.(com|pt|net|org|io|gg|me|ly|xyz|app|dev)\b/i;
+const RESERVED = ["One Guillion Jollars", "Indexador", "Guardião", "Rotador", "Pêndulo", "Foguetão", "Campeão Setorial", "Kamikaze",
+                  "Caçador", "Sniper", "Pescador de Quedas", "Relâmpago", "Joalheiro", "Analista", "Quant", "Monge", "Abutre",
+                  "Jornalista", "Deriva", "Catalisador", "Cético", "Conselho", "Maestro"];
+
+export function nameKey(name) {
+  return String(name).normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+// [clean name, null] or [null, error]; "" means "go back to the Discord name".
+export function checkDisplayName(raw, agentNames = []) {
+  const name = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!name) return ["", null];
+  const len = [...name].length;
+  if (len < NAME_MIN || len > NAME_MAX) return [null, `O nome tem de ter entre ${NAME_MIN} e ${NAME_MAX} caracteres.`];
+  if (/[\p{C}<>]/u.test(name)) return [null, "O nome tem caracteres que não são permitidos."];
+  if (name.includes("@") || NAME_LINK.test(name)) return [null, "O nome não pode ter @ nem links."];
+  const key = nameKey(name);
+  if (key.length < NAME_MIN) return [null, "O nome tem de ter pelo menos 2 letras ou números."];
+  if (RESERVED.concat(agentNames).some((n) => nameKey(n) === key)) return [null, "Esse nome é de um agente da liga. Escolhe outro."];
+  return [name, null];
+}
+
+// The current agents' names (agents can be created with /agente), from the latest league page.
+async function agentNames(env) {
+  const id = await env.CONFIG.get("chart-latest:liga", "json");
+  const page = id ? await env.CONFIG.get(`chart:${id}`, "json") : null;
+  return (page?.agents || []).map((a) => a.name).filter(Boolean);
+}
+
+async function setDisplayName(env, tok, data, raw) {
+  const [name, error] = checkDisplayName(raw, await agentNames(env));
+  if (error) return { error };
+  const oldKey = data.display_name ? nameKey(data.display_name) : null, newKey = name ? nameKey(name) : null;
+  if (newKey && newKey !== oldKey) {
+    const holder = await env.CONFIG.get(`display-name:${newKey}`);
+    if (holder && holder !== data.owner) return { error: "Esse nome já está a ser usado por outro membro." };
+    await env.CONFIG.put(`display-name:${newKey}`, data.owner);
+  }
+  const out = await mutate(env, tok, "display_name", (d) => { if (name) d.display_name = name; else delete d.display_name; });
+  if (out.error) {
+    if (newKey && newKey !== oldKey) await env.CONFIG.delete(`display-name:${newKey}`);
+    return out;
+  }
+  if (oldKey && oldKey !== newKey) await env.CONFIG.delete(`display-name:${oldKey}`);
+  return out;
+}
+
 function token() {
   const bytes = crypto.getRandomValues(new Uint8Array(12));
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -97,6 +148,7 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
   if (rest === "" && request.method === "GET") {
     const login = await loginActive(env);
     const embed = new URL(request.url).searchParams.get("embed") === "1";
+    if (mine && !embed) return redirect("/#perfil");  // the portfolio lives in the portal's profile; old links land there
     const resp = html(portfolioPage(data, tok, { signedIn: mine, loginOn: login.any, googleOn: login.google, versions: hasDb(env), embed }));
     if (embed) resp.headers.set("X-Embed", "1");  // the worker allows this page inside the portal (same site only)
     return resp;
@@ -128,6 +180,10 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
   if (action === "follow_add" || action === "follow_remove") {
     const error = await follow(env, data, body);
     return error ? fail({ error }) : json(await snapshot(env, data));
+  }
+  if (action === "display_name") {
+    const out = await setDisplayName(env, tok, data, body.name);
+    return out.error ? fail(out) : json({ ok: true, display_name: out.data.display_name || "", name: out.data.name || "" });
   }
   if (action === "security") {
     if (body.require_login && !mine) return fail({ error: "Entra primeiro com o Discord ou o Google neste aparelho (em /entrar): assim confirmas que consegues entrar antes de trancar o link." });
@@ -194,6 +250,7 @@ async function deleteEverything(env, tok, data) {
   await deletePortfolio(env, tok);
   if (owner && (await env.CONFIG.get(`portfolio-user:${owner}`)) === tok) await env.CONFIG.delete(`portfolio-user:${owner}`);
   if (data.google?.sub) await env.CONFIG.delete(`login-google:${data.google.sub}`);
+  if (data.display_name) await env.CONFIG.delete(`display-name:${nameKey(data.display_name)}`);
   if (owner) await env.CONFIG.delete(`follows:${owner}`);
   for (const a of data.analyses || []) {
     await env.CONFIG.delete(`analysis-res:${a.rid}`);
@@ -489,7 +546,7 @@ async function snapshot(env, data) {
     return { symbol: t, name: q?.name || "", price: q?.price ?? null, currency: q?.currency || "", change: q?.prev ? q.price / q.prev - 1 : null,
              news: news?.scores?.[t] ?? null, proposed: (proposals?.buys || []).some((b) => b.symbol === t) };
   }));
-  return { name: data.name, tx: data.tx, quotes, fx, verdicts, follows, accounts: data.accounts || {}, profile: data.profile || null,
+  return { name: data.name, display_name: data.display_name || "", tx: data.tx, quotes, fx, verdicts, follows, accounts: data.accounts || {}, profile: data.profile || null,
            dividends: data.dividends || [], settings: data.settings || { capital: 10000, risk: 1 },
            proposals: proposals ? { as_of: proposals.as_of, zone: proposals.zone, buys: proposals.buys.slice(0, 12) } : null, at: Date.now() };
 }

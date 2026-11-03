@@ -176,6 +176,8 @@ crises, Monte Carlo and points per year instead of holdings. The static image
 colours only the top 5 and the Indexador; the rest are faint grey. An older
 page links to the newest one of its kind (`chart-latest:<kind>`).
 
+**Profile (`#perfil`).** The member's name at the top right of the portal opens their profile: the display name ("Nome a apresentar", what other members see: 2-24 characters, no @ or links, not an agent's name, unique among members through KV `display-name:<key>`; empty goes back to the Discord name) and the portfolio, embedded. The portfolio is no longer a tab; `/c/<token>` opened by its owner, and old `#carteira` links, land on the profile. The logo and the title go back to the main page (Hoje).
+
 **Portal (`/portal`) and personal portfolios (`/carteira`).** `/portal` gives
 the server's private portal link (`/p/<token>`, token in KV `portal:token`):
 tabs for the race and chart, every agent's full card plus an overview table,

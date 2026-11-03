@@ -123,10 +123,12 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
     }));
     pretrain = mergeProfiles(pretrain, others);
   }
-  const user = session ? { name: session.data.name || "membro", wallet: `/c/${session.tok}` } : null;
+  const user = session ? { name: session.data.display_name || session.data.name || "membro", discord: session.data.name || "",
+                           display: session.data.display_name || "", since: session.data.created || null, google: !!session.data.google,
+                           wallet: `/c/${session.tok}` } : null;
   const version = await portalVersion(env);
   const runs = await workflowRuns(env);
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution, version, runs,
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution, version, runs, home,
                                                                        manifest: token === null ? "/manifest.webmanifest" : `/p/${token}/manifest.webmanifest` }));
 }
 
@@ -294,15 +296,15 @@ export function chartPage(data, upcoming, newer, extras = {}) {
     .concat(portal && extras.pretrain ? [["pretreino", "⏪ Pré-treino"]] : []).concat([["agentes", "🧾 Agentes"]])
     .concat(portal ? [["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
     .concat(portal ? [] : [["agenda", "⏱️ Agenda"]])  // in the portal the schedule is part of 🩺 Estado
-    .concat(portal ? [["carteira", "💼 Carteira"], ["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]] : []);
+    .concat(portal ? [["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]] : []);  // the portfolio is in the profile (the name, top right)
   const body = `
 ${banner}
 <header>
   <div class="topbar">
-  <h1>${portal ? "One Guillion Jollars" : esc(data.title)}</h1>
-  ${portal ? '<img class="logo" src="/logo-256.png?v=1" alt="" width="108" height="108">' : ""}
+  <h1>${portal ? `<a class="home" href="${esc(extras.home || "/")}">One Guillion Jollars</a>` : esc(data.title)}</h1>
+  ${portal ? `<a class="home logo-link" href="${esc(extras.home || "/")}" aria-label="Página principal"><img class="logo" src="/logo-256.png?v=1" alt="" width="108" height="108"></a>` : ""}
   ${portal ? `<div class="userbar">${extras.user
-    ? `<span>👤 <b>${esc(extras.user.name)}</b></span><a class="btn alt" href="#carteira" data-go="carteira">💼 A MINHA CARTEIRA</a><a class="btn alt" href="/sair">SAIR</a>`
+    ? `<a class="me" href="#perfil" data-go="perfil" title="O meu perfil"><span class="initial" aria-hidden="true">${esc([...extras.user.name][0] || "?").toUpperCase()}</span><b class="me-name">${esc(extras.user.name)}</b></a><a class="btn alt" href="/sair">SAIR</a>`
     : `<a class="btn" href="/entrar">🔑 ENTRAR</a>`}</div>` : ""}
   </div>
   <p class="muted">${esc(portal ? data.title + " · " + (data.subtitle || "") : data.subtitle || "")}</p>
@@ -366,9 +368,22 @@ ${portal ? `<section data-tab="propostas" hidden><div id="props"></div></section
 </section>
 ${portal ? `<section data-tab="ajuda" hidden><div id="glossary"></div></section>` : ""}
 ${portal ? `<section data-tab="pesquisa" hidden><div id="q-out"></div></section>` : ""}
-${portal ? `<section data-tab="carteira" hidden>
-  ${extras.user ? `<iframe id="wallet-frame" class="wallet-frame" title="A minha carteira" data-src="${esc(extras.user.wallet)}?embed=1" loading="lazy"></iframe>
-  <p class="muted small">A tua carteira também abre sozinha em <a href="${esc(extras.user.wallet)}">${esc(extras.user.wallet.slice(0, 9))}…</a> (para guardar no ecrã principal do telemóvel).</p>`
+${portal ? `<section data-tab="perfil" hidden>
+  ${extras.user ? `<div class="profile-card panel">
+    <span class="initial big" aria-hidden="true">${esc([...extras.user.name][0] || "?").toUpperCase()}</span>
+    <div class="profile-who">
+      <h2 class="me-name">${esc(extras.user.name)}</h2>
+      <p class="muted small">${extras.user.since ? "Membro desde " + esc(new Date(extras.user.since).toLocaleDateString("pt-PT", { month: "long", year: "numeric", timeZone: "Europe/Lisbon" })) + " · " : ""}Discord ✓${extras.user.google ? " · Google ✓" : ""}</p>
+    </div>
+  </div>
+  <form id="display-name" class="panel profile-form" data-wallet="${esc(extras.user.wallet)}" autocomplete="off">
+    <label for="dn-input"><b>Nome a apresentar</b> <span class="muted small">· é assim que os outros membros te veem</span></label>
+    <div class="row-btns"><input id="dn-input" name="name" maxlength="24" value="${esc(extras.user.display)}" placeholder="${esc(extras.user.discord || "o teu nome no Discord")}">
+      <button class="btn" type="submit">GUARDAR</button></div>
+    <p class="muted small" id="dn-msg">2 a 24 caracteres, sem @ nem links, diferente dos agentes e dos outros membros. Vazio usa o teu nome do Discord${extras.user.discord ? " (" + esc(extras.user.discord) + ")" : ""}.</p>
+  </form>
+  <h2>💼 A minha carteira</h2>
+  <iframe id="wallet-frame" class="wallet-frame" title="A minha carteira" data-src="${esc(extras.user.wallet)}?embed=1" loading="lazy"></iframe>`
   : `<h2>💼 A tua carteira</h2>
   <div class="panel prose">
     <p>Cada membro regista as suas compras e vendas reais (ou importa da XTB) e acompanha o desempenho com preços quase em tempo real, aqui mesmo no portal.</p>
@@ -406,7 +421,17 @@ body::after { content:""; position:fixed; inset:0; pointer-events:none; backgrou
 h1, h2, .pixel { font-family:var(--pixel); letter-spacing:.5px; } h1 { color:var(--gold); text-shadow:0 0 8px rgba(255,225,77,.6); line-height:1.5; }
 .topbar { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:8px 24px; }
 .topbar h1 { margin:0; }
-.topbar .logo { font-size:1.35rem; width:5em; height:5em; justify-self:center; }
+.topbar .logo { font-size:1.35rem; width:5em; height:5em; display:block; }
+.topbar .logo-link { justify-self:center; }
+a.home { color:inherit; text-decoration:none; }
+.me { display:inline-flex; align-items:center; gap:8px; padding:4px 12px 4px 4px; border-radius:999px; border:1px solid var(--line); color:var(--fg); text-decoration:none; transition:border-color .15s, box-shadow .15s; }
+.me:hover, .me:focus-visible { border-color:var(--neon); box-shadow:0 0 10px rgba(0,229,255,.35); }
+.initial { display:inline-grid; place-items:center; width:30px; height:30px; border-radius:50%; background:linear-gradient(135deg,var(--accent),#7b2ff7); color:#fff; font-weight:700; flex:none; }
+.initial.big { width:72px; height:72px; font-size:2rem; }
+.profile-card { display:flex; align-items:center; gap:16px; }
+.profile-card h2 { margin:0 0 4px; font-size:1rem !important; }
+.profile-form input { flex:1; min-width:180px; padding:10px 12px; border-radius:6px; border:1px solid var(--line); background:#0f0b2b; color:var(--fg); font:inherit; }
+.profile-form .row-btns { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 4px; }
 .topbar .userbar { justify-self:end; }
 @media (max-width:640px) { .topbar { grid-template-columns:1fr auto; padding-right:48px; } .topbar .logo { width:3.5em; height:3.5em; } .topbar .userbar { grid-column:1 / -1; justify-self:start; } }
 h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem !important; line-height:1.6; }
@@ -1052,8 +1077,8 @@ function restoreView(v) {
   } catch (e) {}
   const busy = () => {
     const a = document.activeElement;
-    const tab = (document.querySelector("#tabs .tab.on") || {}).dataset?.tab;
-    return (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || tab === "carteira";
+    const profile = document.querySelector('section[data-tab="perfil"]');
+    return (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || (profile && !profile.hidden);
   };
   const refresh = () => {
     try { sessionStorage.setItem(VIEW_KEY, JSON.stringify(snapshotView())); } catch (e) {}
@@ -1079,8 +1104,10 @@ function restoreView(v) {
   document.addEventListener("visibilitychange", check);
 })();
 {
-  const asked = location.hash.slice(1) === "agenda" && $("status") ? "estado" : location.hash.slice(1);  // old #agenda links
-  openTab(asked && document.querySelector('#tabs .tab[data-tab="' + asked + '"]') ? asked : document.querySelector("#tabs .tab").dataset.tab);
+  const hash = location.hash.slice(1);  // old #agenda and #carteira links
+  const asked = hash === "agenda" && $("status") ? "estado" : hash === "carteira" ? "perfil" : hash;
+  const known = asked && (document.querySelector('#tabs .tab[data-tab="' + asked + '"]') || (asked === "perfil" && $("wallet-frame")));
+  openTab(known ? asked : document.querySelector("#tabs .tab").dataset.tab);
 }
 document.addEventListener("click", (e) => {  // glossary terms: tap to read (phones have no hover)
   const g = e.target.closest("abbr.g"); if (!g) return;
@@ -1628,12 +1655,52 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
     fit();
     try { new ResizeObserver(fit).observe(f.contentDocument.body); } catch (e) { setInterval(fit, 1000); }
   });
-  document.querySelectorAll('#tabs .tab[data-tab="carteira"]').forEach((b) => b.addEventListener("click", load));
-  document.addEventListener("click", (e) => { if (e.target.closest('[data-go="carteira"]')) { e.preventDefault(); load(); openTab("carteira"); } });
-  if (location.hash === "#carteira") load();
-  document.addEventListener("click", (e) => {  // "Abrir a minha carteira" links open the tab instead of another page
+  document.addEventListener("click", (e) => { if (e.target.closest('[data-go="perfil"]')) { e.preventDefault(); load(); openTab("perfil"); window.scrollTo(0, 0); } });
+  if (location.hash === "#perfil" || location.hash === "#carteira") load();
+  document.addEventListener("click", (e) => {  // "Abrir a minha carteira" links open the profile instead of another page
     const a = e.target.closest('a[href^="/c/"]');
-    if (a && !a.closest(".wallet-frame") && !/\/export/.test(a.getAttribute("href"))) { e.preventDefault(); load(); openTab("carteira"); window.scrollTo(0, 0); }
+    if (a && !a.closest(".wallet-frame") && !/\/export/.test(a.getAttribute("href"))) { e.preventDefault(); load(); openTab("perfil"); window.scrollTo(0, 0); }
+  });
+})();
+
+// ---- the logo and the title go to the main page (Hoje), without reloading when already on it ----
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("a.home");
+  if (!a || a.getAttribute("href") !== location.pathname) return;
+  e.preventDefault();
+  openTab(document.querySelector("#tabs .tab").dataset.tab);
+  window.scrollTo(0, 0);
+});
+
+// ---- profile: the display name ("Nome a apresentar"), checked and kept unique by the Worker ----
+(function displayName() {
+  const form = $("display-name");
+  if (!form) return;
+  const msg = $("dn-msg"), hint = msg.textContent;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector("button");
+    btn.disabled = true;
+    msg.className = "muted small";
+    msg.textContent = "A guardar…";
+    try {
+      const r = await fetch(form.dataset.wallet + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
+                                                            body: JSON.stringify({ action: "display_name", name: $("dn-input").value }) });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok || out.error) throw new Error(out.error || "Não consegui guardar. Tenta outra vez.");
+      const shown = out.display_name || out.name || "membro";
+      $("dn-input").value = out.display_name;
+      document.querySelectorAll(".me-name").forEach((el) => { el.textContent = shown; });
+      document.querySelectorAll(".initial").forEach((el) => { el.textContent = ([...shown][0] || "?").toUpperCase(); });
+      msg.className = "up small";
+      msg.textContent = out.display_name ? "✅ Guardado: os outros membros veem-te como " + shown + "." : "✅ Voltaste ao teu nome do Discord.";
+      setTimeout(() => { msg.className = "muted small"; msg.textContent = hint; }, 6000);
+    } catch (err) {
+      msg.className = "down small";
+      msg.textContent = "⚠️ " + err.message;
+    } finally {
+      btn.disabled = false;
+    }
   });
 })();
 
@@ -1802,7 +1869,7 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
   const steps = [
     ["🏠 Hoje", "O resumo do dia: o mercado, as melhores propostas dos agentes e a tua carteira. Começa sempre aqui."],
     ["🧠 Propostas e 🎯 Oportunidades", "O que os agentes (estratégias simuladas, treinadas em 20 anos de mercado) querem comprar ou vender, com plano (entrada, stop, alvo) e um score de segurança explicado. São ideias para estudar, não ordens."],
-    ["💼 A tua carteira", "Entra com o Discord (ou uma conta Google associada), importa o histórico da XTB e acompanha tudo em tempo quase real. Podes pedir uma análise ao Claude. Usa a 🔎 pesquisa para ver tudo sobre um ticker."],
+    ["👤 O teu perfil e a carteira", "Carrega no teu nome (canto superior direito): escolhes como os outros membros te veem e tens lá a tua carteira. Importa o histórico da XTB e acompanha tudo em tempo quase real. Podes pedir uma análise ao Claude. Usa a 🔎 pesquisa para ver tudo sobre um ticker."],
   ];
   let i = 0;
   const box = document.body.appendChild(Object.assign(document.createElement("div"), { id: "guide", hidden: true }));
