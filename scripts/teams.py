@@ -261,7 +261,9 @@ def target_weights(p: dict, members: list[str], weights: dict, a: np.ndarray, i:
 
 
 def run_team(p: dict, members: list[str], desks: dict, weights: dict, markets: list, symbols: list[str],
-             open_: np.ndarray, close: np.ndarray, capital: float) -> dict:
+             open_: np.ndarray, close: np.ndarray, capital: float, lo: int = 0, hi: int | None = None) -> dict:
+    """The team from session lo to hi with fresh capital (the desks keep running from the start: their history feeds
+    the manager); at the end, the tax still owed if everything were sold (as the pre-training grades a year)."""
     equities = np.column_stack([desks[s]["equity"] for s in members])
     peaks = np.maximum.accumulate(equities, axis=0)
     desk_vol = (pd.DataFrame(equities).pct_change().rolling(MOMENTUM_DAYS).std() * math.sqrt(252)).to_numpy()
@@ -271,15 +273,16 @@ def run_team(p: dict, members: list[str], desks: dict, weights: dict, markets: l
     refuge = ix.get(p["refugio"]) if p["refugio"] else None
     fee = np.array([agents.fees(s) for s in symbols])
     tax_in = np.array([agents.buy_tax(s) for s in symbols])
-    n, k = close.shape
+    hi = close.shape[0] if hi is None else hi
+    k = close.shape[1]
     qty, cost = np.zeros(k), np.zeros(k)
     cash = capital
     realized: dict[int, float] = {}
     paid: set[int] = set()
     target = None
-    curve, exposure = np.zeros(n), np.zeros(n)
+    curve, exposure = np.zeros(hi - lo), np.zeros(hi - lo)
     trades, turnover, peak = 0, 0.0, capital
-    for i in range(n):
+    for i in range(lo, hi):
         day = markets[i].as_of
         if target is not None:  # the decision at today's open: sells first, then buys
             value = np.nan_to_num(qty * close[i - 1])
@@ -331,10 +334,10 @@ def run_team(p: dict, members: list[str], desks: dict, weights: dict, markets: l
                 cash -= max(0.0, realized[y]) * agents.TAX_RATE
                 paid.add(y)
         value = np.nan_to_num(qty * close[i])
-        curve[i] = cash + value.sum()
-        exposure[i] = value.sum() / curve[i] if curve[i] > 0 else 0.0
-        peak = max(peak, curve[i])
-        if i % p["cada"]:
+        now = curve[i - lo] = cash + value.sum()
+        exposure[i - lo] = value.sum() / now if now > 0 else 0.0
+        peak = max(peak, now)
+        if (i - lo) % p["cada"]:
             continue
         # the decision at today's close, for tomorrow's open
         a = manager(p["gestor"], equities, i)
@@ -350,12 +353,12 @@ def run_team(p: dict, members: list[str], desks: dict, weights: dict, markets: l
                 if refuge is not None and np.isfinite(close[i, refuge]):
                     refuge_w = invested * (1 - p["queda"])
         scale = 1.0
-        if p["vol_alvo"] and i > VOL_DAYS:  # ...the team's own volatility...
-            seg = curve[i - VOL_DAYS:i + 1]
+        if p["vol_alvo"] and i - lo > VOL_DAYS:  # ...the team's own volatility...
+            seg = curve[i - lo - VOL_DAYS:i - lo + 1]
             vol = float(np.std(seg[1:] / seg[:-1] - 1)) * math.sqrt(252)
             if vol > 0:
                 scale = min(1.0, p["vol_alvo"] / vol)
-        if p["travao_dd"] and curve[i] < peak * (1 - p["travao_dd"]):  # ...and its fall from the top
+        if p["travao_dd"] and now < peak * (1 - p["travao_dd"]):  # ...and its fall from the top
             scale *= 0.5
         w = w * scale
         if refuge_w:
@@ -363,11 +366,12 @@ def run_team(p: dict, members: list[str], desks: dict, weights: dict, markets: l
         if core and bench is not None and np.isfinite(bench[i]):  # the core: the index, without the risk filters
             w = w * (1 - core)
             w[ix[agents.BENCHMARK]] += core
-        target = w * curve[i]
-    owed = sum(max(0.0, v) for y, v in realized.items() if y not in paid and y != markets[-1].as_of.year)
-    this_year = realized.get(markets[-1].as_of.year, 0.0) if markets[-1].as_of.year not in paid else 0.0
-    owed += max(0.0, this_year + float(np.nan_to_num(qty * close[-1]).sum() - cost.sum()))
-    years = max(len(markets) / 252, 1)
+        target = w * now
+    end = markets[hi - 1].as_of.year
+    owed = sum(max(0.0, v) for y, v in realized.items() if y not in paid and y != end)
+    this_year = realized.get(end, 0.0) if end not in paid else 0.0
+    owed += max(0.0, this_year + float(np.nan_to_num(qty * close[hi - 1]).sum() - cost.sum()))
+    years = max((hi - lo) / 252, 1)
     return {"curve": curve, "tax_owed": owed * agents.TAX_RATE, "trades": trades, "turnover": turnover / years / capital,
             "exposure": float(exposure.mean())}
 
@@ -393,6 +397,21 @@ def year_points(curve: np.ndarray, bench: np.ndarray, blocks: list[tuple[int, in
     return [agents.relative_points(score(curve, a, b), score(bench, a, b)) for a, b in blocks]
 
 
+def team_points(p: dict, members: list[str], desks: dict, weights: dict, markets: list, symbols: list[str],
+                open_: np.ndarray, close: np.ndarray, capital: float, blocks: list[tuple[int, int]]) -> list[float]:
+    """As the pre-training grades a strategy (pretrain._years and _graded): each year (and the exam) on fresh capital,
+    what is left after the tax still owed, the profile's grade minus the index's over the same days."""
+    import pretrain
+
+    out = []
+    for a, b in blocks:
+        r = run_team(p, members, desks, weights, markets, symbols, open_, close, capital, a, b)
+        years = (b - a) / pretrain.SESSIONS_PER_YEAR
+        own = agents.profile_score((r["curve"][-1] - r["tax_owed"]) / capital - 1, years, drawdown(r["curve"]), pretrain.PROFILE)
+        out.append(agents.relative_points(own, pretrain.index_score(markets[a:b], years)))
+    return out
+
+
 def grade(curve: np.ndarray, bench: np.ndarray, blocks: list, tax_owed: float, trades: int) -> dict:
     """Training years and exam as the pre-training grades them, from one continuous run (see the module's notes)."""
     import pretrain
@@ -410,6 +429,26 @@ def grade(curve: np.ndarray, bench: np.ndarray, blocks: list, tax_owed: float, t
         "sharpe": round(float(daily.mean() / daily.std() * math.sqrt(252)), 2) if daily.std() > 0 else 0.0,
         "trades": trades,
     }
+
+
+def verdict(pts: list[float]) -> dict:
+    """The pre-training's verdict of yearly points (the last one the exam)."""
+    import pretrain
+
+    train, exam = pts[:-1], pts[-1]
+    return {"overall": round(pretrain.overall(train, exam), 1), "train": round(pretrain.weighted(train), 1),
+            "years": [round(x, 1) for x in train], "exam": round(exam, 1),
+            "years_beating_index": int(sum(x > 0 for x in pts)), "years_total": len(pts)}
+
+
+def report_verdicts(profile: str) -> dict:
+    """Each strategy's verdict in the profile's latest pre-training report (graded the same way)."""
+    try:
+        r = json.loads(agents.pretrain_path(profile).read_text())
+    except (OSError, ValueError):
+        return {}
+    return {s: {"overall": v.get("overall"), "years_beating_index": v.get("years_beating_index"),
+                "years_total": v.get("years_total")} for s, v in r.get("strategies", {}).items() if "overall" in v}
 
 
 def pick_members(rule: str, alone: dict, desks: dict, split: int) -> list[str]:
@@ -462,6 +501,11 @@ def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, s
     bench = bench / bench[0] * capital
     index = grade(bench, bench, blocks, max(0.0, bench[-1] - capital) * agents.TAX_RATE, 1)
     alone = {s: grade(d["equity"], bench, blocks, d["tax_owed"], d["trades"]) for s, d in desks.items()}
+    reports = report_verdicts(profile)
+    for s in alone:  # the verdict as the pre-training gave it (yearly, fresh capital): the one to compare with
+        alone[s]["continuous_overall"] = alone[s]["overall"]
+        if s in reports:
+            alone[s].update({k: v for k, v in reports[s].items() if v is not None})
     rng = np.random.default_rng(seed)
     teams = {}
     for key, team in TEAMS.items():
@@ -470,11 +514,11 @@ def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, s
             members = pick_members(members.split(":", 1)[1], alone, desks, split)
         tried = []
         for c in configs(rng, search, team.get("procura")):
-            r = run_team(c, members, desks, weights, markets, symbols, open_, close, capital)
-            tried.append((c, r, year_points(r["curve"], bench, blocks)))
+            tried.append((c, None, team_points(c, members, desks, weights, markets, symbols, open_, close, capital, blocks)))
         # the choice on the training years only (recency-weighted, as the pre-training); the exam judges it after
         best = max(range(len(tried)), key=lambda t: pretrain.weighted(tried[t][2][:-1]))
-        c, r, _ = tried[best]
+        c, _, pts = tried[best]
+        r = run_team(c, members, desks, weights, markets, symbols, open_, close, capital)  # the 20 years in one go
         # walk-forward: the choice made on the years before each of the last 3 years, judged on that year, against the
         # template (the first configuration)
         folds = []
@@ -482,8 +526,11 @@ def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, s
             pick = max(range(len(tried)), key=lambda t: pretrain.weighted(tried[t][2][:test]))
             folds.append({"test": [markets[blocks[test][0]].as_of.isoformat(), markets[blocks[test][1] - 1].as_of.isoformat()],
                           "chosen": round(tried[pick][2][test], 1), "template": round(tried[0][2][test], 1)})
-        g = grade(r["curve"], bench, blocks, r["tax_owed"], r["trades"])
-        g0 = grade(tried[0][1]["curve"], bench, blocks, tried[0][1]["tax_owed"], tried[0][1]["trades"])
+        gc = grade(r["curve"], bench, blocks, r["tax_owed"], r["trades"])
+        g = {**gc, **verdict(pts), "continuous_overall": gc["overall"]}
+        g0 = verdict(tried[0][2])
+        r0 = run_team(tried[0][0], members, desks, weights, markets, symbols, open_, close, capital)
+        g0.update(grade(r0["curve"], bench, blocks, r0["tax_owed"], r0["trades"]) | verdict(tried[0][2]))
         teams[key] = {"nome": team["nome"], "ideia": team["ideia"], "membros": members, "params": c, **g,
                       "exposure": round(r["exposure"], 3), "turnover_per_year": round(float(r["turnover"]), 2),
                       "template": {x: g0[x] for x in ("overall", "train", "exam", "return_after_tax", "max_drawdown")},
@@ -495,6 +542,7 @@ def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, s
     return {"at": datetime.now(timezone.utc).isoformat(timespec="minutes"), "profile": profile, "broker": agents.BROKER,
             "capital": capital, "days": [markets[0].as_of.isoformat(), markets[-1].as_of.isoformat()],
             "exam": [markets[split].as_of.isoformat(), markets[-1].as_of.isoformat()],
+            "grading": "como o pré-treino: cada ano com capital novo, imposto devido no fim do ano, menos o índice",
             "index": index, "alone": alone, "teams": teams}
 
 
