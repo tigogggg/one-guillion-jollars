@@ -500,8 +500,19 @@ def index_score(markets: list[Market], years: float) -> float:
     return _INDEX_SCORES[key]
 
 
-def simulate(strategy: str, params: dict, markets: list[Market], capital: float = 1000.0) -> dict:
-    """Replay one strategy with the live rules (agents.decide), taxes and bankruptcy, from `capital` euros."""
+def simulate(strategy: str, params: dict, markets: list[Market], capital: float = 1000.0, keep_port: bool = False) -> dict:
+    """Replay one strategy with the live rules (agents.decide), taxes and bankruptcy, from `capital` euros. The day
+    loop runs in the Rust engine for the strategies it supports (engine.enabled), in Python otherwise."""
+    import engine
+
+    if engine.enabled(strategy) and not keep_port:
+        r = engine.run(strategy, params, markets, capital)
+        sells = [{"ret": t[8], "held": t[9]} for t in r["trades"] if t[1] == 1]
+        history = [{"date": engine.from_day(d).isoformat(), "equity": e} for d, e in r["history"]]
+        zone_stats = {agents.ZONES[i]: (total, n) for i, (total, n) in enumerate(r["zone_stats"]) if n}
+        bankrupt = engine.from_day(r["bankrupt"]).isoformat() if r["bankrupt"] is not None else None
+        return _graded(markets, capital, r["final"], r["tax_owed"], r["max_dd"], r["points"], r["n_trades"], bankrupt,
+                       sells, zone_stats, history)
     cfg = {"id": "bt", "name": strategy, "strategy": strategy, "params": params}
     port = new_portfolio(capital, markets[0].as_of)
     port["params"] = dict(params)
@@ -520,8 +531,18 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
             orders, _ = agents.decide(cfg, port, mkt, port["params"], live=False)
             port["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders]
     final = equity(port, markets[-1])
+    out = _graded(markets, capital, final, agents.tax_owed_if_sold(port, markets[-1]), port.get("max_dd", 0.0),
+                  port["points"], trades, bankrupt_on, sells, port.get("zone_stats", {}), port["history"])
+    if keep_port:
+        out["port"] = port
+    return out
+
+
+def _graded(markets: list[Market], capital: float, final: float, tax_owed: float, max_dd: float, league_points: int,
+            trades: int, bankrupt_on: str | None, sells: list[dict], zone_stats: dict, history: list[dict]) -> dict:
+    """A run's result as the training compares it (the same for the Python and the Rust day loop)."""
     years = len(markets) / SESSIONS_PER_YEAR
-    equities = pd.Series([h["equity"] for h in port["history"]], dtype=float)
+    equities = pd.Series([h["equity"] for h in history], dtype=float)
     daily = equities.pct_change().dropna()
     sharpe = float(daily.mean() / daily.std() * SESSIONS_PER_YEAR ** 0.5) if len(daily) > 20 and daily.std() > 0 else 0.0
     # "points", what every choice of the training compares, is the profile's grade of this run against buying the
@@ -529,22 +550,22 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
     # alike), so a choice is good when it beats the index the way this kind of investor cares about. Falling short
     # of the index counts double (agents.relative_points): the S&P 500 is the first base, every year.
     # what is left after selling everything at the end, as for the index (tax on the gains not taxed yet)
-    net = final - agents.tax_owed_if_sold(port, markets[-1])
-    own = agents.profile_score(net / capital - 1, years, port.get("max_dd", 0.0), PROFILE)
+    net = final - tax_owed
+    own = agents.profile_score(net / capital - 1, years, max_dd, PROFILE)
     return {
         "points": agents.relative_points(own, index_score(markets, years)),
         "profile_score": own,
-        "league_points": port["points"],
+        "league_points": league_points,
         "return": final / capital - 1,
         "return_after_tax": net / capital - 1,
-        "max_drawdown": port.get("max_dd", 0.0),
+        "max_drawdown": max_dd,
         "sharpe": round(sharpe, 2),
         "trades": trades,
         "bankrupt": bankrupt_on,
         "trade_stats": trade_stats(sells),
-        "by_zone": {z: round(total / n, 6) for z, (total, n) in port.get("zone_stats", {}).items() if n >= 20},
+        "by_zone": {z: round(total / n, 6) for z, (total, n) in zone_stats.items() if n >= 20},
         "daily": [round(x, 6) for x in daily.tolist()],
-        "curve": [(h["date"], (h["equity"] / capital - 1) * 100) for h in port["history"]],
+        "curve": [(h["date"], (h["equity"] / capital - 1) * 100) for h in history],
     }
 
 
@@ -868,6 +889,10 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     markets = _MARKETS
     split = max(len(markets) - EXAM_SESSIONS, len(markets) * 2 // 3)
     _SEGMENTS.update(blocks=yearly_blocks(markets[:split]), train=markets[:split], valid=markets[split:])
+    import engine
+
+    if engine.enabled(strategy):  # the Rust engine's copy of the data, built before forking so the workers share it
+        engine.data_for(markets)
     n = _workers()
     if n <= 1:
         return _train_strategy(strategy)

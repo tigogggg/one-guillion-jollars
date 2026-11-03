@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "ogj-engine"
+version = "0.1.0"
+description = "One Guillion Jollars trading engine (Rust)"
+requires-python = ">=3.11"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "ogj_engine"
+
+[tool.uv]
+# rebuild the extension whenever the Rust sources change (uv sync / uv run)
+cache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }, { file = "src/**/*.rs" }]

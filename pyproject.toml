@@ -1,10 +1,11 @@
 [project]
 name = "claude-skills"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"  # the engine reproduces the compensated float sum() of Python 3.12+
 dependencies = [
     "jsonschema>=4.25.1",
     "matplotlib>=3.9",
+    "ogj-engine",
     "openpyxl>=3.1.5",
     "pyyaml>=6.0",
     "requests>=2.31.0",
@@ -17,3 +18,6 @@ dev = ["pytest>=8.0"]
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+ogj-engine = { path = "engine" }

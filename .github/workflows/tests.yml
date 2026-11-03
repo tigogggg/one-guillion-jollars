@@ -4,6 +4,9 @@ name: Testes
 # under skills/ are upstream's and some need files that are not copied here.
 on:
   pull_request:
+  push:
+    branches: [main]
+    paths: ["engine/**", "scripts/agents.py", "scripts/pretrain.py", "scripts/engine.py", "tests/**"]
   workflow_dispatch:
 
 permissions:
@@ -12,11 +15,16 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 10  # measured 1 min
+    timeout-minutes: 20  # measured 1 min, plus the Rust build
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync
+      - run: uv sync  # builds the Rust engine (engine/) too
+      - name: Rust engine unit tests
+        working-directory: engine
+        run: cargo test --lib --quiet
       - run: uv run python -m pytest tests -q
+      - name: The Rust engine was really tested (not skipped)
+        run: uv run python -c "import ogj_engine; print('motor Rust:', ', '.join(ogj_engine.SUPPORTED))"
