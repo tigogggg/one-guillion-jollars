@@ -483,7 +483,8 @@ _INDEX_SCORES: dict[tuple, float] = {}
 
 
 def index_score(markets: list[Market], years: float) -> float:
-    """The profile's grade of buying the index (agents.BENCHMARK, in euros) over these days, once per period."""
+    """The profile's grade of buying the index (agents.BENCHMARK, in euros) over these days and selling at the end
+    (TAX_RATE on the gain, deferred until then), once per period."""
     key = (markets[0].as_of, markets[-1].as_of, len(markets), PROFILE)
     if key not in _INDEX_SCORES:
         df = markets[-1].hist.get(agents.BENCHMARK)
@@ -492,6 +493,7 @@ def index_score(markets: list[Market], years: float) -> float:
             close = df["Close"].loc[pd.Timestamp(markets[0].as_of): pd.Timestamp(markets[-1].as_of) + pd.Timedelta(hours=23)]
             if len(close) > 1:
                 ret = float(close.iloc[-1] / close.iloc[0] - 1)
+                ret -= agents.TAX_RATE * max(ret, 0.0)  # sold at the end: the deferred tax is paid then
                 dd = float((1 - close / close.cummax()).max())
                 score = agents.profile_score(ret, years, dd, PROFILE)
         _INDEX_SCORES[key] = score
@@ -526,12 +528,15 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
     # index over the same days (agents.profile_score of each: growth of the capital, losses and deep falls penalised
     # alike), so a choice is good when it beats the index the way this kind of investor cares about. Falling short
     # of the index counts double (agents.relative_points): the S&P 500 is the first base, every year.
-    own = agents.profile_score(final / capital - 1, years, port.get("max_dd", 0.0), PROFILE)
+    # what is left after selling everything at the end, as for the index (tax on the gains not taxed yet)
+    net = final - agents.tax_owed_if_sold(port, markets[-1])
+    own = agents.profile_score(net / capital - 1, years, port.get("max_dd", 0.0), PROFILE)
     return {
         "points": agents.relative_points(own, index_score(markets, years)),
         "profile_score": own,
         "league_points": port["points"],
         "return": final / capital - 1,
+        "return_after_tax": net / capital - 1,
         "max_drawdown": port.get("max_dd", 0.0),
         "sharpe": round(sharpe, 2),
         "trades": trades,
@@ -757,6 +762,23 @@ def _years(job: tuple[str, dict]) -> tuple[list[int], int]:
     return [r["points"] for r in runs], sum(r["trades"] for r in runs)
 
 
+def _years_vs(job: tuple[str, dict, list]) -> tuple[list[float], int]:
+    """Like _years, for a new candidate that must beat the original (`base`) in CONSISTENCY of the years: once it has
+    lost too many to pass, the rest are skipped (filled with its worst year so far, which only ranks it lower)."""
+    strategy, params, base = job
+    blocks = _SEGMENTS["blocks"]
+    allowed = len(blocks) - math.ceil(CONSISTENCY * len(blocks))  # years it may fail and still pass
+    years, trades, lost = [], 0, 0
+    for b, ref in zip(blocks, base):
+        r = simulate(strategy, params, b)
+        years.append(r["points"])
+        trades += r["trades"]
+        lost += r["points"] <= ref
+        if lost > allowed:
+            return years + [min(years)] * (len(blocks) - len(years)), trades
+    return years, trades
+
+
 def _points(job: tuple[str, dict, str]) -> float:
     """The exam year's points ("valid"), or the training years' score ("train", see train_score)."""
     strategy, params, segment = job
@@ -889,7 +911,11 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
     incumbents = incumbent_candidates(strategy, pool[0]) if strategy != "indexador" else []
     first_incumbent = len(pool)
     pool += incumbents
-    scored = _map(_years, [(strategy, p) for p in pool])
+    # The original first (every candidate is judged against it), then the new candidates, which stop early once they
+    # cannot pass (_years_vs), then the earlier choices (incumbents), always run in full.
+    scored = [_years((strategy, pool[0]))]
+    scored += _map(_years_vs, [(strategy, p, scored[0][0]) for p in pool[1:first_incumbent]])
+    scored += _map(_years, [(strategy, p) for p in pool[first_incumbent:]])
     base = scored[0][0]
     need = math.ceil(CONSISTENCY * len(blocks))  # years a candidate must beat the original in
 
@@ -924,7 +950,7 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
                         continue
                     children.append(child)
             pool += children
-            scored += _map(_years, [(strategy, c) for c in children])
+            scored += _map(_years_vs, [(strategy, c, base) for c in children])
     crashes = {0: crash_test(strategy, pool[0], windows)}
     plateau = {}
     best_i = 0

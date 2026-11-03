@@ -64,8 +64,13 @@ def analyse(report: dict) -> dict:
         return {"beats_index": int((s > index[s.index]).sum()), "years": len(s), "yearly_growth": round(growth, 4),
                 "worst_year": round(float(s.min()), 4) if len(s) else None}
 
+    net_index = row(index)
+    total = float((1 + index.dropna()).prod())
+    years_n = len(index.dropna())
+    # buy and hold pays its tax only when sold: what is left after selling at the end, per year
+    net_index["yearly_growth_after_tax"] = round((1 + (total - 1) * (1 - agents.TAX_RATE)) ** (1 / years_n) - 1, 4) if years_n else 0.0
     return {
-        "years": [int(y) for y in years.index], "index": row(index), "together": row(together),
+        "years": [int(y) for y in years.index], "index": net_index, "together": row(together),
         "leaders": row(leaders), "best_alone": {"strategy": best, **row(years[best])},
         "alone": {s: row(years[s]) for s in years}, "mean_correlation": round(mean_corr, 3),
         "independent_bets": round(n / (1 + (n - 1) * mean_corr), 1) if n else 0, "strategies": n,
@@ -86,7 +91,8 @@ def summary_lines(a: dict) -> list[str]:
     return [fmt("together", "Todos juntos (mesmo dinheiro em cada um)"), fmt("leaders", f"Os {TOP} melhores do ano anterior"),
             f"Melhor sozinho ({b['strategy']}): bate o S&P 500 em {b['beats_index']}/{b['years']} anos · "
             f"{b['yearly_growth'] * 100:+.1f}%/ano",
-            f"S&P 500: {a['index']['yearly_growth'] * 100:+.1f}%/ano em {y} anos",
+            f"S&P 500: {a['index']['yearly_growth'] * 100:+.1f}%/ano em {y} anos "
+            f"({a['index'].get('yearly_growth_after_tax', 0) * 100:+.1f}%/ano depois do imposto, vendendo no fim)",
             f"Parecidos entre si: correlação média {a['mean_correlation']:.2f}, ou seja {a['strategies']} estratégias "
             f"valem por cerca de {a['independent_bets']} apostas independentes"]
 

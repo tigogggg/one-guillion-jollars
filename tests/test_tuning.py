@@ -179,3 +179,21 @@ def test_points_are_the_profile_grade_over_the_index(monkeypatch):
     P = dict(agents.STRATEGIES["foguetao"][2])
     each = [pretrain.simulate("foguetao", P, b)["points"] for b in blocks]
     assert pretrain.train_score("foguetao", P, markets) == pytest.approx(pretrain.weighted(each))
+
+
+def test_a_candidate_stops_once_it_cannot_beat_the_original_in_enough_years(monkeypatch):
+    blocks = [[i] for i in range(10)]
+    monkeypatch.setitem(pretrain._SEGMENTS, "blocks", blocks)
+    calls = []
+
+    def fake(strategy, params, markets):
+        calls.append(markets[0])
+        return {"points": params["v"], "trades": 1}
+
+    monkeypatch.setattr(pretrain, "simulate", fake)
+    base = [5.0] * 10  # 65% of 10 years: it must beat 7 of them, so it may lose 3
+    years, trades = pretrain._years_vs(("x", {"v": 1.0}, base))
+    assert len(calls) == 4 and years == [1.0] * 10 and trades == 4  # stopped after the 4th lost year
+    calls.clear()
+    years, _ = pretrain._years_vs(("x", {"v": 9.0}, base))
+    assert len(calls) == 10 and years == [9.0] * 10

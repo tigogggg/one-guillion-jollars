@@ -850,6 +850,19 @@ def equity(port: dict, mkt: Market) -> float:
     return port["cash"] + sum(position_value(mkt, s, p) for s, p in port["positions"].items())
 
 
+def tax_owed_if_sold(port: dict, mkt: Market) -> float:
+    """The tax still to pay if everything were sold now (to compare with buying the index and holding it, whose tax
+    is deferred until it is sold): TAX_RATE on this year's realised gains plus the open positions' gains (a year's
+    losses offset that year's gains), plus last year's gains when their tax has not been paid yet."""
+    this_year = str(mkt.as_of.year)
+    realized = port.get("realized", {})
+    taxed = port.get("taxed", [])
+    open_gain = sum(position_value(mkt, s, p) - p.get("cost_eur", 0.0) for s, p in port["positions"].items())
+    owed = max(0.0, realized.get(this_year, 0.0) + open_gain)
+    owed += sum(max(0.0, g) for y, g in realized.items() if y < this_year and y not in taxed and int(y) == mkt.as_of.year - 1)
+    return owed * TAX_RATE
+
+
 def fees(symbol: str) -> float:
     """Commission/slippage per side, plus currency conversion for anything not quoted in euros."""
     return FEE + (0.0 if is_eur(symbol) else FX_FEE)
