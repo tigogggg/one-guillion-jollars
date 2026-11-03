@@ -149,7 +149,9 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
     const login = await loginActive(env);
     const embed = new URL(request.url).searchParams.get("embed") === "1";
     if (mine && !embed) return redirect("/#perfil");  // the portfolio lives in the portal's profile; old links land there
-    const resp = html(portfolioPage(data, tok, { signedIn: mine, loginOn: login.any, googleOn: login.google, versions: hasDb(env), embed }));
+    // In the profile each part has its own frame: the portfolio, the /seguir list, the account and privacy.
+    const view = embed && ["seguir", "conta"].includes(new URL(request.url).searchParams.get("vista")) ? new URL(request.url).searchParams.get("vista") : "carteira";
+    const resp = html(portfolioPage(data, tok, { signedIn: mine, loginOn: login.any, googleOn: login.google, versions: hasDb(env), embed, view }));
     if (embed) resp.headers.set("X-Embed", "1");  // the worker allows this page inside the portal (same site only)
     return resp;
   }
@@ -754,22 +756,20 @@ async function history(env, data) {
 // ---------------------------------------------------------------------------
 
 function portfolioPage(data, tok, opts = {}) {
+  // Inside the portal's profile the 👀 Seguir and 🔒 Conta parts are profile tabs (frames of this page with ?vista=):
+  // the portfolio frame leaves them out, and a part's frame shows only that part, without the tab bar.
+  const view = opts.embed ? opts.view || "carteira" : null;
+  const inWallet = (tab) => view !== "carteira" || !["seguir", "conta"].includes(tab);
   const body = `
 <header class="embed-hide">
   <p class="small"><a href="/">🏟️ One Guillion Jollars</a> · ${opts.signedIn ? '<a href="/sair">Sair</a>' : '<a href="/entrar">Entrar</a>'}</p>
   <h1>💼 Carteira de ${esc(data.name || "membro")}</h1>
   <p class="muted small">Privada: só quem tem este link a vê. Preços do Yahoo Finance, atualizados a cada minuto (normalmente com ~15 min de atraso face à bolsa). Valores totais em euros ao câmbio atual. Ferramenta educativa, não é aconselhamento.</p>
 </header>
-<nav class="tabs" id="tabs">
-  <button class="tab on" data-tab="resumo">📊 Resumo</button>
-  <button class="tab" data-tab="posicoes">💼 Posições</button>
-  <button class="tab" data-tab="operacoes">🧾 Operações</button>
-  <button class="tab" data-tab="adicionar">➕ Adicionar</button>
-  <button class="tab" data-tab="propostas">🧠 Propostas para ti</button>
-  <button class="tab" data-tab="seguir">👀 Seguir</button>
-  <button class="tab" data-tab="importar">📥 Importar</button>
-  <button class="tab" data-tab="analise">🤖 Análise do Claude</button>
-  <button class="tab" data-tab="conta">🔒 Conta</button>
+<nav class="tabs" id="tabs" data-view="${view || ""}"${view && view !== "carteira" ? ' style="display:none"' : ""}>
+  ${[["resumo", "📊 Resumo"], ["posicoes", "💼 Posições"], ["operacoes", "🧾 Operações"], ["adicionar", "➕ Adicionar"], ["propostas", "🧠 Propostas para ti"],
+     ["seguir", "👀 Seguir"], ["importar", "📥 Importar"], ["analise", "🤖 Análise do Claude"], ["conta", "🔒 Conta"]].filter(([t]) => inWallet(t))
+    .map(([t, label], i) => `<button class="tab${i ? "" : " on"}" data-tab="${t}">${label}</button>`).join("\n  ")}
 </nav>
 <section data-tab="conta" hidden>
   <h2>🔑 Entrar</h2>
@@ -1014,6 +1014,10 @@ $("versions").addEventListener("click", async (e) => {
   try { SNAP = await post({ action: "restore", version: +b.dataset.restore }); render(); drawHistory(); loadVersions(); } catch (err) { alert(err.message); }
 });
 document.querySelector('[data-tab="conta"]').addEventListener("click", loadVersions);
+if ($("tabs").dataset.view === "seguir" || $("tabs").dataset.view === "conta") {  // a profile tab's frame: only that part
+  openTab($("tabs").dataset.view);
+  if ($("tabs").dataset.view === "conta") loadVersions();
+}
 if ($("require-login")) $("require-login").onchange = async (e) => {
   try { await post({ action: "security", require_login: e.target.checked }); alert(e.target.checked ? "Feito: a partir de agora é preciso entrar com o Discord ou o Google." : "Feito: o link volta a abrir a carteira sem login."); }
   catch (err) { e.target.checked = !e.target.checked; alert(err.message); }

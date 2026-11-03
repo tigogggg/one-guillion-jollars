@@ -382,8 +382,14 @@ ${portal ? `<section data-tab="perfil" hidden>
       <button class="btn" type="submit">GUARDAR</button></div>
     <p class="muted small" id="dn-msg">2 a 24 caracteres, sem @ nem links, diferente dos agentes e dos outros membros. Vazio usa o teu nome do Discord${extras.user.discord ? " (" + esc(extras.user.discord) + ")" : ""}.</p>
   </form>
-  <h2>💼 A minha carteira</h2>
-  <iframe id="wallet-frame" class="wallet-frame" title="A minha carteira" data-src="${esc(extras.user.wallet)}?embed=1" loading="lazy"></iframe>`
+  <nav class="tabs profile-tabs" id="profile-tabs">
+    <button class="tab on" type="button" data-part="carteira">💼 Carteira</button>
+    <button class="tab" type="button" data-part="seguir">👀 Seguir</button>
+    <button class="tab" type="button" data-part="conta">🔒 Conta e privacidade</button>
+  </nav>
+  <iframe id="wallet-frame" class="wallet-frame" data-part="carteira" title="A minha carteira" data-src="${esc(extras.user.wallet)}?embed=1"></iframe>
+  <iframe class="wallet-frame" data-part="seguir" title="Ações que sigo" data-src="${esc(extras.user.wallet)}?embed=1&amp;vista=seguir" hidden></iframe>
+  <iframe class="wallet-frame" data-part="conta" title="Conta e privacidade" data-src="${esc(extras.user.wallet)}?embed=1&amp;vista=conta" hidden></iframe>`
   : `<h2>💼 A tua carteira</h2>
   <div class="panel prose">
     <p>Cada membro regista as suas compras e vendas reais (ou importa da XTB) e acompanha o desempenho com preços quase em tempo real, aqui mesmo no portal.</p>
@@ -535,6 +541,8 @@ details.chap[open] > summary { color:var(--neon); }
 .userbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; font-size:.9rem; }
 .userbar .btn { text-decoration:none; display:inline-block; }
 .wallet-frame { width:100%; min-height:900px; border:0; display:block; background:transparent; }
+.wallet-frame[hidden] { display:none; } .wallet-frame[data-part="seguir"], .wallet-frame[data-part="conta"] { min-height:200px; }
+.tabs.profile-tabs { position:static !important; background:none; margin:14px 0 4px; padding:0; }
 body.embed .tabs { position:static !important; } body.embed main { padding-top:4px; padding-bottom:12px; } body.embed .embed-hide { display:none !important; }
 .search { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 10px; } .search input { flex:1; min-width:220px; background:var(--card); color:var(--fg); border:2px solid var(--neon); border-radius:6px; padding:9px 11px; font:inherit; }
 .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; } .dot.ok { background:var(--up); box-shadow:0 0 6px var(--up); } .dot.old { background:var(--gold); } .dot.bad { background:var(--down); } .dot.run { background:var(--neon); box-shadow:0 0 6px var(--neon); }
@@ -1646,20 +1654,30 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
 })();
 
 // ---- the member's portfolio inside the portal (same site, so the frame grows to fit) ----
+// The profile's tabs (💼 Carteira, 👀 Seguir, 🔒 Conta e privacidade) are frames of the portfolio page, each loaded on first use.
 (function walletFrame() {
-  const f = $("wallet-frame");
-  if (!f) return;
-  const load = () => { if (!f.src) f.src = f.dataset.src; };
-  const fit = () => { try { const d = f.contentDocument; if (d && d.body) f.style.height = Math.max(600, d.documentElement.scrollHeight) + "px"; } catch (e) {} };
-  f.addEventListener("load", () => {
-    fit();
-    try { new ResizeObserver(fit).observe(f.contentDocument.body); } catch (e) { setInterval(fit, 1000); }
+  if (!$("wallet-frame")) return;
+  const frames = [...document.querySelectorAll(".wallet-frame[data-part]")];
+  frames.forEach((f) => {
+    const fit = () => { try { const d = f.contentDocument; if (d && d.body) f.style.height = Math.max(f.dataset.part === "carteira" ? 600 : 200, d.documentElement.scrollHeight) + "px"; } catch (e) {} };
+    f.addEventListener("load", () => {
+      fit();
+      try { new ResizeObserver(fit).observe(f.contentDocument.body); } catch (e) { setInterval(fit, 1000); }
+    });
   });
+  const current = () => frames.find((f) => !f.hidden) || frames[0];
+  const load = () => { const f = current(); if (!f.src) f.src = f.dataset.src; };
+  const show = (part) => {
+    frames.forEach((f) => { f.hidden = f.dataset.part !== part; });
+    document.querySelectorAll("#profile-tabs .tab").forEach((b) => b.classList.toggle("on", b.dataset.part === part));
+    load();
+  };
+  $("profile-tabs").addEventListener("click", (e) => { const b = e.target.closest("[data-part]"); if (b) show(b.dataset.part); });
   document.addEventListener("click", (e) => { if (e.target.closest('[data-go="perfil"]')) { e.preventDefault(); load(); openTab("perfil"); window.scrollTo(0, 0); } });
   if (location.hash === "#perfil" || location.hash === "#carteira") load();
   document.addEventListener("click", (e) => {  // "Abrir a minha carteira" links open the profile instead of another page
     const a = e.target.closest('a[href^="/c/"]');
-    if (a && !a.closest(".wallet-frame") && !/\/export/.test(a.getAttribute("href"))) { e.preventDefault(); load(); openTab("perfil"); window.scrollTo(0, 0); }
+    if (a && !a.closest(".wallet-frame") && !/\/export/.test(a.getAttribute("href"))) { e.preventDefault(); show("carteira"); openTab("perfil"); window.scrollTo(0, 0); }
   });
 })();
 
