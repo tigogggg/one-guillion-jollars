@@ -420,6 +420,9 @@ def fields(raw: dict[str, pd.Series], days: pd.DatetimeIndex) -> pd.DataFrame:
             cols[f"{k}_gov"] = s
     eu_gov = cached("gasto_publico_eu")
     if eu_gov is not None and len(eu_gov):
+        # TED's search starts in late 2016 (zeros before) and fills up over its first quarters: from the third on
+        eu_gov = eu_gov.where(eu_gov > 0)
+        eu_gov = eu_gov.apply(lambda c: c.where(c.notna().cumsum() > 2))
         for k, s in gov_signal(eu_gov, per_year=4, lag_months=TED_LAG_MONTHS).items():
             cols[f"{k}_gov"] = s
     epu = cached("epu_categorias")
