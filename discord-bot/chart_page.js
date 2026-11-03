@@ -434,6 +434,8 @@ h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem
 .running .racer::before { content:"💨"; position:absolute; left:-22px; font-size:14px; opacity:.8; }
 @keyframes bob { to { transform:translateY(-4px) rotate(-6deg); } }
 #race-scrub, #pt-race-scrub { width:100%; margin:10px 0 0; accent-color:var(--accent); }
+table.perf th, table.perf td { padding:6px 5px; font-size:.86rem; } table.perf th { white-space:normal; line-height:1.2; }
+table.perf td:first-child { white-space:normal; min-width:120px; }
 .race-split { display:grid; grid-template-columns:minmax(260px,2fr) 3fr; gap:14px; align-items:start; }
 .race-split > div { min-width:0; } .race-split h2 { margin-top:6px; }
 @media (max-width:820px) { .race-split { grid-template-columns:1fr; } .race-track { order:-1; } }
@@ -1134,7 +1136,7 @@ function perfTable(boxId, data, people, pick) {
     box.innerHTML = '<div class="filters"><label class="small">Personalizado: de <input type="date" class="pf-from" value="' + custom.from + '" min="' + first + '" max="' + last + '"></label>' +
       '<label class="small">a <input type="date" class="pf-to" value="' + custom.to + '" min="' + first + '" max="' + last + '"></label>' +
       '<span class="muted small">Toca no título de uma coluna para ordenar. Dados até ' + esc(lastX.length > 10 ? lisbon(Date.parse(lastX), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : last) + '.</span></div>' +
-      '<div class="scroll"><table><tr><th>Agente</th>' + cols.map((c) => '<th class="num"><a href="#" class="pf-sort" data-k="' + c.key + '">' + esc(c.label) + (sortCol === c.key ? " ▼" : "") + '</a></th>').join("") + '</tr>' +
+      '<div class="scroll"><table class="perf"><tr><th>Agente</th>' + cols.map((c) => '<th class="num"><a href="#" class="pf-sort" data-k="' + c.key + '">' + esc(c.label) + (sortCol === c.key ? " ▼" : "") + '</a></th>').join("") + '</tr>' +
       rows.map((r) => '<tr><td>' + (r.a && pick ? '<a href="#" class="pf-agent" data-n="' + esc(r.s.name) + '" title="Abrir a ficha do agente">' : "") +
         esc((r.a ? r.a.emoji + " " : "") + r.s.name) + (r.a && pick ? "</a>" : "") + '</td>' + cols.map((c) => {
         const x = r.cells[c.key];
