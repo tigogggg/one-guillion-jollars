@@ -2684,7 +2684,8 @@ def ensure_profiles(config: dict, state: dict, start: date) -> list[dict]:
     have = {(a.get("profile_base"), profile_of(a)) for a in config["agents"]}
     created = []
     for cfg in list(active_agents(config)):
-        if (mode_of(cfg) != REACTIVE or profile_of(cfg) != DEFAULT_PROFILE or cfg["strategy"] in LIVE_ONLY
+        if (mode_of(cfg) != REACTIVE or profile_of(cfg) != DEFAULT_PROFILE
+                or cfg["strategy"] in LIVE_ONLY | INTRADAY_ONLY  # no pre-training: a profile copy would be identical
                 or cfg["strategy"] == "indexador" or cfg.get("lineage") or cfg["id"] != cfg["strategy"]):
             continue
         for name, p in PROFILES.items():

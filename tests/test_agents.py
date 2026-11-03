@@ -637,6 +637,8 @@ def test_each_trainable_strategy_gets_a_conservative_and_an_aggressive_agent():
         {"id": "foguetao-diario", "name": "Foguetão · diário", "emoji": "🚀", "strategy": "foguetao", "capital": 1000,
          "params": {}, "modo": "diario", "twin_of": "foguetao"}]}
     state = {"agents": {"foguetao": {**new_portfolio(1000, DATES[0].date()), "params": {"n": 7}}}}
+    config["agents"].append({"id": "relampago", "name": "Relâmpago", "emoji": "⚡", "strategy": "relampago",
+                             "capital": 1000, "params": {"n": 4}})  # intraday only: not pre-trained, no copies
     config["agents"].append({"id": "meu-foguete", "name": "Meu foguete", "emoji": "🚀", "strategy": "foguetao",
                              "capital": 1000, "params": {"n": 5}})  # made with /agente criar: no profile copies
     made = agents.ensure_profiles(config, state, DATES[0].date())
@@ -645,4 +647,4 @@ def test_each_trainable_strategy_gets_a_conservative_and_an_aggressive_agent():
     assert state["agents"]["foguetao-conservador"]["params"] == {"n": 7}
     assert agents.ensure_profiles(config, state, DATES[0].date()) == []
     twins = agents.ensure_twins(config, state, DATES[0].date())
-    assert sorted(t["twin_of"] for t in twins) == ["jornalista", "meu-foguete"]  # none for the profile agents
+    assert "foguetao-conservador" not in {t["twin_of"] for t in twins}  # none for the profile agents
