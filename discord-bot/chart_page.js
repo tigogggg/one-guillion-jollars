@@ -321,11 +321,10 @@ ${portal ? `<section data-tab="hoje"><div id="today"></div></section>` : ""}
     <div>Líder <b id="race-leader">—</b></div>
     <div class="controls"><button id="race-play" class="btn">▶ VER A CORRIDA</button><button id="race-speed" class="btn alt">1×</button></div>
   </div>
-  <div id="track" class="track"></div>
   <input type="range" id="race-scrub" min="0" value="0" aria-label="Dia da corrida">
   <p class="muted small">Cada corredor avança com a rentabilidade do agente; a meta é o melhor resultado da corrida. Toca num corredor para abrir a ficha dele.</p>
-  <h2>🏆 Placar</h2>
-  <ol id="board" class="board"></ol>
+  <div class="race-split"><div class="race-board"><h2>🏆 Placar</h2><ol id="board" class="board"></ol></div>
+    <div class="race-track"><h2>🏁 Corrida</h2><div id="track" class="track"></div></div></div>
   <h2>📈 Gráfico</h2>
   <div id="chart" class="chart"></div>
   <p class="muted small">Toca numa linha da legenda para a esconder ou mostrar, toca duas vezes para ver só essa. Arrasta para fazer zoom; duplo toque volta ao início.</p>
@@ -338,10 +337,9 @@ ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pret
     <div>Líder <b id="pt-race-leader">—</b></div>
     <div class="controls"><button id="pt-race-play" class="btn">▶ VER A CORRIDA</button><button id="pt-race-speed" class="btn alt">1×</button></div>
   </div>
-  <div id="pt-track" class="track"></div>
   <input type="range" id="pt-race-scrub" min="0" value="0" aria-label="Dia da corrida do pré-treino">
-  <h2>🏆 Placar</h2>
-  <ol id="pt-board" class="board"></ol>
+  <div class="race-split"><div class="race-board"><h2>🏆 Placar</h2><ol id="pt-board" class="board"></ol></div>
+    <div class="race-track"><h2>🏁 Corrida</h2><div id="pt-track" class="track"></div></div></div>
   <h2>📈 Gráfico</h2>
   <div id="pt-chart" class="chart"></div>
   <h2>📊 Desempenho</h2>
@@ -435,6 +433,9 @@ h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem
 .running .racer::before { content:"💨"; position:absolute; left:-22px; font-size:14px; opacity:.8; }
 @keyframes bob { to { transform:translateY(-4px) rotate(-6deg); } }
 #race-scrub, #pt-race-scrub { width:100%; margin:10px 0 0; accent-color:var(--accent); }
+.race-split { display:grid; grid-template-columns:minmax(260px,2fr) 3fr; gap:14px; align-items:start; }
+.race-split > div { min-width:0; } .race-split h2 { margin-top:6px; }
+@media (max-width:820px) { .race-split { grid-template-columns:1fr; } .race-track { order:-1; } }
 .board { list-style:none; padding:0; margin:0; display:grid; gap:6px; counter-reset:pos; }
 .board li { display:flex; align-items:center; gap:10px; background:var(--card); border:2px solid var(--line); border-radius:6px; padding:8px 10px; cursor:pointer; }
 .board li .pos { font-family:var(--pixel); font-size:.65rem; width:34px; color:var(--gold); }
