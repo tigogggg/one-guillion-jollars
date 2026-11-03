@@ -539,6 +539,8 @@ def grade(curve: np.ndarray, bench: np.ndarray, blocks: list, tax_owed: float, t
     pts = year_points(curve, bench, blocks)
     train, exam = pts[:-1], pts[-1]
     daily = np.diff(curve) / curve[:-1]
+    idx = np.diff(bench) / bench[:-1]
+    active = daily - idx
     capital = curve[0] if curve[0] else 1.0
     return {
         "overall": round(pretrain.overall(train, exam), 1), "train": round(pretrain.weighted(train), 1),
@@ -547,6 +549,11 @@ def grade(curve: np.ndarray, bench: np.ndarray, blocks: list, tax_owed: float, t
         "return": round(float(curve[-1] / capital - 1), 4), "return_after_tax": round(float((curve[-1] - tax_owed) / capital - 1), 4),
         "max_drawdown": round(drawdown(curve), 4),
         "sharpe": round(float(daily.mean() / daily.std() * math.sqrt(252)), 2) if daily.std() > 0 else 0.0,
+        # against the index (as LEAN's statistics): beta, information ratio, and the probabilistic Sharpe ratio of the
+        # daily differences (the probability their true Sharpe is above 0, skewness and fat tails counted)
+        "beta": round(float(np.cov(daily, idx)[0, 1] / idx.var()), 2) if idx.var() > 0 else 0.0,
+        "information_ratio": round(float(active.mean() / active.std() * math.sqrt(252)), 2) if active.std() > 0 else 0.0,
+        "psr": round(pretrain.deflated_sharpe(active.tolist(), []), 3) if active.std() > 0 else 0.0,
         "trades": trades,
     }
 
@@ -862,6 +869,7 @@ def evolve(markets: list, profile: str, capital: float, generations: int = GENER
         detail.append({**{k: t[k] for k in ("id", "familia", "membros", "params", "origem")}, "score": t["score"],
                        "sobreviveu": t.get("sobreviveu", 0), "return_after_tax": g["return_after_tax"],
                        "max_drawdown": g["max_drawdown"], "exposure": round(r["exposure"], 3), "trades": r["trades"],
+                       **{k: g[k] for k in ("sharpe", "beta", "information_ratio", "psr")},
                        "outra_entrada": {"entrada": other, **flipped}})
     state = {"generation": gen, "profile": profile, "broker": agents.BROKER, "teams": pop, "log": log[-200:],
              "trials": state.get("trials", 0) + generations * POP_SIZE, "version": POP_VERSION}
