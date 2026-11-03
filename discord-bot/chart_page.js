@@ -1527,20 +1527,29 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
   const when = (x) => x && (x.updated || x.as_of || x.date || x.created);
   const hours = (iso) => iso ? (Date.now() - Date.parse(iso.length === 10 ? iso + "T18:00:00Z" : iso)) / 3.6e6 : null;
   const weekendSlack = [0, 1].includes(new Date().getDay()) ? 48 : 0;  // Sunday and Monday: Friday's data is fine
+  // [part, last update, hours before it counts as late, how often, the schedule's jobs that update it (UPCOMING keys)]
   const rows = [
-    ["🏁 Liga dos agentes", DATA.updated, 30 + weekendSlack, "dias úteis às 07:30"],
-    ["📰 Notícias", NEWS && NEWS.updated, 8 + weekendSlack, "várias vezes por dia"],
-    ["🎯 Oportunidades e contexto", when(MARKET), 30 + weekendSlack, "com a liga"],
-    ["🧠 Propostas", when(PROPOSALS), 30 + weekendSlack, "com a liga"],
-    ["📅 Agenda", when(CALENDAR), 30 + weekendSlack, "com a liga"],
-    ["⏪ Pré-treino", PRETRAIN && PRETRAIN.updated, 24 * 8, "ao domingo"],
+    ["🏁 Liga dos agentes", DATA.updated, 30 + weekendSlack, "a cada ronda nos dias úteis (10 em 10 min) e às 07:30", ["ronda", "agentes"]],
+    ["📰 Notícias", NEWS && NEWS.updated, 8 + weekendSlack, "várias vezes por dia", ["noticias"]],
+    ["🎯 Oportunidades e contexto", when(MARKET), 30 + weekendSlack, "com a liga", ["agentes"]],
+    ["🧠 Propostas", when(PROPOSALS), 30 + weekendSlack, "com a liga", ["agentes"]],
+    ["📅 Agenda", when(CALENDAR), 30 + weekendSlack, "com a liga", ["agentes"]],
+    ["⏪ Pré-treino", PRETRAIN && PRETRAIN.updated, 24 * 8, "ao domingo", ["treino"]],
   ];
+  const soon = (ms) => { const m = Math.round(ms / 60000); return m < 1 ? "agora" : m < 60 ? m + " min" : m < 2880 ? Math.round(m / 60) + " h" : Math.round(m / 1440) + " dias"; };
+  const next = (keys) => {
+    const at = Math.min(...UPCOMING.filter((j) => keys.includes(j.key)).map((j) => j.at));
+    return isFinite(at) ? esc(lisbon(at, { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) +
+      ' <span class="muted">(em ' + soon(at - Date.now()) + ")</span>" : "—";
+  };
   const dot = (h, max) => h == null ? '<span class="dot bad"></span>sem dados' : h <= max ? '<span class="dot ok"></span>em dia' : h <= max * 2 ? '<span class="dot old"></span>atrasado' : '<span class="dot bad"></span>parado';
   const ago = (h) => h == null ? "—" : h < 1 ? Math.max(1, Math.round(h * 60)) + " min" : h < 48 ? Math.round(h) + " h" : Math.round(h / 24) + " dias";
-  $("status").innerHTML = '<h2>🩺 Estado do sistema</h2><p class="muted small">Quando cada parte do portal foi atualizada pela última vez; as próximas atualizações estão em baixo.</p>' +
-    table(["Parte", "Estado", "Última atualização", "Há", "Costuma atualizar"], rows.map(([k, iso, max, every]) => { const h = hours(iso);
-      return [k, dot(h, max), iso ? esc(lisbon(Date.parse(iso.length === 10 ? iso + "T18:00:00Z" : iso), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) : "—", ago(h), esc(every)]; })) +
-    '<p class="muted small">🟢 em dia · 🟡 atrasado (mais do que o normal) · 🔴 parado ou sem dados. Se algo ficar parado, avisa no Discord: o canal 🔧-estado mostra os erros.</p>';
+  const draw = () => { $("status").innerHTML = '<h2>🩺 Estado do sistema</h2><p class="muted small">Quando cada parte do portal foi atualizada pela última vez e quando volta a ser; todas as tarefas em baixo.</p>' +
+    table(["Parte", "Estado", "Última atualização", "Há", "Próxima", "Costuma atualizar"], rows.map(([k, iso, max, every, keys]) => { const h = hours(iso);
+      return [k, dot(h, max), iso ? esc(lisbon(Date.parse(iso.length === 10 ? iso + "T18:00:00Z" : iso), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) : "—", ago(h), next(keys), esc(every)]; })) +
+    '<p class="muted small">🟢 em dia · 🟡 atrasado (mais do que o normal) · 🔴 parado ou sem dados. Se algo ficar parado, avisa no Discord: o canal 🔧-estado mostra os erros.</p>'; };
+  draw();
+  setInterval(() => { if (!$("status").closest("section").hidden) draw(); }, 30000);
 })();
 
 // ---- quick guide on the first visit ----
