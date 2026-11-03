@@ -622,9 +622,12 @@ def variants(strategy: str, n: int) -> list[dict]:
 
 REVIEW_PATH = agents.REPO_AGENTS / "claude_review.json"
 HISTORY_KEEP = 3  # earlier choices kept per strategy, each one a candidate in the next pre-training
-CHANGE_MARGIN = 0.05  # a new choice replaces the one the agent trades with only if it is this much better overall…
-CHANGE_MIN = 5.0  # …and by at least this many points (0.5% a year): scores relative to the index can be close to 0
-EXAM_SLACK = 10.0  # a new choice may score this much less on the exam year (1% of it) if it is better overall
+# The exam year (the last one) is sealed: no choice looks at it; it is only reported (with the verdict "overall").
+# A new choice replaces the one the agent trades with only when (1) the search holds up out of sample (walk_forward,
+# against the parameters the agent trades with, on the WF_FOLDS years before the exam) and (2) its gain over them in
+# the training years is unlikely to be luck given how many candidates were tried: the deflated Sharpe ratio (Bailey &
+# López de Prado) of the yearly differences, with the trials' spread, at least DSR_MIN.
+DSR_MIN = 0.90
 
 
 _SERIES_CHOICES: dict[str, list[dict]] = {}  # choices of the earlier runs of a series inside one job, newest first
@@ -753,7 +756,7 @@ def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: lis
 
     Each rule that is off is tried at GREEDY_LEVELS of its range on the training years (train_score); the best level
     of each is kept as a candidate. Candidates are added in order of gain, each only if it adds GREEDY_GAIN to the
-    training score, does not lose on the exam year and does not fall deeper in the crises.
+    training score and does not fall deeper in the crises (the exam year is only reported).
     Returns (parameters, the log of what was tried, the new exam result or None).
     """
     base = train_score(strategy, chosen, train_mk)
@@ -785,10 +788,10 @@ def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: lis
         if points < base + need:
             t["train_gain"] = points - base
             continue
-        ex = simulate(strategy, cand, valid)
+        ex = simulate(strategy, cand, valid)  # reported only: the exam is sealed
         cr = crash_test(strategy, cand, windows)
         t.update(exam_gain=ex["points"] - exam, train_gain=points - base)
-        if ex["points"] >= exam and survives(cr, crashes):
+        if survives(cr, crashes):
             chosen, base, exam, crashes, exam_result, added = cand, points, ex["points"], cr, ex, added + 1
             t["kept"] = True
     return chosen, tries, exam_result
@@ -807,6 +810,44 @@ def broker_comparison(strategy: str, params: dict) -> dict[str, float]:
     finally:
         agents.set_broker(active)
     return out
+
+
+def sharpe_of(xs: list[float]) -> float:
+    """Mean over standard deviation (0 when there is no spread)."""
+    if len(xs) < 2:
+        return 0.0
+    sd = statistics.stdev(xs)
+    return statistics.fmean(xs) / sd if sd > 0 else (1e3 if statistics.fmean(xs) > 0 else 0.0)
+
+
+def deflated_sharpe(diffs: list[float], trials: list[float]) -> float:
+    """Deflated Sharpe ratio (Bailey & López de Prado 2014) of these differences (one per year): the probability that
+    their Sharpe ratio is above what the best of len(trials) tries would reach by luck (trials: each candidate's
+    Sharpe ratio; their variance sets the bar). Skewness and (raw) kurtosis of the differences included."""
+    from statistics import NormalDist
+
+    n = len(diffs)
+    if n < 3:
+        return 0.0
+    sd = statistics.stdev(diffs)
+    if sd == 0:
+        return 1.0 if statistics.fmean(diffs) > 0 else 0.0
+    sr = statistics.fmean(diffs) / sd
+    z = NormalDist().inv_cdf
+    tries = [t for t in trials if math.isfinite(t) and abs(t) < 1e3]
+    sr0 = 0.0
+    if len(tries) > 1:
+        gamma = 0.5772156649
+        k = len(tries)
+        sr0 = math.sqrt(statistics.pvariance(tries)) * ((1 - gamma) * z(1 - 1 / k) + gamma * z(1 - 1 / (k * math.e)))
+    m = statistics.fmean(diffs)
+    m2 = sum((d - m) ** 2 for d in diffs) / n
+    skew = sum((d - m) ** 3 for d in diffs) / n / m2 ** 1.5 if m2 > 0 else 0.0
+    kurt = sum((d - m) ** 4 for d in diffs) / n / m2 ** 2 if m2 > 0 else 3.0  # raw (3 for a normal distribution)
+    denom = 1 - skew * sr + (kurt - 1) / 4 * sr ** 2
+    if denom <= 0:
+        return 0.0
+    return NormalDist().cdf((sr - sr0) * math.sqrt(n - 1) / math.sqrt(denom))
 
 
 def overall(years: list[float], exam: float) -> float:
@@ -943,7 +984,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     """Train one strategy; its candidates are scored on all the cores when it trains alone (see WORKERS).
 
     First the walk-forward check (WF_FOLDS): the same search, without the earlier choices, run on the data up to each
-    of the last years and judged on that unseen year against the strategy's original parameters. When the search
+    of the years before the exam and judged on that unseen year against what the agent trades with. When the search
     does not hold up out of sample, the agent keeps what it trades with (the search only fits noise for it)."""
     import engine
 
@@ -958,31 +999,34 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     return name, r
 
 
-WF_FOLDS = 3  # unseen years the search is checked on (0: off)
+WF_FOLDS = 6  # unseen years the search is checked on, before the exam year (0: off)
 _WF: dict[str, dict] = {}
 
 
 def walk_forward(strategy: str) -> dict:
-    """The search, run on the data up to each of the last WF_FOLDS years (no earlier choices: they saw those years),
-    against the original parameters on that year. Passes when it gains on average and in at least as many years as
-    it loses."""
+    """The search, run on the data up to each of the WF_FOLDS years before the exam (the exam year is sealed; no
+    earlier choices: they saw those years), judged on that unseen year against what the agent trades with now (its last
+    choice; the original parameters when it has none). Passes when it gains on average and wins more years than it
+    loses: only then may the search replace what the agent trades with."""
     full = _MARKETS
+    base = previous_choices(strategy)
     folds = []
-    for k in range(1, WF_FOLDS + 1):
+    for k in range(2, WF_FOLDS + 2):  # k = 1 would test on the exam year
         end = len(full) - (k - 1) * EXAM_SESSIONS
         test, past = full[end - EXAM_SESSIONS:end], full[:end - EXAM_SESSIONS]
         if len(past) < 4 * EXAM_SESSIONS:
             break
         _, r = _search(strategy, past, fold=True)
+        incumbent = {**r["default"], **base[0]["chosen"]} if base else r["default"]
         new = simulate(strategy, r["chosen"], test, detail=False)["points"]
-        original = simulate(strategy, r["default"], test, detail=False)["points"]
-        folds.append({"test": [test[0].as_of.isoformat(), test[-1].as_of.isoformat()], "new": new, "original": original,
-                      "changed": r["chosen"] != r["default"]})
+        now = simulate(strategy, incumbent, test, detail=False)["points"]
+        folds.append({"test": [test[0].as_of.isoformat(), test[-1].as_of.isoformat()], "new": new, "original": now,
+                      "changed": r["chosen"] != incumbent})
     gains = [f["new"] - f["original"] for f in folds]
     wins, losses = sum(g > 0 for g in gains), sum(g < 0 for g in gains)
-    passed = not folds or (sum(gains) >= 0 and wins >= losses)
+    passed = bool(folds) and sum(gains) > 0 and wins > losses
     return {"folds": folds, "wins": wins, "losses": losses, "mean_gain": round(sum(gains) / max(len(gains), 1), 1),
-            "passed": passed}
+            "passed": passed, "against": "atuais" if base else "originais"}
 
 
 def _search(strategy: str, markets: list[Market], fold: bool = False, keep_live: bool = False) -> tuple[str, dict]:
@@ -1101,7 +1145,7 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
     full_default = full_best if best_i == 0 else simulate(strategy, pool[0], markets)
     mc_best, mc_default = monte_carlo(full_best["daily"]), monte_carlo(full_default["daily"])
     riskier = mc_best.get("p_ruin", 0) > mc_default.get("p_ruin", 0) + MC_RUIN_SLACK
-    adopt = best_i != 0 and best_valid["points"] >= default_valid["points"] and not riskier
+    adopt = best_i != 0 and not riskier  # the exam year is sealed: best_valid is reported, never a gate
     chosen, full, mc = (best, full_best, mc_best) if adopt else (pool[0], full_default, mc_default)
     chosen_valid = best_valid if adopt else default_valid
 
@@ -1135,8 +1179,8 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
             if not tries:
                 continue
             pts, cand, diff = max(tries, key=lambda t: t[0])
-            exam = simulate(strategy, cand, valid) if pts >= train_points + ZONE_GAIN else None
-            kept = exam is not None and exam["points"] >= chosen_valid["points"]
+            exam = simulate(strategy, cand, valid) if pts >= train_points + ZONE_GAIN else None  # reported only
+            kept = exam is not None
             zones_tried[zone] = {"train": pts, "base": train_points, "exam": exam["points"] if exam else None,
                                  "exam_base": chosen_valid["points"], "kept": kept, "diff": diff}
             if kept:
@@ -1146,9 +1190,11 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
             mc = monte_carlo(full["daily"])
             adopt = True
 
-    # Keep the last choice unless the new one is better overall (training years and exam together), so consecutive
-    # runs can only keep or improve each strategy.
+    # The agent keeps what it trades with (the last choice) unless the new choice passes the gates: the walk-forward
+    # check (keep_live when it failed) and the deflated Sharpe ratio of the yearly gains over it (DSR_MIN), which
+    # discounts the luck of the best of many candidates. The exam year plays no part.
     kept_previous = None
+    change_gate = None
     new_obj = overall(run_years(chosen)[0], chosen_valid["points"]) if history and strategy != "indexador" else None
     live = None  # the last choice, which the agent trades with: (parameters, exam result, overall)
 
@@ -1164,25 +1210,24 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
         zones_tried = {z: dict(v, kept=False) for z, v in zones_tried.items()}
         crashes["kept_previous"] = crash_test(strategy, chosen, windows)
 
-    for j, h in enumerate(history if new_obj is not None else []):  # the last choices (up to HISTORY_KEEP): the best one stays
-        previous = {**pool[0], **h["chosen"]}
+    if history and new_obj is not None:
+        previous = {**pool[0], **history[0]["chosen"]}
         if previous != chosen:
-            prev_exam = simulate(strategy, previous, valid)
-            prev_obj = overall(run_years(previous)[0], prev_exam["points"])
-            if j == 0:
-                live = (previous, prev_exam, prev_obj)
-            # the new choice must not be clearly worse on the exam (EXAM_SLACK: one year is noisy, and a strict veto
-            # run after run selects on the exam year), nor worse overall (every year, the exam the latest)
-            if prev_exam["points"] > chosen_valid["points"] + EXAM_SLACK or prev_obj > new_obj:
-                keep(previous, prev_exam, prev_obj)
-    # Changing what the agent trades with must be clearly worth it (CHANGE_MARGIN of the overall score), so the weekly
-    # re-training does not swap parameters for noise.
-    if live and chosen != live[0] and new_obj < live[2] + max(abs(live[2]) * CHANGE_MARGIN, CHANGE_MIN):
-        keep(*live)
-        kept_previous["margin"] = CHANGE_MARGIN
-    if live and chosen != live[0] and keep_live:  # the search did not hold up out of sample (walk_forward)
-        keep(*live)
-        kept_previous["walk_forward"] = True
+            live_years = run_years(previous)[0]
+            new_years = run_years(chosen)[0]
+            diffs = [a - b for a, b in zip(new_years, live_years)]
+            trials = [sharpe_of([a - b for a, b in zip(y, live_years)]) for y, _ in scored if len(y) == len(live_years)]
+            dsr = deflated_sharpe(diffs, trials)
+            change_gate = {"dsr": round(dsr, 3), "dsr_min": DSR_MIN, "trials": len(trials), "years_better": sum(d > 0 for d in diffs),
+                           "years": len(diffs), "mean_gain": round(statistics.fmean(diffs), 1) if diffs else 0.0,
+                           "walk_forward": not keep_live}
+            prev_exam = simulate(strategy, previous, valid)  # reported only
+            live = (previous, prev_exam, overall(live_years, prev_exam["points"]))
+            if keep_live or dsr < DSR_MIN:
+                keep(*live)
+                kept_previous["gate"] = change_gate
+                if keep_live:
+                    kept_previous["walk_forward"] = True
     if fold:  # only the choice matters
         return strategy, {"default": pool[0], "chosen": chosen}
 
@@ -1221,6 +1266,7 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
         "years_total": len(final_years) + 1,
         "history": history,
         "kept_previous": kept_previous,
+        "change_gate": change_gate,
         "incumbents": [{"score": round(weighted(scored[first_incumbent + j][0]), 1), "picked": best_i == first_incumbent + j,
                         "adopted": adopt and best_i == first_incumbent + j} for j in range(len(incumbents))],
         "search": {"candidates": len(pool), "generation2": len(pool) - n_random - len(claude) - len(cross) - len(incumbents), "claude": len(claude),
@@ -1480,7 +1526,10 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
     fields = [("🧪 Como foi feito",
                f"Treino {results['train'][0]} a {results['train'][1]} · exame {results['valid'][0]} a {results['valid'][1]}.\n"
                "Variações por estratégia; só passam as que batem os parâmetros originais em 65% dos anos de treino, "
-               "não caem mais do que eles nas crises (2008, 2011, 2020, 2022) e passam o exame. Pontos de cada ano: a nota do perfil menos a do S&P 500 "
+               "não caem mais do que eles nas crises (2008, 2011, 2020, 2022). O exame (o último ano) está selado: nenhuma escolha "
+               "olha para ele. Um agente só troca de parâmetros se a procura ganhar nos anos que não viu (walk-forward, 6 anos antes "
+               "do exame, contra os parâmetros atuais) e se o ganho nos anos de treino não for sorte dado o número de candidatos "
+               "(Sharpe deflacionado ≥ 0,9). Pontos de cada ano: a nota do perfil menos a do S&P 500 "
                "(10 pontos ≈ 1% ao ano acima do índice; abaixo do índice contam a dobrar). Composição "
                "histórica do S&P 500, ordens à abertura seguinte, custos, câmbio e 28% de imposto, sem ver o futuro.\n"
                "*O período inclui os anos em que os parâmetros foram escolhidos, por isso é otimista; "

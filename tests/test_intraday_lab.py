@@ -94,14 +94,12 @@ def test_reactivity_is_scored_year_by_year_against_the_index_and_kept_unless_cle
     assert len(pts) == 2 and all(p > 0 for p in pts)
     assert all(p < 0 for p in lab.yearly_points(flat, up, "arrojado"))
     live = {"reatividade": 2}
-    runs = [{"config": live, "years": [10, 10], "overall": 10.0},
-            {"config": {"reatividade": 0}, "years": [12, 11], "overall": 11.5},          # better, but by too little
-            {"config": {"reatividade": 1, "espera_min": 30, "esticado_max": 0.015}, "years": [40, -30], "overall": 7.0}]
+    runs = [{"config": live, "years": [10, 10, 10, 10, 10, 10, 10]},
+            {"config": {"reatividade": 0}, "years": [12, 8, 13, 9, 12, 10, 10]},           # a little better, noisy
+            {"config": {"reatividade": 1, "espera_min": 30, "esticado_max": 0.015}, "years": [40, -30, 5, 5, 5, 5, 50]}]
     assert lab.choose(runs, live) == (live, "mantém")
-    runs[1]["years"], runs[1]["overall"] = [40, 15], 26.5
+    runs[1]["years"] = [40, 42, 38, 41, 39, 40, -500]  # clearly better every training year; the exam is sealed
     assert lab.choose(runs, live) == ({"reatividade": 0}, "melhor")
-    runs[1]["years"] = [80, -5]  # much better before, clearly worse on the exam year: not taken
-    assert lab.choose(runs, live) == (live, "mantém")
     assert lab.reactivity_of({}) == {"reatividade": 2}
     assert lab.reactivity_of({"reatividade": 1}) == {"reatividade": 1, "espera_min": 15, "esticado_max": 0.0}
 

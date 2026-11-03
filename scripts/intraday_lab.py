@@ -664,12 +664,18 @@ GRID_OR_LIVE: list[dict] = []  # GRID plus each agent's current reactivity when 
 
 
 def choose(runs: list[dict], live: dict) -> tuple[dict, str]:
-    """The reactivity to trade with: the best overall (every year, the exam the latest) if it beats what the agent
-    uses now by pretrain.CHANGE_MIN and is not clearly worse on the exam year (pretrain.EXAM_SLACK)."""
+    """The reactivity to trade with. The exam year (the last) is sealed: the best on the training years (recency-
+    weighted) replaces what the agent uses now only when its yearly gains over it pass the deflated Sharpe ratio
+    (pretrain.deflated_sharpe >= pretrain.DSR_MIN, every configuration tried counted as a trial)."""
     now = next(r for r in runs if r["config"] == live)
-    ok = [r for r in runs if r["years"][-1] >= now["years"][-1] - pretrain.EXAM_SLACK]
-    best = max(ok, key=lambda r: r["overall"])
-    if best["config"] != live and best["overall"] >= now["overall"] + pretrain.CHANGE_MIN:
+    base = now["years"][:-1]
+
+    def gains(r: dict) -> list[float]:
+        return [a - b for a, b in zip(r["years"][:-1], base)]
+
+    best = max(runs, key=lambda r: pretrain.weighted(r["years"][:-1]))
+    trials = [pretrain.sharpe_of(gains(r)) for r in runs]
+    if best["config"] != live and pretrain.deflated_sharpe(gains(best), trials) >= pretrain.DSR_MIN:
         return best["config"], "melhor"
     return live, "mantém"
 

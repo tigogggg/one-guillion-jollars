@@ -105,7 +105,7 @@ def test_the_live_parameters_change_only_for_a_clear_gain(monkeypatch):
     _synthetic_training(monkeypatch)
     monkeypatch.setattr(pretrain, "previous_choices", lambda s: [{"chosen": {"n": 3, "stop_pct": 0.2}, "until": None}])
     monkeypatch.setattr(pretrain, "claude_candidates", lambda s, base: [])
-    monkeypatch.setattr(pretrain, "CHANGE_MARGIN", 100.0)  # nothing can be that much better
+    monkeypatch.setattr(pretrain, "DSR_MIN", 1.01)  # no gain can be that certain
     _, r = pretrain.train_strategy("foguetao")
     assert r["chosen"]["n"] == 3 and r["chosen"]["stop_pct"] == 0.2
 
@@ -154,7 +154,7 @@ def test_a_broken_bar_does_not_fill_the_order():
     assert done[0]["price"] > 0 and not port["pending"]
 
 
-def test_final_phase_keeps_only_rules_that_help_train_exam_and_crises(monkeypatch):
+def test_final_phase_keeps_the_rules_that_help_training_and_never_looks_at_the_exam(monkeypatch):
     train, valid = ["train"], ["valid"]
 
     def fake_sim(strategy, p, markets, detail=True):
@@ -164,15 +164,15 @@ def test_final_phase_keeps_only_rules_that_help_train_exam_and_crises(monkeypatc
             points += 200 if p.get("vix_max") else 0          # …this too, but…
             points += 2 if p.get("epu_max") else 0            # too small to count
         else:
-            points = 100 - (50 if p.get("vix_max") else 0)    # …it loses on the exam
+            points = 100 - (50 if p.get("vix_max") else 0)    # …it loses on the exam (sealed: reported only)
         return {"points": points}
 
     monkeypatch.setattr(pretrain, "simulate", fake_sim)
     monkeypatch.setattr(pretrain, "crash_test", lambda s, p, w: {})
     chosen, log, exam = pretrain.greedy_rules("foguetao", {"n": 5}, train, valid, {}, 100)
     kept = {t["param"] for t in log if t["kept"]}
-    assert kept == {"credito_max"} and chosen["credito_max"] and not chosen.get("vix_max")
-    assert exam["points"] == 100 and log[0]["param"] == "credito_max"
+    assert kept == {"credito_max", "vix_max"} and chosen["credito_max"] and chosen["vix_max"]
+    assert log[0]["param"] == "credito_max" and log[1]["exam_gain"] == -50  # the exam's verdict, reported
 
 
 def test_points_are_the_profile_grade_over_the_index(monkeypatch):
@@ -218,7 +218,8 @@ def test_walk_forward_checks_the_search_on_years_it_did_not_see(monkeypatch):
         seen.append((len(markets), fold))
         return strategy, {"default": {"n": 5}, "chosen": {"n": 3}}
 
-    gains = iter([5.0, -2.0, 4.0])  # per unseen year: new minus original
+    gains = iter([5.0, -2.0, 4.0, 1.0, 3.0, -1.0])  # per unseen year: new minus what the agent trades with
+    monkeypatch.setattr(pretrain, "previous_choices", lambda s: [])  # no choice yet: against the original
 
     def fake_sim(strategy, params, markets, detail=True):
         return {"points": next(gains) if params == {"n": 3} else 0.0}
@@ -227,8 +228,9 @@ def test_walk_forward_checks_the_search_on_years_it_did_not_see(monkeypatch):
     monkeypatch.setattr(pretrain, "simulate", lambda s, p, m, detail=True: {"points": 0.0} if p == {"n": 5} else fake_sim(s, p, m))
     monkeypatch.setattr(pretrain, "_MARKETS", [type("M", (), {"as_of": __import__("datetime").date(2020, 1, 1)})()] * 1500)
     wf = pretrain.walk_forward("foguetao")
-    assert [n for n, _ in seen] == [1350, 1200, 1050] and all(f for _, f in seen)  # each fold stops before its test year
-    assert wf["wins"] == 2 and wf["losses"] == 1 and wf["passed"]
+    # the exam year (the last 150) is never a test year; each fold stops before its test year; 6 folds while 4 years remain
+    assert [n for n, _ in seen] == [1200, 1050, 900, 750, 600] and all(f for _, f in seen)
+    assert wf["wins"] == 4 and wf["losses"] == 1 and wf["passed"] and wf["against"] == "originais"
 
 
 def test_a_series_inside_one_job_stops_when_the_choice_stays(monkeypatch):
@@ -259,3 +261,14 @@ def test_each_profile_also_tries_the_other_profiles_choices(tmp_path, monkeypatc
     assert [c["from"] for c in pretrain.other_profiles_choices("foguetao")] == ["conservador", "arrojado"]
     assert pretrain.cross_candidates("foguetao", {"n": 5, "cada": 5}) == [{"n": 3, "cada": 5}, {"n": 9, "cada": 5}]
     assert pretrain.other_profiles_choices("sniper") == []
+
+
+def test_the_deflated_sharpe_discounts_the_best_of_many_tries():
+    steady = [10, 12, 9, 11, 10, 12, 11, 9, 10, 11]
+    assert pretrain.deflated_sharpe(steady, []) > 0.99  # always better: certain
+    noisy = [30, -25, 10, -15, 20, -10, 5, -20, 25, 0]
+    assert pretrain.deflated_sharpe(noisy, []) < 0.8
+    tries = [pretrain.sharpe_of([random.gauss(0, 10) for _ in range(10)]) for _ in range(200)]
+    random.seed(1)
+    lucky = max(([random.gauss(0, 10) for _ in range(10)] for _ in range(200)), key=pretrain.sharpe_of)
+    assert pretrain.deflated_sharpe(lucky, tries) < pretrain.deflated_sharpe(lucky, [])  # many tries: less convincing

@@ -55,9 +55,13 @@ Intraday reactivity (`reatividade` 0/1/2, `espera_min`, `esticado_max`) is train
 series ends; results and history in `agents/lab/reatividade*.json`.
 Costs are the broker's in `agents/config.json` `corretora` (`xtb`, `trading212`, `ibkr`; `agents.BROKERS`): training,
 points and the league use them, and each report compares every strategy's verdict with each broker (`corretoras`).
-A run only replaces a strategy's parameters if the exam (last year, out of sample) does not get worse by more than
-10 points (`EXAM_SLACK`) and training + exam together improve by at least 5% and 5 points (`CHANGE_MARGIN`, `CHANGE_MIN`; weekly runs on Sundays must not swap for noise); the last 3 choices always stay candidates.
-Before each run's search, a walk-forward check (`pretrain.walk_forward`, 3 folds) runs the same search on the data up to each of the last years and judges it on that unseen year against the original parameters; if it does not hold up, the agent keeps its parameters.
+The exam year (the last) is sealed: no choice looks at it (adoption, final rules, zones, keeping the previous choice);
+it only enters the reported verdict. A run replaces what an agent trades with only if (1) the walk-forward check
+(`pretrain.walk_forward`, 6 folds: the same search on the data up to each of the 6 years before the exam, judged on
+that unseen year against the agent's current parameters) gains on average and wins more years than it loses, and
+(2) the new choice's yearly gains over the current one in the training years pass the deflated Sharpe ratio
+(`pretrain.deflated_sharpe` ≥ `DSR_MIN` 0.9, every candidate tried counted as a trial). The last 3 choices and the
+other profiles' choices stay candidates. The intraday reactivity choice follows the same rules (`intraday_lab.choose`).
 The day loop runs in the Rust engine (`engine/`, `scripts/engine.py`, `docs/ENGINE.md`); `OGJ_ENGINE=python` forces the Python reference.
 In Actions the profiles run one after another (input `seguintes`, default: conservador and arrojado after equilibrado). If a merge failed:
 `--retomar out/local/<run folder>`. Logs: `out/local/<run>/<strategy>.log`.
