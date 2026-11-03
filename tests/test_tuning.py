@@ -218,8 +218,7 @@ def test_walk_forward_checks_the_search_on_years_it_did_not_see(monkeypatch):
         seen.append((len(markets), fold))
         return strategy, {"default": {"n": 5}, "chosen": {"n": 3}}
 
-    gains = iter([5.0, -2.0, 4.0, 1.0, 3.0, -1.0])  # per unseen year: new minus what the agent trades with
-    monkeypatch.setattr(pretrain, "previous_choices", lambda s: [])  # no choice yet: against the original
+    gains = iter([5.0, -2.0, 4.0, 1.0, 3.0, -1.0])  # per unseen year: new minus the original
 
     def fake_sim(strategy, params, markets, detail=True):
         return {"points": next(gains) if params == {"n": 3} else 0.0}

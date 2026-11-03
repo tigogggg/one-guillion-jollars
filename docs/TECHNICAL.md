@@ -531,7 +531,7 @@ them). Without that file everything posts to the webhook channel as before.
   market data; `pretrain.yml` with the last year as a sealed exam: reported,
   never used to choose). A new choice replaces the parameters an agent trades
   with only if the search wins out of sample (walk-forward, 6 years before the
-  exam, against the current parameters) and its gain is not luck given the
+  exam, against the original parameters) and its gain is not luck given the
   number of candidates (deflated Sharpe ratio ≥ 0.9).
   Random monthly mutation remains only for the live-only strategies
   (`LIVE_ONLY`).

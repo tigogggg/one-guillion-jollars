@@ -624,7 +624,7 @@ REVIEW_PATH = agents.REPO_AGENTS / "claude_review.json"
 HISTORY_KEEP = 3  # earlier choices kept per strategy, each one a candidate in the next pre-training
 # The exam year (the last one) is sealed: no choice looks at it; it is only reported (with the verdict "overall").
 # A new choice replaces the one the agent trades with only when (1) the search holds up out of sample (walk_forward,
-# against the parameters the agent trades with, on the WF_FOLDS years before the exam) and (2) its gain over them in
+# against the original parameters, on the WF_FOLDS years before the exam) and (2) its gain over them in
 # the training years is unlikely to be luck given how many candidates were tried: the deflated Sharpe ratio (Bailey &
 # López de Prado) of the yearly differences, with the trials' spread, at least DSR_MIN.
 DSR_MIN = 0.90
@@ -984,7 +984,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
     """Train one strategy; its candidates are scored on all the cores when it trains alone (see WORKERS).
 
     First the walk-forward check (WF_FOLDS): the same search, without the earlier choices, run on the data up to each
-    of the years before the exam and judged on that unseen year against what the agent trades with. When the search
+    of the years before the exam and judged on that unseen year against the original parameters. When the search
     does not hold up out of sample, the agent keeps what it trades with (the search only fits noise for it)."""
     import engine
 
@@ -1005,11 +1005,10 @@ _WF: dict[str, dict] = {}
 
 def walk_forward(strategy: str) -> dict:
     """The search, run on the data up to each of the WF_FOLDS years before the exam (the exam year is sealed; no
-    earlier choices: they saw those years), judged on that unseen year against what the agent trades with now (its last
-    choice; the original parameters when it has none). Passes when it gains on average and wins more years than it
-    loses: only then may the search replace what the agent trades with."""
+    earlier choices: they saw those years), judged on that unseen year against the original parameters (not against
+    what the agent trades with now: that was chosen with those years in view, an unfair head start). Passes when it
+    gains on average and wins more years than it loses: only then may the search replace what the agent trades with."""
     full = _MARKETS
-    base = previous_choices(strategy)
     folds = []
     for k in range(2, WF_FOLDS + 2):  # k = 1 would test on the exam year
         end = len(full) - (k - 1) * EXAM_SESSIONS
@@ -1017,16 +1016,15 @@ def walk_forward(strategy: str) -> dict:
         if len(past) < 4 * EXAM_SESSIONS:
             break
         _, r = _search(strategy, past, fold=True)
-        incumbent = {**r["default"], **base[0]["chosen"]} if base else r["default"]
         new = simulate(strategy, r["chosen"], test, detail=False)["points"]
-        now = simulate(strategy, incumbent, test, detail=False)["points"]
-        folds.append({"test": [test[0].as_of.isoformat(), test[-1].as_of.isoformat()], "new": new, "original": now,
-                      "changed": r["chosen"] != incumbent})
+        original = simulate(strategy, r["default"], test, detail=False)["points"]
+        folds.append({"test": [test[0].as_of.isoformat(), test[-1].as_of.isoformat()], "new": new, "original": original,
+                      "changed": r["chosen"] != r["default"]})
     gains = [f["new"] - f["original"] for f in folds]
     wins, losses = sum(g > 0 for g in gains), sum(g < 0 for g in gains)
     passed = bool(folds) and sum(gains) > 0 and wins > losses
     return {"folds": folds, "wins": wins, "losses": losses, "mean_gain": round(sum(gains) / max(len(gains), 1), 1),
-            "passed": passed, "against": "atuais" if base else "originais"}
+            "passed": passed, "against": "originais"}
 
 
 def _search(strategy: str, markets: list[Market], fold: bool = False, keep_live: bool = False) -> tuple[str, dict]:
@@ -1528,7 +1526,7 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
                "Variações por estratégia; só passam as que batem os parâmetros originais em 65% dos anos de treino, "
                "não caem mais do que eles nas crises (2008, 2011, 2020, 2022). O exame (o último ano) está selado: nenhuma escolha "
                "olha para ele. Um agente só troca de parâmetros se a procura ganhar nos anos que não viu (walk-forward, 6 anos antes "
-               "do exame, contra os parâmetros atuais) e se o ganho nos anos de treino não for sorte dado o número de candidatos "
+               "do exame, contra os parâmetros originais) e se o ganho nos anos de treino não for sorte dado o número de candidatos "
                "(Sharpe deflacionado ≥ 0,9). Pontos de cada ano: a nota do perfil menos a do S&P 500 "
                "(10 pontos ≈ 1% ao ano acima do índice; abaixo do índice contam a dobrar). Composição "
                "histórica do S&P 500, ordens à abertura seguinte, custos, câmbio e 28% de imposto, sem ver o futuro.\n"

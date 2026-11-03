@@ -58,7 +58,7 @@ points and the league use them, and each report compares every strategy's verdic
 The exam year (the last) is sealed: no choice looks at it (adoption, final rules, zones, keeping the previous choice);
 it only enters the reported verdict. A run replaces what an agent trades with only if (1) the walk-forward check
 (`pretrain.walk_forward`, 6 folds: the same search on the data up to each of the 6 years before the exam, judged on
-that unseen year against the agent's current parameters) gains on average and wins more years than it loses, and
+that unseen year against the original parameters, which never saw it) gains on average and wins more years than it loses, and
 (2) the new choice's yearly gains over the current one in the training years pass the deflated Sharpe ratio
 (`pretrain.deflated_sharpe` ≥ `DSR_MIN` 0.9, every candidate tried counted as a trial). The last 3 choices and the
 other profiles' choices stay candidates. The intraday reactivity choice follows the same rules (`intraday_lab.choose`).
