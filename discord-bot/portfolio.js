@@ -29,6 +29,32 @@ const RESERVED = ["One Guillion Jollars", "Indexador", "Guardião", "Rotador", "
                   "Caçador", "Sniper", "Pescador de Quedas", "Relâmpago", "Joalheiro", "Analista", "Quant", "Monge", "Abutre",
                   "Jornalista", "Deriva", "Catalisador", "Cético", "Conselho", "Maestro"];
 
+const AVATAR = /^(a_)?[0-9a-f]{32}$/;  // a Discord avatar hash (the portal draws it with avatarUrl)
+
+// Settings kept in the account (the portal and every device read them): capital and risk for sizing the proposals,
+// the music, and the portal tab that opens first. Only the fields sent are changed; an error message, or null.
+export function setPreferences(data, body) {
+  const s = { capital: 10000, risk: 1, ...(data.settings || {}) };
+  if (body.capital !== undefined) {
+    const capital = Number(body.capital);
+    if (!(capital >= 0 && capital <= 1e9)) return "Capital inválido.";
+    s.capital = capital;
+  }
+  if (body.risk !== undefined) {
+    const risk = Number(body.risk);
+    if (!(risk > 0 && risk <= 5)) return "Risco inválido (entre 0,1% e 5%).";
+    s.risk = risk;
+  }
+  if (body.music !== undefined) s.music = !!body.music;
+  if (body.start !== undefined) {
+    const start = String(body.start);
+    if (start && !/^[a-z]{3,15}$/.test(start)) return "Separador inválido.";
+    if (start) s.start = start; else delete s.start;
+  }
+  data.settings = s;
+  return null;
+}
+
 export function nameKey(name) {
   return String(name).normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 }
@@ -82,10 +108,11 @@ export async function ensurePortfolio(env, user, fresh = false) {
   const userKey = `portfolio-user:${user.id}`;
   let current = await env.CONFIG.get(userKey);
   const name = user.global_name || user.username;
+  const avatar = AVATAR.test(user.avatar || "") ? user.avatar : null;  // the Discord avatar's hash, kept fresh at every sign-in
   let cur = current ? await loadPortfolio(env, current) : null;
   if (!cur) {
     current = token();
-    await createPortfolio(env, current, { owner: user.id, name, created: new Date().toISOString(), tx: [] });
+    await createPortfolio(env, current, { owner: user.id, name, avatar, created: new Date().toISOString(), tx: [] });
     await env.CONFIG.put(userKey, current);
     return current;
   }
@@ -96,8 +123,9 @@ export async function ensurePortfolio(env, user, fresh = false) {
     current = next;
     cur = await loadPortfolio(env, current);
   }
-  if (name && cur.data.name !== name) {
-    cur.data.name = name;
+  if ((name && cur.data.name !== name) || (cur.data.avatar ?? null) !== avatar) {
+    if (name) cur.data.name = name;
+    cur.data.avatar = avatar;
     await savePortfolio(env, current, cur.data, cur.version, "name");
   }
   return current;
@@ -186,6 +214,10 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
   if (action === "display_name") {
     const out = await setDisplayName(env, tok, data, body.name);
     return out.error ? fail(out) : json({ ok: true, display_name: out.data.display_name || "", name: out.data.name || "" });
+  }
+  if (action === "preferences") {  // answered without the quotes: the music button saves through here
+    const out = await mutate(env, tok, "preferences", (d) => { const error = setPreferences(d, body); return error ? { error } : null; });
+    return out.error ? fail(out) : json({ ok: true, settings: out.data.settings });
   }
   if (action === "security") {
     if (body.require_login && !mine) return fail({ error: "Entra primeiro com o Discord ou o Google neste aparelho (em /entrar): assim confirmas que consegues entrar antes de trancar o link." });
@@ -448,9 +480,10 @@ async function change(data, body) {
   if (body.action === "settings") {
     const capital = Number(body.capital), risk = Number(body.risk);
     if (!(capital >= 0 && capital <= 1e9) || !(risk > 0 && risk <= 5)) return "Capital ou risco inválido (risco entre 0,1% e 5%).";
-    data.settings = { capital, risk };
+    data.settings = { ...(data.settings || {}), capital, risk };  // keeps the music and start tab
     return null;
   }
+  if (body.action === "preferences") return setPreferences(data, body);
   if (body.action !== "add" && body.action !== "edit") return "Ação desconhecida.";
   const editing = body.action === "edit" ? data.tx.find((x) => x.id === body.id) : null;
   if (body.action === "edit" && !editing) return "Operação não encontrada.";

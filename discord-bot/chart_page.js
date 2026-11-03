@@ -124,6 +124,7 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
     pretrain = mergeProfiles(pretrain, others);
   }
   const user = session ? { name: session.data.display_name || session.data.name || "membro", discord: session.data.name || "",
+                           avatar: avatarUrl(session.owner, session.data.avatar), settings: session.data.settings || null,
                            display: session.data.display_name || "", since: session.data.created || null, google: !!session.data.google,
                            wallet: `/c/${session.tok}` } : null;
   const version = await portalVersion(env);
@@ -198,6 +199,12 @@ export function html(body, status = 200) {
     status,
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex" },
   });
+}
+
+// The member's Discord avatar (128 px), or null: the portal then shows their initial.
+export function avatarUrl(owner, hash) {
+  return /^\d{5,25}$/.test(String(owner || "")) && /^(a_)?[0-9a-f]{32}$/.test(hash || "")
+    ? `https://cdn.discordapp.com/avatars/${owner}/${hash}.png?size=128` : null;
 }
 
 export function esc(s) {
@@ -297,6 +304,11 @@ export function chartPage(data, upcoming, newer, extras = {}) {
     .concat(portal ? [["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
     .concat(portal ? [] : [["agenda", "⏱️ Agenda"]])  // in the portal the schedule is part of 🩺 Estado
     .concat(portal ? [["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]] : []);  // the portfolio is in the profile (the name, top right)
+  const me = extras.user;
+  const face = (big = false) => !me ? "" : me.avatar  // the Discord avatar, or the name's initial
+    ? `<img class="initial${big ? " big" : ""}" src="${esc(me.avatar)}" alt="" width="${big ? 72 : 30}" height="${big ? 72 : 30}" referrerpolicy="no-referrer">`
+    : `<span class="initial${big ? " big" : ""}" aria-hidden="true">${esc([...me.name][0] || "?").toUpperCase()}</span>`;
+  const prefs = { capital: 10000, risk: 1, music: false, start: "", ...((me && me.settings) || {}) };
   const body = `
 ${banner}
 <header>
@@ -304,7 +316,7 @@ ${banner}
   <h1>${portal ? `<a class="home" href="${esc(extras.home || "/")}">One Guillion Jollars</a>` : esc(data.title)}</h1>
   ${portal ? `<a class="home logo-link" href="${esc(extras.home || "/")}" aria-label="Página principal"><img class="logo" src="/logo-256.png?v=1" alt="" width="108" height="108"></a>` : ""}
   ${portal ? `<div class="userbar">${extras.user
-    ? `<a class="me" href="#perfil" data-go="perfil" title="O meu perfil"><span class="initial" aria-hidden="true">${esc([...extras.user.name][0] || "?").toUpperCase()}</span><b class="me-name">${esc(extras.user.name)}</b></a><a class="btn alt" href="/sair">SAIR</a>`
+    ? `<a class="me" href="#perfil" data-go="perfil" title="O meu perfil">${face()}<b class="me-name">${esc(extras.user.name)}</b></a><a class="btn alt" href="/sair">SAIR</a>`
     : `<a class="btn" href="/entrar">🔑 ENTRAR</a>`}</div>` : ""}
   </div>
   <p class="muted">${esc(portal ? data.title + " · " + (data.subtitle || "") : data.subtitle || "")}</p>
@@ -370,23 +382,35 @@ ${portal ? `<section data-tab="ajuda" hidden><div id="glossary"></div></section>
 ${portal ? `<section data-tab="pesquisa" hidden><div id="q-out"></div></section>` : ""}
 ${portal ? `<section data-tab="perfil" hidden>
   ${extras.user ? `<div class="profile-card panel">
-    <span class="initial big" aria-hidden="true">${esc([...extras.user.name][0] || "?").toUpperCase()}</span>
+    ${face(true)}
     <div class="profile-who">
       <h2 class="me-name">${esc(extras.user.name)}</h2>
       <p class="muted small">${extras.user.since ? "Membro desde " + esc(new Date(extras.user.since).toLocaleDateString("pt-PT", { month: "long", year: "numeric", timeZone: "Europe/Lisbon" })) + " · " : ""}Discord ✓${extras.user.google ? " · Google ✓" : ""}</p>
     </div>
   </div>
+  <nav class="tabs profile-tabs" id="profile-tabs">
+    <button class="tab on" type="button" data-part="carteira">💼 Carteira</button>
+    <button class="tab" type="button" data-part="seguir">👀 Seguir</button>
+    <button class="tab" type="button" data-part="definicoes">⚙️ Definições</button>
+    <button class="tab" type="button" data-part="conta">🔒 Conta e privacidade</button>
+  </nav>
+  <div data-part="definicoes" hidden>
   <form id="display-name" class="panel profile-form" data-wallet="${esc(extras.user.wallet)}" autocomplete="off">
-    <label for="dn-input"><b>Nome a apresentar</b> <span class="muted small">· é assim que os outros membros te veem</span></label>
+    <label for="dn-input"><b>🪪 Nome a apresentar</b> <span class="muted small">· é assim que os outros membros te veem</span></label>
     <div class="row-btns"><input id="dn-input" name="name" maxlength="24" value="${esc(extras.user.display)}" placeholder="${esc(extras.user.discord || "o teu nome no Discord")}">
       <button class="btn" type="submit">GUARDAR</button></div>
     <p class="muted small" id="dn-msg">2 a 24 caracteres, sem @ nem links, diferente dos agentes e dos outros membros. Vazio usa o teu nome do Discord${extras.user.discord ? " (" + esc(extras.user.discord) + ")" : ""}.</p>
   </form>
-  <nav class="tabs profile-tabs" id="profile-tabs">
-    <button class="tab on" type="button" data-part="carteira">💼 Carteira</button>
-    <button class="tab" type="button" data-part="seguir">👀 Seguir</button>
-    <button class="tab" type="button" data-part="conta">🔒 Conta e privacidade</button>
-  </nav>
+  <form id="prefs" class="panel profile-form" data-wallet="${esc(extras.user.wallet)}" autocomplete="off">
+    <p><b>📐 Tamanho das posições</b> <span class="muted small">· as propostas dos agentes passam a número de ações com estes valores, aqui e na carteira</span></p>
+    <div class="row-btns"><label class="small">Capital (€)<br><input name="capital" type="number" min="0" max="1000000000" step="100" value="${esc(prefs.capital)}"></label>
+      <label class="small">Risco por operação (%)<br><input name="risk" type="number" min="0.1" max="5" step="0.1" value="${esc(prefs.risk)}"></label></div>
+    <p><b>🔊 Música</b><br><label class="small"><input name="music" type="checkbox"${prefs.music ? " checked" : ""}> Ligada ao entrar no portal <span class="muted">(o botão 🔇/🔊 no canto também a guarda aqui)</span></label></p>
+    <p><b>🏠 Separador ao entrar</b><br><select name="start">${tabs.map(([t, label]) => `<option value="${t === "hoje" ? "" : t}"${(prefs.start || "") === (t === "hoje" ? "" : t) ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></p>
+    <div class="row-btns"><button class="btn" type="submit">GUARDAR DEFINIÇÕES</button></div>
+    <p class="muted small" id="prefs-msg">Ficam na tua conta: valem em todos os aparelhos onde entras.</p>
+  </form>
+  </div>
   <iframe id="wallet-frame" class="wallet-frame" data-part="carteira" title="A minha carteira" data-src="${esc(extras.user.wallet)}?embed=1"></iframe>
   <iframe class="wallet-frame" data-part="seguir" title="Ações que sigo" data-src="${esc(extras.user.wallet)}?embed=1&amp;vista=seguir" hidden></iframe>
   <iframe class="wallet-frame" data-part="conta" title="Conta e privacidade" data-src="${esc(extras.user.wallet)}?embed=1&amp;vista=conta" hidden></iframe>`
@@ -401,6 +425,13 @@ ${portal ? `<section data-tab="perfil" hidden>
 <script>
 const DATA = ${safeJson(data)};
 const PORTAL_VERSION = ${safeJson(extras.version || null)};
+const PREFS = ${safeJson(me ? me.settings || {} : null)};  // the member's settings, kept in the account
+const WALLET = ${safeJson(me ? me.wallet : null)};
+if (PREFS) try {  // the account wins over this browser's copies (music, capital and risk for the proposals)
+  if (PREFS.music !== undefined) localStorage.setItem("musica", PREFS.music ? "on" : "off");
+  if (PREFS.capital !== undefined) localStorage.setItem("capital", JSON.stringify(PREFS.capital));
+  if (PREFS.risk !== undefined) localStorage.setItem("risk", JSON.stringify(PREFS.risk));
+} catch (e) {}
 const UPCOMING = ${safeJson(upcoming)};
 const NEWS = ${safeJson(extras.news || null)};
 const MARKET = ${safeJson(extras.market || null)};
@@ -436,7 +467,8 @@ a.home { color:inherit; text-decoration:none; }
 .initial.big { width:72px; height:72px; font-size:2rem; }
 .profile-card { display:flex; align-items:center; gap:16px; }
 .profile-card h2 { margin:0 0 4px; font-size:1rem !important; }
-.profile-form input { flex:1; min-width:180px; padding:10px 12px; border-radius:6px; border:1px solid var(--line); background:#0f0b2b; color:var(--fg); font:inherit; }
+.initial { object-fit:cover; } .profile-form select { padding:8px 10px; border-radius:6px; border:1px solid var(--line); background:#0f0b2b; color:var(--fg); font:inherit; margin-top:4px; }
+.profile-form input:not([type=checkbox]) { flex:1; min-width:180px; padding:10px 12px; border-radius:6px; border:1px solid var(--line); background:#0f0b2b; color:var(--fg); font:inherit; }
 .profile-form .row-btns { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 4px; }
 .topbar .userbar { justify-self:end; }
 @media (max-width:640px) { .topbar { grid-template-columns:1fr auto; padding-right:48px; } .topbar .logo { width:3.5em; height:3.5em; } .topbar .userbar { grid-column:1 / -1; justify-self:start; } }
@@ -1115,7 +1147,8 @@ function restoreView(v) {
   const hash = location.hash.slice(1);  // old #agenda and #carteira links
   const asked = hash === "agenda" && $("status") ? "estado" : hash === "carteira" ? "perfil" : hash;
   const known = asked && (document.querySelector('#tabs .tab[data-tab="' + asked + '"]') || (asked === "perfil" && $("wallet-frame")));
-  openTab(known ? asked : document.querySelector("#tabs .tab").dataset.tab);
+  const start = PREFS && PREFS.start && document.querySelector('#tabs .tab[data-tab="' + PREFS.start + '"]') ? PREFS.start : null;  // ⚙️ Definições
+  openTab(known ? asked : start || document.querySelector("#tabs .tab").dataset.tab);
 }
 document.addEventListener("click", (e) => {  // glossary terms: tap to read (phones have no hover)
   const g = e.target.closest("abbr.g"); if (!g) return;
@@ -1469,6 +1502,9 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     });
   };
   [cap, risk].forEach((el) => el.addEventListener("input", drawSizes));
+  [cap, risk].forEach((el) => el.addEventListener("change", () => {  // signed in: the account keeps them too
+    if (+cap.value >= 0 && +risk.value > 0 && +risk.value <= 5) savePrefs({ capital: +cap.value, risk: +risk.value }).catch(() => {});
+  }));
   drawSizes();
 })();
 
@@ -1665,10 +1701,10 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
       try { new ResizeObserver(fit).observe(f.contentDocument.body); } catch (e) { setInterval(fit, 1000); }
     });
   });
-  const current = () => frames.find((f) => !f.hidden) || frames[0];
-  const load = () => { const f = current(); if (!f.src) f.src = f.dataset.src; };
+  const parts = [...document.querySelectorAll('section[data-tab="perfil"] > [data-part]')];  // the frames and ⚙️ Definições
+  const load = () => { const f = parts.find((p) => !p.hidden); if (f && f.tagName === "IFRAME" && !f.src) f.src = f.dataset.src; };
   const show = (part) => {
-    frames.forEach((f) => { f.hidden = f.dataset.part !== part; });
+    parts.forEach((p) => { p.hidden = p.dataset.part !== part; });
     document.querySelectorAll("#profile-tabs .tab").forEach((b) => b.classList.toggle("on", b.dataset.part === part));
     load();
   };
@@ -1690,6 +1726,52 @@ document.addEventListener("click", (e) => {
   window.scrollTo(0, 0);
 });
 
+// ---- profile: ⚙️ Definições, kept in the account (capital and risk, music, the tab that opens first) ----
+async function savePrefs(fields) {
+  if (!WALLET) return null;
+  const r = await fetch(WALLET + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
+                                           body: JSON.stringify({ action: "preferences", ...fields }) });
+  const out = await r.json().catch(() => ({}));
+  if (!r.ok || out.error) throw new Error(out.error || "Não consegui guardar. Tenta outra vez.");
+  return out.settings;
+}
+(function preferences() {
+  const form = $("prefs");
+  if (!form) return;
+  const msg = $("prefs-msg"), hint = msg.textContent;
+  const musicOn = () => { try { return localStorage.getItem("musica") === "on"; } catch (e) { return false; } };
+  // The 🔇/🔊 button is drawn after this script and stops its clicks, so listen in the capture phase,
+  // and read the new state once its own handler has switched it.
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest("#music")) return;
+    setTimeout(() => { form.elements.music.checked = musicOn(); savePrefs({ music: musicOn() }).catch(() => {}); }, 0);
+  }, true);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = form.elements, btn = form.querySelector("button");
+    btn.disabled = true;
+    msg.className = "muted small";
+    msg.textContent = "A guardar…";
+    try {
+      const s = await savePrefs({ capital: +f.capital.value, risk: +f.risk.value, music: f.music.checked, start: f.start.value });
+      try { localStorage.setItem("capital", JSON.stringify(s.capital)); localStorage.setItem("risk", JSON.stringify(s.risk)); } catch (err) {}
+      const cap = $("pp-cap"), risk = $("pp-risk");  // the proposals tab follows at once
+      if (cap && risk) { cap.value = s.capital; risk.value = s.risk; cap.dispatchEvent(new Event("input")); }
+      const music = $("music");
+      if (music && !music.hidden && !!s.music !== musicOn()) music.click();
+      else try { localStorage.setItem("musica", s.music ? "on" : "off"); } catch (err) {}
+      msg.className = "up small";
+      msg.textContent = "✅ Guardado na tua conta.";
+      setTimeout(() => { msg.className = "muted small"; msg.textContent = hint; }, 5000);
+    } catch (err) {
+      msg.className = "down small";
+      msg.textContent = "⚠️ " + err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+
 // ---- profile: the display name ("Nome a apresentar"), checked and kept unique by the Worker ----
 (function displayName() {
   const form = $("display-name");
@@ -1709,7 +1791,7 @@ document.addEventListener("click", (e) => {
       const shown = out.display_name || out.name || "membro";
       $("dn-input").value = out.display_name;
       document.querySelectorAll(".me-name").forEach((el) => { el.textContent = shown; });
-      document.querySelectorAll(".initial").forEach((el) => { el.textContent = ([...shown][0] || "?").toUpperCase(); });
+      document.querySelectorAll("span.initial").forEach((el) => { el.textContent = ([...shown][0] || "?").toUpperCase(); });
       msg.className = "up small";
       msg.textContent = out.display_name ? "✅ Guardado: os outros membros veem-te como " + shown + "." : "✅ Voltaste ao teu nome do Discord.";
       setTimeout(() => { msg.className = "muted small"; msg.textContent = hint; }, 6000);
