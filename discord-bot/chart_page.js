@@ -312,8 +312,7 @@ ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pret
   <h2>📈 Evolução entre execuções do treino</h2>
   <div id="evo"></div>
   <h2>🔎 Resultados do treino por agente</h2>
-  <div id="pt-chips" class="chips"></div>
-  <div id="pt-detail"></div>
+  <div class="agent-pick"><nav id="pt-chips" class="agent-list"></nav><div id="pt-detail"></div></div>
 </section>` : ""}
 <section id="agents-section" data-tab="agentes" hidden>
   <h2>📊 Desempenho por período</h2>
@@ -322,8 +321,7 @@ ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pret
   <div id="overview"></div>
   <details class="panel" id="compare-box"><summary><b>⚖️ Comparar dois agentes</b></summary><div class="filters"><select id="cmp-a"></select><select id="cmp-b"></select></div><div id="cmp"></div></details>
   <h2>🔎 Ficha do agente</h2>
-  <div id="chips" class="chips"></div>
-  <div id="detail"></div>
+  <div class="agent-pick"><nav id="chips" class="agent-list"></nav><div id="detail"></div></div>
 </section>
 ${portal ? `<section data-tab="propostas" hidden><div id="props"></div></section>
 <section data-tab="noticias" hidden><div id="news"></div></section>
@@ -452,6 +450,19 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .chips { display:flex; flex-wrap:wrap; gap:6px; }
 .chip { background:var(--card); border:1px solid var(--line); color:var(--fg); border-radius:999px; padding:6px 10px; cursor:pointer; font:inherit; font-size:.88rem; }
 .chip.on { border-color:var(--accent); background:#3a0f45; box-shadow:0 0 8px rgba(255,46,136,.5); }
+.agent-pick { display:grid; grid-template-columns:minmax(230px,300px) 1fr; gap:14px; align-items:start; }
+.agent-pick > div { min-width:0; }
+.agent-list { position:sticky; top:58px; max-height:calc(100vh - 70px); overflow:auto; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px; }
+.agent-find { width:100%; box-sizing:border-box; margin-bottom:6px; background:#1e1f22; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
+.agent-group > summary { cursor:pointer; padding:6px 4px; font-weight:600; color:var(--neon); }
+.agent-item { display:flex; justify-content:space-between; gap:8px; width:100%; text-align:left; background:none; border:1px solid transparent; border-radius:6px; color:var(--fg); padding:5px 8px; cursor:pointer; font:inherit; font-size:.88rem; }
+.agent-item:hover { background:#241c55; }
+.agent-item.on { border-color:var(--accent); background:#3a0f45; box-shadow:0 0 8px rgba(255,46,136,.4); }
+.chap-tools { display:flex; gap:6px; justify-content:flex-end; margin:-4px 0 6px; }
+details.chap { border-top:1px solid var(--line); padding:2px 0; }
+details.chap > summary { cursor:pointer; padding:8px 2px; font-weight:700; font-size:1.02rem; }
+details.chap[open] > summary { color:var(--neon); }
+@media (max-width:820px) { .agent-pick { grid-template-columns:1fr; } .agent-list { position:static; max-height:42vh; } }
 .panel { background:var(--card); border:2px solid var(--neon); box-shadow:0 0 12px rgba(0,229,255,.25); border-radius:10px; padding:14px; margin-top:12px; }
 .userbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; font-size:.9rem; }
 .userbar .btn { text-decoration:none; display:inline-block; }
@@ -654,10 +665,64 @@ const agents = DATA.agents || [];
 if (!agents.length) $("agents-section").style.display = "none";
 const byName = Object.fromEntries(agents.map((a) => [a.name, a]));
 const headline = (a) => a.backtest ? a.backtest.return_pct : a.return_pct;
-$("chips").innerHTML = agents.map((a, i) =>
-  '<button class="chip" data-i="' + i + '">' + esc(a.emoji + " " + a.name) + ' <span class="' + cls(headline(a)) + '">' +
-  fmtPct(headline(a)) + '</span></button>').join("");
-$("chips").addEventListener("click", (e) => { const b = e.target.closest(".chip"); if (b) show(+b.dataset.i, true); });
+// Agent picker: the agents in a column (expandable groups, best first, a search box) on the left of the sheet.
+function agentPicker(listId, items, ret, pick, groupOf) {
+  const box = $(listId);
+  const groups = [], byGroup = {};
+  items.forEach((a, i) => { const g = groupOf(a); if (!byGroup[g]) { byGroup[g] = []; groups.push(g); } byGroup[g].push(i); });
+  box.innerHTML = '<input type="search" class="agent-find" placeholder="🔎 Procurar agente…" aria-label="Procurar agente">' +
+    groups.map((g, k) => '<details class="agent-group"' + (k === 0 ? " open" : "") + '><summary>' + esc(g) + ' <span class="muted small">(' + byGroup[g].length + ')</span></summary>' +
+      byGroup[g].slice().sort((x, y) => (ret(items[y]) ?? -1e9) - (ret(items[x]) ?? -1e9)).map((i) => {
+        const a = items[i];
+        return '<button class="agent-item" data-i="' + i + '"><span>' + esc(a.emoji + " " + a.name) + '</span><span class="' + cls(ret(a)) + '">' + fmtPct(ret(a)) + '</span></button>';
+      }).join("") + '</details>').join("");
+  box.addEventListener("click", (e) => { const b = e.target.closest(".agent-item"); if (b) pick(+b.dataset.i); });
+  const find = box.querySelector(".agent-find");
+  find.addEventListener("input", () => {
+    const q = find.value.trim().toLowerCase();
+    box.querySelectorAll(".agent-group").forEach((g) => {
+      let n = 0;
+      g.querySelectorAll(".agent-item").forEach((b) => { const hit = !q || b.textContent.toLowerCase().includes(q); b.hidden = !hit; n += hit; });
+      g.hidden = !n;
+      if (q && n) g.open = true;
+    });
+  });
+  return (i) => {  // mark the chosen one (and open its group)
+    box.querySelectorAll(".agent-item").forEach((b) => b.classList.toggle("on", +b.dataset.i === i));
+    const b = box.querySelector('.agent-item[data-i="' + i + '"]');
+    if (b) b.closest("details").open = true;
+  };
+}
+const agentGroup = (a) => a.modo === "diario" || / · diário$/.test(a.name) ? "📅 Diários (decidem às 07:30)"
+  : a.perfil === "conservador" ? "🛡️ Perfil conservador" : a.perfil === "arrojado" ? "🔥 Perfil arrojado" : "⚡ Reativos · perfil equilibrado";
+const markAgent = agentPicker("chips", agents, headline, (i) => show(i, true), agentGroup);
+
+// The sheet in expandable chapters (each <h3> and what follows it). The open ones are remembered as the person opens
+// and closes them, for every agent and the next visits.
+const CHAP_KEY = "agent-chapters";
+const OPEN_CHAPS = (() => { try { const v = JSON.parse(localStorage.getItem(CHAP_KEY)); if (Array.isArray(v)) return new Set(v); } catch (e) {} return new Set(["💼 Carteira atual", "⏳ Ordens para a próxima abertura", "📝 Exame"]); })();
+const chapKey = (t) => t.split(":")[0].replace(/\(.*?\)/g, "").replace(/\d+/g, "").trim();
+function chapters(panel) {
+  let cur = null;
+  [...panel.children].forEach((el) => {
+    if (el.tagName === "H3") {
+      const d = document.createElement("details"), sum = document.createElement("summary"), key = chapKey(el.textContent);
+      d.className = "chap"; sum.innerHTML = el.innerHTML; d.appendChild(sum); d.open = OPEN_CHAPS.has(key);
+      d.addEventListener("toggle", () => {
+        if (d.open) OPEN_CHAPS.add(key); else OPEN_CHAPS.delete(key);
+        try { localStorage.setItem(CHAP_KEY, JSON.stringify([...OPEN_CHAPS])); } catch (e) {}
+      });
+      el.replaceWith(d); cur = d;
+    } else if (cur) cur.appendChild(el);
+  });
+  const all = panel.querySelectorAll("details.chap");
+  if (!all.length) return;
+  const tools = document.createElement("div");
+  tools.className = "chap-tools";
+  tools.innerHTML = '<button class="chip" data-chap="1">Abrir tudo</button><button class="chip" data-chap="0">Fechar tudo</button>';
+  tools.addEventListener("click", (e) => { const b = e.target.closest("[data-chap]"); if (b) all.forEach((d) => { d.open = b.dataset.chap === "1"; }); });
+  panel.querySelector("h2").after(tools);
+}
 if (window.Plotly) $("chart").on("plotly_click", (ev) => { const a = byName[ev.points[0].data.meta || ev.points[0].data.name]; if (a) show(agents.indexOf(a), true); });
 
 const GLOSS = {
@@ -793,12 +858,15 @@ function backtestHtml(a) {
       '</p><p class="muted small">Pontos face ao S&P 500 com penalização das quedas; cada ano conta de outubro a outubro.</p>' : "");
 }
 
+let SHOWN = null;  // the agent on the sheet (kept across the portal's refreshes)
 function show(i, scroll) {
   const a = agents[i];
   if (!a) return;
-  document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", +c.dataset.i === i));
+  SHOWN = a.name;
+  markAgent(i);
   $("detail").innerHTML = '<div class="panel"><h2>' + esc(a.emoji + " " + a.name) + '</h2>' +
     (a.backtest ? backtestHtml(a) : liveHtml(a)) + strategyHtml(a.strategy) + '</div>';
+  chapters($("detail").firstElementChild);
   if (scroll) { openTab("agentes"); $("detail").scrollIntoView({ behavior: "smooth", block: "start" }); }
 }
 if (agents.length) show(0, false);
@@ -822,7 +890,7 @@ function detailsKey(d) {
   return d.id || ("s:" + (sum ? sum.textContent.trim().slice(0, 80) : ""));
 }
 function snapshotView() {
-  const v = { scroll: window.scrollY, charts: {}, details: [], fields: {}, scrolls: {} };
+  const v = { scroll: window.scrollY, charts: {}, details: [], fields: {}, scrolls: {}, agent: SHOWN };
   document.querySelectorAll(".js-plotly-plot").forEach((el) => {
     if (!el.id || !el.data) return;
     const vis = {};
@@ -848,7 +916,9 @@ function snapshotView() {
 }
 function restoreView(v) {
   const doneCharts = new WeakSet(), doneFields = {}, doneDetails = {};
+  let agentDone = false;
   const step = () => {
+    if (!agentDone && v.agent) { agentDone = true; const i = agents.findIndex((a) => a.name === v.agent); if (i >= 0 && v.agent !== SHOWN) show(i, false); }
     Object.keys(v.fields).forEach((id) => {  // first the choices (they may redraw a chart or a list)
       const el = $(id);
       if (!el || doneFields[id]) return;
@@ -1404,14 +1474,14 @@ race("", DATA, agents, (a) => show(agents.indexOf(a), true));
 // ---- pre-training race ----
 if (PRETRAIN && $("pt-race")) {
   const ptAgents = PRETRAIN.agents || [];
+  let markPt = () => {};
   const showPt = (a, scroll) => {
-    document.querySelectorAll("#pt-chips .chip").forEach((c) => c.classList.toggle("on", c.dataset.n === a.name));
+    markPt(ptAgents.indexOf(a));
     $("pt-detail").innerHTML = '<div class="panel"><h2>' + esc(a.emoji + " " + a.name) + '</h2>' + (a.backtest ? backtestHtml(a) : "") + strategyHtml(a.strategy) + '</div>';
+    chapters($("pt-detail").firstElementChild);
     if (scroll) $("pt-detail").scrollIntoView({ behavior: "smooth", block: "start" });
   };
-  $("pt-chips").innerHTML = ptAgents.slice().sort((x, y) => (y.backtest?.return_pct ?? 0) - (x.backtest?.return_pct ?? 0)).map((a) =>
-    '<button class="chip" data-n="' + esc(a.name) + '">' + esc(a.emoji + " " + a.name) + ' <span class="' + cls(a.backtest?.return_pct) + '">' + fmtPct(a.backtest?.return_pct, 0) + '</span></button>').join("");
-  $("pt-chips").addEventListener("click", (e) => { const b = e.target.closest(".chip"); const a = b && ptAgents.find((x) => x.name === b.dataset.n); if (a) showPt(a, true); });
+  markPt = agentPicker("pt-chips", ptAgents, (a) => a.backtest?.return_pct, (i) => showPt(ptAgents[i], true), () => "Estratégias");
   race("pt-", PRETRAIN, ptAgents, (a) => showPt(a, true));
   lineChart("pt-chart", PRETRAIN);
   if (ptAgents.length) showPt(ptAgents.slice().sort((x, y) => (y.backtest?.return_pct ?? 0) - (x.backtest?.return_pct ?? 0))[0], false);
