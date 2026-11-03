@@ -67,37 +67,60 @@ def warn(message: str) -> None:
 # downloads (GitHub Actions: context-data workflow)
 # --------------------------------------------------------------------------
 
-def spending(key: str, codes: list[str], end: str, tries: int = 4) -> pd.Series | None:
+def spending(key: str, codes: list[str], first: str, last: str, tries: int = 3) -> pd.Series | None:
+    """Monthly contract obligations of these NAICS codes between two dates (calendar month ends)."""
     body = {"group": "month", "spending_level": "transactions",
-            "filters": {"time_period": [{"start_date": SPENDING_START, "end_date": end}],
+            "filters": {"time_period": [{"start_date": first, "end_date": last}],
                         "award_type_codes": ["A", "B", "C", "D"], "naics_codes": {"require": codes, "exclude": []}}}
     for attempt in range(tries):
         try:
-            resp = requests.post(SPENDING_URL, json=body, timeout=180)
+            resp = requests.post(SPENDING_URL, json=body, timeout=90)
             resp.raise_for_status()
             rows = resp.json()["results"]
             break
         except (requests.RequestException, ValueError, KeyError) as e:
             if attempt == tries - 1:
-                warn(f"USAspending {key}: {e}")
+                warn(f"USAspending {key} {first}: {e}")
                 return None
-            time.sleep(10 * (attempt + 1))
+            time.sleep(5 * (attempt + 1))
     out = {}
     for r in rows:
         tp = r["time_period"]  # fiscal year (October-September) and month of the fiscal year (1 = October)
         fy, fm = int(tp["fiscal_year"]), int(tp["month"])
         year, month = (fy - 1, fm + 9) if fm <= 3 else (fy, fm - 3)
         out[pd.Timestamp(year, month, 1) + pd.offsets.MonthEnd(0)] = float(r.get("aggregated_amount") or 0.0)
-    return pd.Series(out, name=key).sort_index()
+    return pd.Series(out, name=key, dtype=float).sort_index()
 
 
-def download_spending() -> pd.DataFrame | None:
-    end = (pd.Timestamp.today() - pd.offsets.MonthEnd(1)).date().isoformat()
+def download_spending(budget_s: float = 1500) -> pd.DataFrame | None:
+    """Fiscal year by fiscal year (one large request times out), keeping what is cached: only the missing years and
+    the last two (still being corrected) are asked for; at most budget_s seconds, then what was got is kept."""
+    old = cached("gasto_publico")
+    today = pd.Timestamp.today()
+    last_fy = today.year + (1 if today.month >= 10 else 0)
+    t0 = time.time()
     cols = {}
     for key, codes in NAICS.items():
-        s = spending(key, codes, end)
-        if s is not None and len(s):
-            cols[key] = s
+        have = old[key].dropna() if old is not None and key in old else pd.Series(dtype=float)
+        parts = [have]
+        for fy in range(2008, last_fy + 1):
+            first, last = pd.Timestamp(fy - 1, 10, 1), min(pd.Timestamp(fy, 9, 30), today - pd.offsets.MonthEnd(1))
+            if first > last:
+                continue
+            known = have[(have.index >= first) & (have.index <= last)]
+            if len(known) >= 12 and fy < last_fy - 1:
+                continue
+            if time.time() - t0 > budget_s:
+                warn("USAspending: tempo esgotado, fica o que já veio")
+                break
+            s = spending(key, codes, first.date().isoformat(), last.date().isoformat())
+            if s is not None and len(s):
+                parts.append(s)
+        merged = pd.concat(parts)
+        merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+        if len(merged):
+            cols[key] = merged
+        print(f"USAspending {key}: {len(merged)} meses ({time.time() - t0:.0f} s)", flush=True)
     return pd.DataFrame(cols) if cols else None
 
 
@@ -148,10 +171,6 @@ def capex_growth(fund: pd.DataFrame, sector_of: dict[str, str]) -> pd.DataFrame:
 def refresh() -> dict[str, str]:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     done = {}
-    gov = download_spending()
-    if gov is not None:
-        gov.to_csv(CACHE_DIR / "gasto_publico.csv")
-        done["gasto_publico"] = f"{gov.index.min().date()} a {gov.index.max().date()} ({gov.shape[1]} setores)"
     epu = download_epu()
     if epu is not None:
         epu.to_csv(CACHE_DIR / "epu_categorias.csv")
@@ -166,6 +185,10 @@ def refresh() -> dict[str, str]:
         done["capex_setor"] = f"{cap.index.min().date()} a {cap.index.max().date()}"
     except Exception as e:  # noqa: BLE001 - the other files are still worth keeping
         warn(f"capex por setor: {e}")
+    gov = download_spending()
+    if gov is not None:
+        gov.to_csv(CACHE_DIR / "gasto_publico.csv")
+        done["gasto_publico"] = f"{gov.index.min().date()} a {gov.index.max().date()} ({gov.shape[1]} setores)"
     return done
 
 
