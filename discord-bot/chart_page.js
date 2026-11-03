@@ -513,23 +513,34 @@ if (window.Plotly) intervalLegend(elId, traces);
 }
 
 // Legend in the order of the lines (best result on top) with each one's result over the visible interval:
-// updated when the interval changes (zoom, drag, 1A/5A/10A/Tudo).
+// updated when the interval changes (zoom, drag, 1A/5A/10A/Tudo). The lines (and their hover) then start at 0% on the
+// interval's first day, so the chart, the hover and the legend all tell the result since then.
 function intervalLegend(elId, traces) {
   const el = $(elId);
   const day = (v) => String(v).slice(0, 10);
   const fmtDay = (d) => d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(0, 4);
+  const orig = traces.map((t) => t.y.slice());  // Plotly.update replaces the traces' y: keep the originals
   let busy = false;
   const apply = (from, to) => {
-    const res = traces.map((t) => {
+    const bounds = traces.map((t, k) => {
       let i0 = -1, i1 = -1;
       for (let i = 0; i < t.x.length; i++) {
         const d = day(t.x[i]);
-        if (t.y[i] == null || (from && d < from) || (to && d > to)) continue;
+        if (orig[k][i] == null || (from && d < from) || (to && d > to)) continue;
         if (i0 < 0) i0 = i;
         i1 = i;
       }
-      return i0 < 0 || i1 <= i0 ? null : ((1 + t.y[i1] / 100) / (1 + t.y[i0] / 100) - 1) * 100;
+      return [i0, i1];
     });
+    // each line from its first visible point (the whole history: as it is)
+    const ys = orig.map((y, k) => {
+      const i0 = bounds[k][0];
+      if (!(from || to) || i0 < 0) return y;
+      const base = 1 + y[i0] / 100;
+      return y.map((v) => (v == null ? null : ((1 + v / 100) / base - 1) * 100));
+    });
+    const res = bounds.map(([i0, i1], k) =>
+      (i0 < 0 || i1 <= i0 ? null : ((1 + orig[k][i1] / 100) / (1 + orig[k][i0] / 100) - 1) * 100));
     const order = res.map((r, i) => [r == null ? -Infinity : r, i]).sort((a, b) => b[0] - a[0]);
     const rank = []; order.forEach(([, i], k) => { rank[i] = k + 1; });
     const names = traces.map((t, i) => t.meta + (res[i] == null ? "" : " · " + (res[i] > 0 ? "+" : "") + fmtNum(res[i], 1) + "%"));
@@ -538,7 +549,7 @@ function intervalLegend(elId, traces) {
     const layout = { "legend.title.text": a && b ? "<b>" + fmtDay(a) + " → " + fmtDay(b) + "</b>" : "" };
     if (from || to) {  // fit the vertical axis and the date labels to the visible interval
       let lo = Infinity, hi = -Infinity;
-      traces.forEach((t) => t.x.forEach((x, i) => { const d = day(x); if (t.y[i] != null && (!from || d >= from) && (!to || d <= to)) { lo = Math.min(lo, t.y[i]); hi = Math.max(hi, t.y[i]); } }));
+      traces.forEach((t, k) => t.x.forEach((x, i) => { const d = day(x); const v = ys[k][i]; if (v != null && (!from || d >= from) && (!to || d <= to)) { lo = Math.min(lo, v); hi = Math.max(hi, v); } }));
       if (isFinite(lo)) { const pad = (hi - lo) * 0.06 || 1; layout["yaxis.range"] = [lo - pad, hi + pad]; }
       const years = (Date.parse(b) - Date.parse(a)) / 3.15e10;
       layout["xaxis.tickformat"] = years > 3 ? "%Y" : years > 0.4 ? "%m/%y" : "%d/%m";
@@ -546,7 +557,7 @@ function intervalLegend(elId, traces) {
       layout["yaxis.autorange"] = true;
     }
     busy = true;
-    Plotly.update(el, { name: names, legendrank: rank }, layout)
+    Plotly.update(el, { name: names, legendrank: rank, y: ys }, layout)
       .finally(() => { busy = false; });
   };
   apply(null, null);
