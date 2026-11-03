@@ -9,7 +9,7 @@
 // Finance quotes (refreshed every minute, usually ~15 min behind the exchange),
 // converts everything to euros, and draws the value since the first purchase.
 
-import { esc, html, page, safeJson, staticAsset } from "./chart_page.js";
+import { avatarUrl, esc, html, memberFace, page, safeJson, siteTopbar, staticAsset } from "./chart_page.js";
 import { currentSession, loginActive } from "./session.js";
 import { cached, createPortfolio, deletePortfolio, getVersion, hasDb, listVersions, loadPortfolio, renamePortfolio, savePortfolio } from "./store.js";
 
@@ -162,6 +162,16 @@ function redirect(location, headers = {}) {
   return new Response(null, { status: 302, headers: { Location: location, "Cache-Control": "no-store", ...headers } });
 }
 
+// /perfil: the signed-in member's profile, with their portfolio (its API stays at /c/<token>/...).
+export async function profileRoute(request, env) {
+  const session = await currentSession(env, request);
+  if (!session) return redirect(`/entrar?voltar=${encodeURIComponent("/perfil")}`);
+  const login = await loginActive(env);
+  const resp = html(portfolioPage(session.data, session.tok, { signedIn: true, loginOn: login.any, googleOn: login.google, versions: hasDb(env), profile: true }));
+  resp.headers.set("Cache-Control", "no-store");
+  return resp;
+}
+
 // /c/<token>, /c/<token>/data (GET quotes, POST changes), /history, /analysis, /versions
 export async function portfolioRoute(request, env, tok, rest, dispatch) {
   ENV = env;
@@ -176,10 +186,8 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
   if (rest === "" && request.method === "GET") {
     const login = await loginActive(env);
     const embed = new URL(request.url).searchParams.get("embed") === "1";
-    if (mine && !embed) return redirect("/#perfil");  // the portfolio lives in the portal's profile; old links land there
-    // In the profile each part has its own frame: the portfolio, the /seguir list, the account and privacy.
-    const view = embed && ["seguir", "conta"].includes(new URL(request.url).searchParams.get("vista")) ? new URL(request.url).searchParams.get("vista") : "carteira";
-    const resp = html(portfolioPage(data, tok, { signedIn: mine, loginOn: login.any, googleOn: login.google, versions: hasDb(env), embed, view }));
+    if (mine && !embed) return redirect("/perfil");  // the owner's portfolio lives in their profile page; old links land there
+    const resp = html(portfolioPage(data, tok, { signedIn: mine, loginOn: login.any, googleOn: login.google, versions: hasDb(env), embed }));
     if (embed) resp.headers.set("X-Embed", "1");  // the worker allows this page inside the portal (same site only)
     return resp;
   }
@@ -788,22 +796,64 @@ async function history(env, data) {
 // Page
 // ---------------------------------------------------------------------------
 
+// The portfolio page. On /perfil (opts.profile) it is the member's profile: the site's top bar, who they are, and a
+// sidebar with the portfolio's sections, 👀 Seguir, ⚙️ Definições and 🔒 Conta e privacidade. Elsewhere (a link opened
+// without the owner's session, while sign-in is off) it keeps its own header and tab bar.
+const WALLET_TABS = [["resumo", "📊 Resumo"], ["posicoes", "💼 Posições"], ["operacoes", "🧾 Operações"], ["adicionar", "➕ Adicionar"],
+                     ["propostas", "🧠 Propostas para ti"], ["importar", "📥 Importar"], ["analise", "🤖 Análise do Claude"]];
+const PROFILE_TABS = [["seguir", "👀 Seguir"], ["definicoes", "⚙️ Definições"], ["conta", "🔒 Conta e privacidade"]];
+const START_TABS = [["", "🏠 Hoje"], ["corrida", "🏁 Corrida"], ["pretreino", "⏪ Pré-treino"], ["agentes", "🧾 Agentes"], ["propostas", "🧠 Propostas"],
+                    ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"], ["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]];
+
 function portfolioPage(data, tok, opts = {}) {
-  // Inside the portal's profile the 👀 Seguir and 🔒 Conta parts are profile tabs (frames of this page with ?vista=):
-  // the portfolio frame leaves them out, and a part's frame shows only that part, without the tab bar.
-  const view = opts.embed ? opts.view || "carteira" : null;
-  const inWallet = (tab) => view !== "carteira" || !["seguir", "conta"].includes(tab);
-  const body = `
+  const tabButton = ([t, label], on) => `<button class="tab${on ? " on" : ""}" data-tab="${t}">${label}</button>`;
+  const me = { name: data.display_name || data.name || "membro", avatar: avatarUrl(data.owner, data.avatar) };
+  const prefs = { capital: 10000, risk: 1, music: false, start: "", ...(data.settings || {}) };
+  const since = data.created ? "Membro desde " + new Date(data.created).toLocaleDateString("pt-PT", { month: "long", year: "numeric", timeZone: "Europe/Lisbon" }) + " · " : "";
+  const top = opts.profile ? `
+<header>${siteTopbar(me)}</header>
+<div class="profile-card panel">
+  ${memberFace(me, true)}
+  <div class="profile-who">
+    <h2 class="me-name">${esc(me.name)}</h2>
+    <p class="muted small">${esc(since)}Discord ✓${data.google ? " · Google ✓" : ""}</p>
+  </div>
+</div>
+<div class="profile-layout">
+<nav class="side" id="tabs" aria-label="Perfil">
+  <p class="side-h">💼 Carteira</p>
+  ${WALLET_TABS.map((t, i) => tabButton(t, i === 0)).join("")}
+  <p class="side-h">👤 Perfil</p>
+  ${PROFILE_TABS.map((t) => tabButton(t, false)).join("")}
+</nav>
+<div class="side-main">
+<section data-tab="definicoes" hidden>
+  <h2>⚙️ Definições</h2>
+  <form id="display-name" class="panel profile-form" autocomplete="off">
+    <label for="dn-input"><b>🪪 Nome a apresentar</b> <span class="muted small">· é assim que os outros membros te veem</span></label>
+    <div class="row-btns"><input id="dn-input" name="name" maxlength="24" value="${esc(data.display_name || "")}" placeholder="${esc(data.name || "o teu nome no Discord")}">
+      <button class="btn" type="submit">GUARDAR</button></div>
+    <p class="muted small" id="dn-msg">2 a 24 caracteres, sem @ nem links, diferente dos agentes e dos outros membros. Vazio usa o teu nome do Discord${data.name ? " (" + esc(data.name) + ")" : ""}.</p>
+  </form>
+  <form id="prefs" class="panel profile-form" autocomplete="off">
+    <p><b>📐 Tamanho das posições</b> <span class="muted small">· as propostas dos agentes passam a número de ações com estes valores, no portal e aqui</span></p>
+    <div class="row-btns"><label class="small">Capital (€)<br><input name="capital" type="number" min="0" max="1000000000" step="100" value="${esc(prefs.capital)}"></label>
+      <label class="small">Risco por operação (%)<br><input name="risk" type="number" min="0.1" max="5" step="0.1" value="${esc(prefs.risk)}"></label></div>
+    <p><b>🔊 Música</b><br><label class="small"><input name="music" type="checkbox"${prefs.music ? " checked" : ""}> Ligada ao entrar <span class="muted">(o botão 🔇/🔊 no canto também a guarda aqui)</span></label></p>
+    <p><b>🏠 Separador do portal ao entrar</b><br><select name="start">${START_TABS.map(([t, label]) => `<option value="${t}"${(prefs.start || "") === t ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></p>
+    <div class="row-btns"><button class="btn" type="submit">GUARDAR DEFINIÇÕES</button></div>
+    <p class="muted small" id="prefs-msg">Ficam na tua conta: valem em todos os aparelhos onde entras.</p>
+  </form>
+</section>` : `
 <header class="embed-hide">
   <p class="small"><a href="/">🏟️ One Guillion Jollars</a> · ${opts.signedIn ? '<a href="/sair">Sair</a>' : '<a href="/entrar">Entrar</a>'}</p>
   <h1>💼 Carteira de ${esc(data.name || "membro")}</h1>
   <p class="muted small">Privada: só quem tem este link a vê. Preços do Yahoo Finance, atualizados a cada minuto (normalmente com ~15 min de atraso face à bolsa). Valores totais em euros ao câmbio atual. Ferramenta educativa, não é aconselhamento.</p>
 </header>
-<nav class="tabs" id="tabs" data-view="${view || ""}"${view && view !== "carteira" ? ' style="display:none"' : ""}>
-  ${[["resumo", "📊 Resumo"], ["posicoes", "💼 Posições"], ["operacoes", "🧾 Operações"], ["adicionar", "➕ Adicionar"], ["propostas", "🧠 Propostas para ti"],
-     ["seguir", "👀 Seguir"], ["importar", "📥 Importar"], ["analise", "🤖 Análise do Claude"], ["conta", "🔒 Conta"]].filter(([t]) => inWallet(t))
-    .map(([t, label], i) => `<button class="tab${i ? "" : " on"}" data-tab="${t}">${label}</button>`).join("\n  ")}
-</nav>
+<nav class="tabs" id="tabs">
+  ${WALLET_TABS.concat([["seguir", "👀 Seguir"], ["conta", "🔒 Conta"]]).map((t, i) => tabButton(t, i === 0)).join("")}
+</nav>`;
+  const body = `${top}
 <section data-tab="conta" hidden>
   <h2>🔑 Entrar</h2>
   <div class="panel small">
@@ -916,11 +966,15 @@ function portfolioPage(data, tok, opts = {}) {
   </form>
   <p class="muted small">Ações europeias: junta o sufixo da bolsa do Yahoo Finance (.DE Xetra, .AS Amesterdão, .PA Paris, .MI Milão, .L Londres, .LS Lisboa).</p>
 </section>
+${opts.profile ? "</div></div>" : ""}
 <script>
 const TOKEN = ${safeJson(tok)};
+const PROFILE = ${opts.profile ? "true" : "false"};
+const PREFS = ${safeJson(opts.profile ? data.settings || {} : null)};
+if (PREFS && PREFS.music !== undefined) try { localStorage.setItem("musica", PREFS.music ? "on" : "off"); } catch (e) {}  // the account wins
 </script>
 <script src="${CLIENT_PATH}"></script>`;
-  return page(`Carteira de ${data.name || "membro"}`, body, `${opts.embed ? '<base target="_top">' : ""}<link rel="manifest" href="/c/${tok}/manifest.webmanifest"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png?v=1gj">
+  return page(opts.profile ? `Perfil de ${me.name}` : `Carteira de ${data.name || "membro"}`, body, `${opts.embed ? '<base target="_top">' : ""}<link rel="manifest" href="/c/${tok}/manifest.webmanifest"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png?v=1gj">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 <style>.form { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; align-items:end; }
@@ -932,6 +986,7 @@ const TOKEN = ${safeJson(tok)};
 
 const CLIENT = String.raw`
 const $ = (id) => document.getElementById(id);
+const BASE = "/c/" + TOKEN;  // the API, also from /perfil
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const nf = (x, d = 2) => x == null || !isFinite(x) ? "—" : new Intl.NumberFormat("pt-PT", { minimumFractionDigits: d, maximumFractionDigits: d }).format(x);
 const eur = (x) => x == null || !isFinite(x) ? "—" : new Intl.NumberFormat("pt-PT", { style: "currency", currency: "EUR" }).format(x);
@@ -948,6 +1003,7 @@ function openTab(name) {
   document.querySelectorAll("#tabs .tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
   document.querySelectorAll("section[data-tab]").forEach((s) => { s.hidden = s.dataset.tab !== name; });
   if (name === "resumo" && window.Plotly && $("chart").data) Plotly.Plots.resize("chart");
+  if (PROFILE) try { history.replaceState(null, "", "#" + name); } catch (e) {}  // /perfil#seguir opens that part
 }
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
 
@@ -994,7 +1050,7 @@ function renderAnalysis(a) {
 }
 async function loadAnalysis() {
   try {
-    const a = await (await fetch(location.pathname.replace(/\/$/, "") + "/analysis", { cache: "no-store" })).json();
+    const a = await (await fetch(BASE + "/analysis", { cache: "no-store" })).json();
     renderAnalysis(a);
     clearTimeout(anTimer);
     if (a.status === "pending") anTimer = setTimeout(loadAnalysis, 8000);
@@ -1003,7 +1059,7 @@ async function loadAnalysis() {
 $("an-go").addEventListener("click", async () => {
   $("an-go").disabled = true;
   try {
-    const r = await fetch(location.pathname.replace(/\/$/, "") + "/analysis", { method: "POST" });
+    const r = await fetch(BASE + "/analysis", { method: "POST" });
     const a = await r.json();
     if (!r.ok) { alert(a.error); $("an-go").disabled = false; return; }
     renderAnalysis(a); anTimer = setTimeout(loadAnalysis, 8000);
@@ -1019,7 +1075,7 @@ function renderAccounts() {
      '<button class="del" data-delacc="' + esc(name) + '">remover</button>']), [2]) + '<p class="muted small">Corrige o dinheiro de uma conta escrevendo o valor e saindo da caixa.</p>' : "";
 }
 async function post(body) {
-  const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const r = await fetch(BASE + "/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const out = await r.json();
   if (!r.ok) throw new Error(out.error || "erro");
   return out;
@@ -1031,7 +1087,7 @@ async function loadVersions() {
   const box = $("versions");
   if (!box || /D1/.test(box.textContent)) return;
   try {
-    const r = await (await fetch(location.pathname.replace(/\/$/, "") + "/versions", { cache: "no-store" })).json();
+    const r = await (await fetch(BASE + "/versions", { cache: "no-store" })).json();
     const rows = r.versions || [];
     if (!rows.length) { box.innerHTML = '<p class="muted">Sem alterações registadas.</p>'; return; }
     box.innerHTML = '<p class="muted">As últimas ' + rows.length + ' alterações. "Repor" volta ao estado logo a seguir a essa alteração (a reposição também fica no histórico, por isso dá para voltar atrás).</p>' +
@@ -1047,9 +1103,60 @@ $("versions").addEventListener("click", async (e) => {
   try { SNAP = await post({ action: "restore", version: +b.dataset.restore }); render(); drawHistory(); loadVersions(); } catch (err) { alert(err.message); }
 });
 document.querySelector('[data-tab="conta"]').addEventListener("click", loadVersions);
-if ($("tabs").dataset.view === "seguir" || $("tabs").dataset.view === "conta") {  // a profile tab's frame: only that part
-  openTab($("tabs").dataset.view);
-  if ($("tabs").dataset.view === "conta") loadVersions();
+if (PROFILE && location.hash.length > 1 && document.querySelector('#tabs .tab[data-tab="' + location.hash.slice(1) + '"]')) {
+  openTab(location.hash.slice(1));
+  if (location.hash === "#conta") loadVersions();
+}
+
+// ---- /perfil: ⚙️ Definições (the display name and the settings kept in the account) ----
+async function savePrefs(fields) {
+  const out = await post({ action: "preferences", ...fields });
+  return out.settings;
+}
+const musicOn = () => { try { return localStorage.getItem("musica") === "on"; } catch (e) { return false; } };
+if (PROFILE) document.addEventListener("click", (e) => {  // the 🔇/🔊 button (drawn later, stops its clicks): capture phase
+  if (!e.target.closest("#music")) return;
+  setTimeout(() => { $("prefs").elements.music.checked = musicOn(); savePrefs({ music: musicOn() }).catch(() => {}); }, 0);
+}, true);
+function formStatus(msg) {
+  const hint = msg.textContent;
+  return (cls, text, back) => {
+    msg.className = cls + " small"; msg.textContent = text;
+    if (back) setTimeout(() => { msg.className = "muted small"; msg.textContent = hint; }, back);
+  };
+}
+if ($("prefs")) {
+  const say = formStatus($("prefs-msg"));
+  $("prefs").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target.elements, btn = e.target.querySelector("button");
+    btn.disabled = true; say("muted", "A guardar…");
+    try {
+      const s = await savePrefs({ capital: +f.capital.value, risk: +f.risk.value, music: f.music.checked, start: f.start.value });
+      try { localStorage.setItem("capital", JSON.stringify(s.capital)); localStorage.setItem("risk", JSON.stringify(s.risk)); } catch (err) {}
+      if (SNAP) { SNAP.settings = s; render(); }  // Propostas para ti follows at once
+      const music = $("music");
+      if (music && !music.hidden && !!s.music !== musicOn()) music.click();
+      else try { localStorage.setItem("musica", s.music ? "on" : "off"); } catch (err) {}
+      say("up", "✅ Guardado na tua conta.", 5000);
+    } catch (err) { say("down", "⚠️ " + err.message); } finally { btn.disabled = false; }
+  });
+}
+if ($("display-name")) {
+  const say = formStatus($("dn-msg"));
+  $("display-name").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector("button");
+    btn.disabled = true; say("muted", "A guardar…");
+    try {
+      const out = await post({ action: "display_name", name: $("dn-input").value });
+      const shown = out.display_name || out.name || "membro";
+      $("dn-input").value = out.display_name;
+      document.querySelectorAll(".me-name").forEach((el) => { el.textContent = shown; });
+      document.querySelectorAll("span.initial").forEach((el) => { el.textContent = ([...shown][0] || "?").toUpperCase(); });
+      say("up", out.display_name ? "✅ Guardado: os outros membros veem-te como " + shown + "." : "✅ Voltaste ao teu nome do Discord.", 6000);
+    } catch (err) { say("down", "⚠️ " + err.message); } finally { btn.disabled = false; }
+  });
 }
 if ($("require-login")) $("require-login").onchange = async (e) => {
   try { await post({ action: "security", require_login: e.target.checked }); alert(e.target.checked ? "Feito: a partir de agora é preciso entrar com o Discord ou o Google." : "Feito: o link volta a abrir a carteira sem login."); }
@@ -1293,7 +1400,7 @@ $("import-form").file.addEventListener("change", async (e) => {
     } catch (err) { btn.disabled = false; btn.textContent = "TENTAR DE NOVO"; $("import-preview").insertAdjacentHTML("beforeend", '<p class="down">⚠️ ' + esc(err.message) + '</p>'); }
   });
 });
-try { localStorage.setItem("carteira", JSON.stringify(location.pathname.replace(/\/$/, ""))); } catch (e) {}  // the portal's "Hoje" shows it
+try { localStorage.setItem("carteira", JSON.stringify(BASE)); } catch (e) {}  // the portal's "Hoje" shows it
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 
 function renderFollows() {
@@ -1304,7 +1411,7 @@ function renderFollows() {
     '<button class="del" data-unfollow="' + esc(x.symbol) + '">deixar</button>']), [1, 2, 3]) : '<p class="muted">Ainda não segues nenhuma ação.</p>';
 }
 async function followAction(action, symbol) {
-  const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, symbol }) });
+  const r = await fetch(BASE + "/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, symbol }) });
   const out = await r.json();
   if (!r.ok) { $("follow-msg").textContent = "⚠️ " + out.error; $("follow-msg").className = "small down"; return; }
   $("follow-msg").textContent = ""; SNAP = out; render();
@@ -1351,7 +1458,7 @@ $("mine").addEventListener("click", (e) => {
 $("settings").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
-  const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
+  const r = await fetch(BASE + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: "settings", capital: +f.capital.value, risk: +f.risk.value }) });
   const out = await r.json();
   if (!r.ok) return alert(out.error);
@@ -1447,14 +1554,14 @@ function render() {
 
 async function load() {
   try {
-    const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { cache: "no-store" });
+    const r = await fetch(BASE + "/data", { cache: "no-store" });
     if (r.ok) { SNAP = await r.json(); render(); }
   } catch (e) {}
 }
 
 async function drawHistory() {
   if (!window.Plotly || !SNAP || !SNAP.tx.length) { $("chart").innerHTML = '<p class="muted" style="padding:16px">Adiciona a primeira compra para ver a evolução.</p>'; return; }
-  const h = await (await fetch(location.pathname.replace(/\/$/, "") + "/history", { cache: "no-store" })).json();
+  const h = await (await fetch(BASE + "/history", { cache: "no-store" })).json();
   const days = [...new Set(Object.values(h.series).flatMap((s) => s.t))].filter((d) => d >= SNAP.tx.reduce((m, t) => t.date < m ? t.date : m, "9999")).sort();
   const lastBefore = (s, d) => { if (!s) return null; let v = null; for (let i = 0; i < s.t.length && s.t[i] <= d; i++) if (s.c[i] != null) v = s.c[i]; return v; };
   const fxOn = (cur, d) => cur === "EUR" ? 1 : (() => { const r = lastBefore(h.fx[cur], d); return r ? (cur === "GBp" || cur === "GBX" ? 0.01 : 1) / r : null; })();
@@ -1483,7 +1590,7 @@ $("form").addEventListener("submit", async (e) => {
   msg.textContent = "A guardar…"; msg.className = "small";
   const tx = Object.fromEntries(f.entries());
   const id = tx.edit_id; delete tx.edit_id;
-  const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
+  const r = await fetch(BASE + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(id ? { action: "edit", id, tx } : { action: "add", tx }) });
   const out = await r.json();
   if (!r.ok) { msg.textContent = "⚠️ " + out.error; msg.className = "small down"; return; }
@@ -1500,7 +1607,7 @@ $("txs").addEventListener("click", async (e) => {
   const a = e.target.closest(".act");
   if (a) { const t = SNAP.tx.find((x) => x.id === a.dataset.id); if (t) fillForm(t, a.dataset.act === "edit"); return; }
   const b = e.target.closest(".del"); if (!b || !confirm("Apagar esta operação?")) return;
-  const r = await fetch(location.pathname.replace(/\/$/, "") + "/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "delete", id: b.dataset.id }) });
+  const r = await fetch(BASE + "/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "delete", id: b.dataset.id }) });
   const out = await r.json();
   if (!r.ok) return alert(out.error);
   SNAP = out; render(); drawHistory();

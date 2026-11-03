@@ -18,7 +18,7 @@
 import { loginRoute, rememberDiscord } from "./login.js";
 import { currentSession, loginActive } from "./session.js";
 import { chartResponse, portalResponse, portalVersion, staticResponse } from "./chart_page.js";
-import { portfolioCommand, portfolioRoute } from "./portfolio.js";
+import { portfolioCommand, portfolioRoute, profileRoute } from "./portfolio.js";
 import { ICONS } from "./icons.js";
 import { dailyBackup } from "./store.js";
 
@@ -230,6 +230,7 @@ async function route(request, env, ctx) {
       if (!session) return new Response(null, { status: 302, headers: { Location: "/entrar", "Cache-Control": "no-store" } });
       return portalResponse(env, null, await getSchedule(env), path !== "/", session);
     }
+    if (request.method === "GET" && path === "/perfil" && env.CONFIG) return profileRoute(request, env);  // the member's profile and portfolio
     const wallet = path.match(/^\/c\/([0-9a-f]{24})(\/data|\/history|\/analysis|\/versions|\/export|\/manifest\.webmanifest)?$/);
     if (wallet && env.CONFIG) {
       return portfolioRoute(request, env, wallet[1], wallet[2] || "", (workflow, inputs) => dispatchWorkflow(env, workflow, inputs));

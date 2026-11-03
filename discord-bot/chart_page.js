@@ -294,6 +294,25 @@ ${head}
 </html>`;
 }
 
+// The member's Discord avatar, or their name's initial (me: {name, avatar}).
+export function memberFace(me, big = false) {
+  if (!me) return "";
+  return me.avatar
+    ? `<img class="initial${big ? " big" : ""}" src="${esc(me.avatar)}" alt="" width="${big ? 72 : 30}" height="${big ? 72 : 30}" referrerpolicy="no-referrer">`
+    : `<span class="initial${big ? " big" : ""}" aria-hidden="true">${esc([...me.name][0] || "?").toUpperCase()}</span>`;
+}
+
+// The site's top bar, on the portal and the profile: the title and the logo go home, the name opens /perfil.
+export function siteTopbar(me, home = "/") {
+  return `<div class="topbar">
+  <h1><a class="home" href="${esc(home)}">One Guillion Jollars</a></h1>
+  <a class="home logo-link" href="${esc(home)}" aria-label="Página principal"><img class="logo" src="/logo-256.png?v=1" alt="" width="108" height="108"></a>
+  <div class="userbar">${me
+    ? `<a class="me" href="/perfil" title="O meu perfil">${memberFace(me)}<b class="me-name">${esc(me.name)}</b></a><a class="btn alt" href="/sair">SAIR</a>`
+    : `<a class="btn" href="/entrar">🔑 ENTRAR</a>`}</div>
+  </div>`;
+}
+
 export function chartPage(data, upcoming, newer, extras = {}) {
   const banner = newer
     ? `<a class="banner" href="/g/${esc(newer)}">🔄 Há uma versão mais recente deste gráfico · abrir</a>`
@@ -305,20 +324,10 @@ export function chartPage(data, upcoming, newer, extras = {}) {
     .concat(portal ? [] : [["agenda", "⏱️ Agenda"]])  // in the portal the schedule is part of 🩺 Estado
     .concat(portal ? [["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]] : []);  // the portfolio is in the profile (the name, top right)
   const me = extras.user;
-  const face = (big = false) => !me ? "" : me.avatar  // the Discord avatar, or the name's initial
-    ? `<img class="initial${big ? " big" : ""}" src="${esc(me.avatar)}" alt="" width="${big ? 72 : 30}" height="${big ? 72 : 30}" referrerpolicy="no-referrer">`
-    : `<span class="initial${big ? " big" : ""}" aria-hidden="true">${esc([...me.name][0] || "?").toUpperCase()}</span>`;
-  const prefs = { capital: 10000, risk: 1, music: false, start: "", ...((me && me.settings) || {}) };
   const body = `
 ${banner}
 <header>
-  <div class="topbar">
-  <h1>${portal ? `<a class="home" href="${esc(extras.home || "/")}">One Guillion Jollars</a>` : esc(data.title)}</h1>
-  ${portal ? `<a class="home logo-link" href="${esc(extras.home || "/")}" aria-label="Página principal"><img class="logo" src="/logo-256.png?v=1" alt="" width="108" height="108"></a>` : ""}
-  ${portal ? `<div class="userbar">${extras.user
-    ? `<a class="me" href="#perfil" data-go="perfil" title="O meu perfil">${face()}<b class="me-name">${esc(extras.user.name)}</b></a><a class="btn alt" href="/sair">SAIR</a>`
-    : `<a class="btn" href="/entrar">🔑 ENTRAR</a>`}</div>` : ""}
-  </div>
+  ${portal ? siteTopbar(me, extras.home) : `<div class="topbar"><h1>${esc(data.title)}</h1></div>`}
   <p class="muted">${esc(portal ? data.title + " · " + (data.subtitle || "") : data.subtitle || "")}</p>
   <p class="muted small">Dados da liga de <span id="updated"></span> (hora de Lisboa) · simulação com dinheiro fictício e preços reais · ferramenta educativa, não é recomendação de compra</p>
 </header>
@@ -380,48 +389,6 @@ ${portal ? `<section data-tab="propostas" hidden><div id="props"></div></section
 </section>
 ${portal ? `<section data-tab="ajuda" hidden><div id="glossary"></div></section>` : ""}
 ${portal ? `<section data-tab="pesquisa" hidden><div id="q-out"></div></section>` : ""}
-${portal ? `<section data-tab="perfil" hidden>
-  ${extras.user ? `<div class="profile-card panel">
-    ${face(true)}
-    <div class="profile-who">
-      <h2 class="me-name">${esc(extras.user.name)}</h2>
-      <p class="muted small">${extras.user.since ? "Membro desde " + esc(new Date(extras.user.since).toLocaleDateString("pt-PT", { month: "long", year: "numeric", timeZone: "Europe/Lisbon" })) + " · " : ""}Discord ✓${extras.user.google ? " · Google ✓" : ""}</p>
-    </div>
-  </div>
-  <nav class="tabs profile-tabs" id="profile-tabs">
-    <button class="tab on" type="button" data-part="carteira">💼 Carteira</button>
-    <button class="tab" type="button" data-part="seguir">👀 Seguir</button>
-    <button class="tab" type="button" data-part="definicoes">⚙️ Definições</button>
-    <button class="tab" type="button" data-part="conta">🔒 Conta e privacidade</button>
-  </nav>
-  <div data-part="definicoes" hidden>
-  <form id="display-name" class="panel profile-form" data-wallet="${esc(extras.user.wallet)}" autocomplete="off">
-    <label for="dn-input"><b>🪪 Nome a apresentar</b> <span class="muted small">· é assim que os outros membros te veem</span></label>
-    <div class="row-btns"><input id="dn-input" name="name" maxlength="24" value="${esc(extras.user.display)}" placeholder="${esc(extras.user.discord || "o teu nome no Discord")}">
-      <button class="btn" type="submit">GUARDAR</button></div>
-    <p class="muted small" id="dn-msg">2 a 24 caracteres, sem @ nem links, diferente dos agentes e dos outros membros. Vazio usa o teu nome do Discord${extras.user.discord ? " (" + esc(extras.user.discord) + ")" : ""}.</p>
-  </form>
-  <form id="prefs" class="panel profile-form" data-wallet="${esc(extras.user.wallet)}" autocomplete="off">
-    <p><b>📐 Tamanho das posições</b> <span class="muted small">· as propostas dos agentes passam a número de ações com estes valores, aqui e na carteira</span></p>
-    <div class="row-btns"><label class="small">Capital (€)<br><input name="capital" type="number" min="0" max="1000000000" step="100" value="${esc(prefs.capital)}"></label>
-      <label class="small">Risco por operação (%)<br><input name="risk" type="number" min="0.1" max="5" step="0.1" value="${esc(prefs.risk)}"></label></div>
-    <p><b>🔊 Música</b><br><label class="small"><input name="music" type="checkbox"${prefs.music ? " checked" : ""}> Ligada ao entrar no portal <span class="muted">(o botão 🔇/🔊 no canto também a guarda aqui)</span></label></p>
-    <p><b>🏠 Separador ao entrar</b><br><select name="start">${tabs.map(([t, label]) => `<option value="${t === "hoje" ? "" : t}"${(prefs.start || "") === (t === "hoje" ? "" : t) ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></p>
-    <div class="row-btns"><button class="btn" type="submit">GUARDAR DEFINIÇÕES</button></div>
-    <p class="muted small" id="prefs-msg">Ficam na tua conta: valem em todos os aparelhos onde entras.</p>
-  </form>
-  </div>
-  <iframe id="wallet-frame" class="wallet-frame" data-part="carteira" title="A minha carteira" data-src="${esc(extras.user.wallet)}?embed=1"></iframe>
-  <iframe class="wallet-frame" data-part="seguir" title="Ações que sigo" data-src="${esc(extras.user.wallet)}?embed=1&amp;vista=seguir" hidden></iframe>
-  <iframe class="wallet-frame" data-part="conta" title="Conta e privacidade" data-src="${esc(extras.user.wallet)}?embed=1&amp;vista=conta" hidden></iframe>`
-  : `<h2>💼 A tua carteira</h2>
-  <div class="panel prose">
-    <p>Cada membro regista as suas compras e vendas reais (ou importa da XTB) e acompanha o desempenho com preços quase em tempo real, aqui mesmo no portal.</p>
-    <p><a class="btn" style="display:inline-block;text-decoration:none;font-size:.75rem;padding:12px 16px" href="/entrar">🔑 ENTRAR COM O DISCORD OU O GOOGLE</a></p>
-    <p class="muted small">Discord: só membros do servidor (a primeira entrada cria a carteira). Google: depois de associares a conta. A sessão fica aberta 30 dias neste aparelho.
-    Também podes usar <code>/carteira</code> no Discord, que te dá o link privado.</p>
-  </div>`}
-</section>` : ""}
 <script>
 const DATA = ${safeJson(data)};
 const PORTAL_VERSION = ${safeJson(extras.version || null)};
@@ -470,6 +437,18 @@ a.home { color:inherit; text-decoration:none; }
 .initial { object-fit:cover; } .profile-form select { padding:8px 10px; border-radius:6px; border:1px solid var(--line); background:#0f0b2b; color:var(--fg); font:inherit; margin-top:4px; }
 .profile-form input:not([type=checkbox]) { flex:1; min-width:180px; padding:10px 12px; border-radius:6px; border:1px solid var(--line); background:#0f0b2b; color:var(--fg); font:inherit; }
 .profile-form .row-btns { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 4px; }
+.profile-layout { display:grid; grid-template-columns:230px minmax(0,1fr); gap:20px; align-items:start; margin-top:14px; }
+.side { position:sticky; top:12px; display:flex; flex-direction:column; gap:6px; padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--card); }
+.side .tab { text-align:left; width:100%; line-height:1.6; }
+.side-h { margin:6px 2px 0; font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+.side-h:first-child { margin-top:0; }
+.side-main > section > h2:first-child, .side-main > section > .grid:first-child { margin-top:0; }
+@media (max-width:760px) {
+  .profile-layout { grid-template-columns:1fr; gap:10px; }
+  .side { position:static; flex-direction:row; overflow-x:auto; padding:8px; scrollbar-width:none; }
+  .side::-webkit-scrollbar { display:none; }
+  .side .tab { width:auto; white-space:nowrap; } .side-h { display:none; }
+}
 .topbar .userbar { justify-self:end; }
 @media (max-width:640px) { .topbar { grid-template-columns:1fr auto; padding-right:48px; } .topbar .logo { width:3.5em; height:3.5em; } .topbar .userbar { grid-column:1 / -1; justify-self:start; } }
 h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem !important; line-height:1.6; }
@@ -572,9 +551,6 @@ details.chap[open] > summary { color:var(--neon); }
 .panel { background:var(--card); border:2px solid var(--neon); box-shadow:0 0 12px rgba(0,229,255,.25); border-radius:10px; padding:14px; margin-top:12px; }
 .userbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; font-size:.9rem; }
 .userbar .btn { text-decoration:none; display:inline-block; }
-.wallet-frame { width:100%; min-height:900px; border:0; display:block; background:transparent; }
-.wallet-frame[hidden] { display:none; } .wallet-frame[data-part="seguir"], .wallet-frame[data-part="conta"] { min-height:200px; }
-.tabs.profile-tabs { position:static !important; background:none; margin:14px 0 4px; padding:0; }
 body.embed .tabs { position:static !important; } body.embed main { padding-top:4px; padding-bottom:12px; } body.embed .embed-hide { display:none !important; }
 .search { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 10px; } .search input { flex:1; min-width:220px; background:var(--card); color:var(--fg); border:2px solid var(--neon); border-radius:6px; padding:9px 11px; font:inherit; }
 .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; } .dot.ok { background:var(--up); box-shadow:0 0 6px var(--up); } .dot.old { background:var(--gold); } .dot.bad { background:var(--down); } .dot.run { background:var(--neon); box-shadow:0 0 6px var(--neon); }
@@ -1117,8 +1093,7 @@ function restoreView(v) {
   } catch (e) {}
   const busy = () => {
     const a = document.activeElement;
-    const profile = document.querySelector('section[data-tab="perfil"]');
-    return (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || (profile && !profile.hidden);
+    return a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
   };
   const refresh = () => {
     try { sessionStorage.setItem(VIEW_KEY, JSON.stringify(snapshotView())); } catch (e) {}
@@ -1144,9 +1119,10 @@ function restoreView(v) {
   document.addEventListener("visibilitychange", check);
 })();
 {
-  const hash = location.hash.slice(1);  // old #agenda and #carteira links
-  const asked = hash === "agenda" && $("status") ? "estado" : hash === "carteira" ? "perfil" : hash;
-  const known = asked && (document.querySelector('#tabs .tab[data-tab="' + asked + '"]') || (asked === "perfil" && $("wallet-frame")));
+  const hash = location.hash.slice(1);  // old #agenda links; #perfil and #carteira moved to /perfil
+  if ((hash === "perfil" || hash === "carteira") && WALLET) location.replace("/perfil");
+  const asked = hash === "agenda" && $("status") ? "estado" : hash;
+  const known = asked && document.querySelector('#tabs .tab[data-tab="' + asked + '"]');
   const start = PREFS && PREFS.start && document.querySelector('#tabs .tab[data-tab="' + PREFS.start + '"]') ? PREFS.start : null;  // ⚙️ Definições
   openTab(known ? asked : start || document.querySelector("#tabs .tab").dataset.tab);
 }
@@ -1689,34 +1665,6 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
   draw();
 })();
 
-// ---- the member's portfolio inside the portal (same site, so the frame grows to fit) ----
-// The profile's tabs (💼 Carteira, 👀 Seguir, 🔒 Conta e privacidade) are frames of the portfolio page, each loaded on first use.
-(function walletFrame() {
-  if (!$("wallet-frame")) return;
-  const frames = [...document.querySelectorAll(".wallet-frame[data-part]")];
-  frames.forEach((f) => {
-    const fit = () => { try { const d = f.contentDocument; if (d && d.body) f.style.height = Math.max(f.dataset.part === "carteira" ? 600 : 200, d.documentElement.scrollHeight) + "px"; } catch (e) {} };
-    f.addEventListener("load", () => {
-      fit();
-      try { new ResizeObserver(fit).observe(f.contentDocument.body); } catch (e) { setInterval(fit, 1000); }
-    });
-  });
-  const parts = [...document.querySelectorAll('section[data-tab="perfil"] > [data-part]')];  // the frames and ⚙️ Definições
-  const load = () => { const f = parts.find((p) => !p.hidden); if (f && f.tagName === "IFRAME" && !f.src) f.src = f.dataset.src; };
-  const show = (part) => {
-    parts.forEach((p) => { p.hidden = p.dataset.part !== part; });
-    document.querySelectorAll("#profile-tabs .tab").forEach((b) => b.classList.toggle("on", b.dataset.part === part));
-    load();
-  };
-  $("profile-tabs").addEventListener("click", (e) => { const b = e.target.closest("[data-part]"); if (b) show(b.dataset.part); });
-  document.addEventListener("click", (e) => { if (e.target.closest('[data-go="perfil"]')) { e.preventDefault(); load(); openTab("perfil"); window.scrollTo(0, 0); } });
-  if (location.hash === "#perfil" || location.hash === "#carteira") load();
-  document.addEventListener("click", (e) => {  // "Abrir a minha carteira" links open the profile instead of another page
-    const a = e.target.closest('a[href^="/c/"]');
-    if (a && !a.closest(".wallet-frame") && !/\/export/.test(a.getAttribute("href"))) { e.preventDefault(); show("carteira"); openTab("perfil"); window.scrollTo(0, 0); }
-  });
-})();
-
 // ---- the logo and the title go to the main page (Hoje), without reloading when already on it ----
 document.addEventListener("click", (e) => {
   const a = e.target.closest("a.home");
@@ -1726,7 +1674,7 @@ document.addEventListener("click", (e) => {
   window.scrollTo(0, 0);
 });
 
-// ---- profile: ⚙️ Definições, kept in the account (capital and risk, music, the tab that opens first) ----
+// ---- settings kept in the account (edited on /perfil): the proposals' capital and risk, and the music button ----
 async function savePrefs(fields) {
   if (!WALLET) return null;
   const r = await fetch(WALLET + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1735,74 +1683,12 @@ async function savePrefs(fields) {
   if (!r.ok || out.error) throw new Error(out.error || "Não consegui guardar. Tenta outra vez.");
   return out.settings;
 }
-(function preferences() {
-  const form = $("prefs");
-  if (!form) return;
-  const msg = $("prefs-msg"), hint = msg.textContent;
-  const musicOn = () => { try { return localStorage.getItem("musica") === "on"; } catch (e) { return false; } };
-  // The 🔇/🔊 button is drawn after this script and stops its clicks, so listen in the capture phase,
-  // and read the new state once its own handler has switched it.
-  document.addEventListener("click", (e) => {
-    if (!e.target.closest("#music")) return;
-    setTimeout(() => { form.elements.music.checked = musicOn(); savePrefs({ music: musicOn() }).catch(() => {}); }, 0);
-  }, true);
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const f = form.elements, btn = form.querySelector("button");
-    btn.disabled = true;
-    msg.className = "muted small";
-    msg.textContent = "A guardar…";
-    try {
-      const s = await savePrefs({ capital: +f.capital.value, risk: +f.risk.value, music: f.music.checked, start: f.start.value });
-      try { localStorage.setItem("capital", JSON.stringify(s.capital)); localStorage.setItem("risk", JSON.stringify(s.risk)); } catch (err) {}
-      const cap = $("pp-cap"), risk = $("pp-risk");  // the proposals tab follows at once
-      if (cap && risk) { cap.value = s.capital; risk.value = s.risk; cap.dispatchEvent(new Event("input")); }
-      const music = $("music");
-      if (music && !music.hidden && !!s.music !== musicOn()) music.click();
-      else try { localStorage.setItem("musica", s.music ? "on" : "off"); } catch (err) {}
-      msg.className = "up small";
-      msg.textContent = "✅ Guardado na tua conta.";
-      setTimeout(() => { msg.className = "muted small"; msg.textContent = hint; }, 5000);
-    } catch (err) {
-      msg.className = "down small";
-      msg.textContent = "⚠️ " + err.message;
-    } finally {
-      btn.disabled = false;
-    }
-  });
-})();
-
-// ---- profile: the display name ("Nome a apresentar"), checked and kept unique by the Worker ----
-(function displayName() {
-  const form = $("display-name");
-  if (!form) return;
-  const msg = $("dn-msg"), hint = msg.textContent;
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const btn = form.querySelector("button");
-    btn.disabled = true;
-    msg.className = "muted small";
-    msg.textContent = "A guardar…";
-    try {
-      const r = await fetch(form.dataset.wallet + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
-                                                            body: JSON.stringify({ action: "display_name", name: $("dn-input").value }) });
-      const out = await r.json().catch(() => ({}));
-      if (!r.ok || out.error) throw new Error(out.error || "Não consegui guardar. Tenta outra vez.");
-      const shown = out.display_name || out.name || "membro";
-      $("dn-input").value = out.display_name;
-      document.querySelectorAll(".me-name").forEach((el) => { el.textContent = shown; });
-      document.querySelectorAll("span.initial").forEach((el) => { el.textContent = ([...shown][0] || "?").toUpperCase(); });
-      msg.className = "up small";
-      msg.textContent = out.display_name ? "✅ Guardado: os outros membros veem-te como " + shown + "." : "✅ Voltaste ao teu nome do Discord.";
-      setTimeout(() => { msg.className = "muted small"; msg.textContent = hint; }, 6000);
-    } catch (err) {
-      msg.className = "down small";
-      msg.textContent = "⚠️ " + err.message;
-    } finally {
-      btn.disabled = false;
-    }
-  });
-})();
+// The 🔇/🔊 button is drawn after this script and stops its clicks, so listen in the capture phase,
+// and read the new state once its own handler has switched it.
+document.addEventListener("click", (e) => {
+  if (!WALLET || !e.target.closest("#music")) return;
+  setTimeout(() => { let on = false; try { on = localStorage.getItem("musica") === "on"; } catch (err) {} savePrefs({ music: on }).catch(() => {}); }, 0);
+}, true);
 
 // ---- ticker search: everything the portal knows about one ticker, and the member's own position ----
 (function search() {
