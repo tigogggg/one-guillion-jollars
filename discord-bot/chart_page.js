@@ -46,6 +46,36 @@ export async function workflowRuns(env) {
   return runs;
 }
 
+// The pre-training of each investor profile in one view: every trained agent (the Indexador once), each with its
+// profile, so any of them can be compared with the others and become the main one.
+const PROFILE_LABELS = { equilibrado: "Equilibrado", conservador: "Conservador", arrojado: "Arrojado" };
+export function mergeProfiles(main, others) {
+  const out = { ...main, series: [], agents: [], highlight: [] };
+  const seen = new Set();
+  const add = (data, profile) => {
+    const label = PROFILE_LABELS[profile];
+    const rename = (n) => (profile === "equilibrado" || n === "Indexador" || n.endsWith(" " + label) ? n : n + " " + label);
+    for (const s of data.series || []) {
+      const name = rename(s.name);
+      if (seen.has(name)) continue;
+      seen.add(name);
+      out.series.push({ ...s, name });
+    }
+    for (const a of data.agents || []) {
+      const name = rename(a.name);
+      if (out.agents.some((b) => b.name === name)) continue;
+      out.agents.push({ ...a, name, perfil: profile });
+    }
+  };
+  add(main, "equilibrado");
+  for (const [p, data] of others) if (data) add(data, p);
+  // in colour: the 5 that end highest, and the Indexador (the page follows the interval in view)
+  const last = out.series.filter((s) => s.y.length).map((s) => [s.name, s.y[s.y.length - 1]]).sort((a, b) => b[1] - a[1]);
+  out.highlight = [...new Set(last.filter(([n]) => n !== "Indexador").slice(0, 5).map(([n]) => n)
+    .concat(last.some(([n]) => n === "Indexador") ? ["Indexador"] : []))];
+  return out;
+}
+
 export async function chartResponse(env, id, schedule) {
   const data = await env.CONFIG.get(`chart:${id}`, "json");
   if (!data) {
@@ -84,7 +114,14 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
     { title: "Liga dos agentes", subtitle: "ainda sem dados", updated: new Date().toISOString(), series: [], agents: [] };
   const [news, market, proposals, calendar, geo, evolution] = await Promise.all(["news", "market", "proposals", "calendar", "geo", "evolution"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
   const ptId = await env.CONFIG.get("chart-latest:pretreino", "json");
-  const pretrain = ptId && ptId !== latest ? await env.CONFIG.get(`chart:${ptId}`, "json") : null;
+  let pretrain = ptId && ptId !== latest ? await env.CONFIG.get(`chart:${ptId}`, "json") : null;
+  if (pretrain) {  // the other investor profiles' latest pre-trainings, on the same page
+    const others = await Promise.all(Object.keys(PROFILE_LABELS).filter((p) => p !== "equilibrado").map(async (p) => {
+      const id = await env.CONFIG.get(`chart-latest:pretreino-${p}`, "json");
+      return [p, id ? await env.CONFIG.get(`chart:${id}`, "json") : null];
+    }));
+    pretrain = mergeProfiles(pretrain, others);
+  }
   const user = session ? { name: session.data.name || "membro", wallet: `/c/${session.tok}` } : null;
   const version = await portalVersion(env);
   const runs = await workflowRuns(env);
@@ -549,7 +586,7 @@ const spanYears = xs.length ? (Date.parse(xs[xs.length - 1]) - Date.parse(xs[0])
 const narrow = window.innerWidth < 640;
 // the periods shorter than the chart's history (each counted back from its last day), then Tudo and Custom
 const periods = [[1, "1D", "day", 1], [7, "1W", "day", 7], [1, "1M", "month", 30], [3, "3M", "month", 91], [6, "6M", "month", 182],
-  [1, "1A", "year", 365], [5, "5A", "year", 1826], [10, "10A", "year", 3652]]
+  [1, "1A", "year", 365], [2, "2A", "year", 730], [3, "3A", "year", 1095], [4, "4A", "year", 1461], [5, "5A", "year", 1826], [10, "10A", "year", 3652]]
   .filter((p) => p[3] < spanYears * 365.25).map(([count, label, step]) => ({ count, label, step, stepmode: "backward" }));
 if (!window.Plotly) $(elId).innerHTML = '<p class="muted" style="padding:16px">Não consegui carregar o gráfico (Plotly). As fichas dos agentes estão em baixo.</p>';
 else Plotly.newPlot(elId, traces, {
@@ -1018,7 +1055,8 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 })();
 
 // ---- performance by period ----
-const PERIODS = [["1D", 1], ["1S", 7], ["1M", 30], ["3M", 91], ["6M", 182], ["1A", 365]];
+const PERIODS = [["1D", 1], ["1W", 7], ["1M", 30], ["3M", 91], ["6M", 182], ["1A", 365], ["2A", 730], ["3A", 1095], ["4A", 1461],
+  ["5A", 1826], ["10A", 3652]];
 function perfTable(boxId, data, people, pick) {
   const box = $(boxId);
   if (!box) return;
@@ -1041,13 +1079,16 @@ function perfTable(boxId, data, people, pick) {
   };
   let custom = { from: shift(last, 30), to: last };
   // weekly data cannot show one day: periods shorter than the spacing of the latest points are left out
+  // (the median spacing of the latest points; with only a few, the smallest: a weekend is not the spacing)
   const tail = series[0].x.slice(-21);
   const gaps = tail.slice(1).map((d, i) => (Date.parse(d) - Date.parse(tail[i])) / 864e5).sort((a, b) => a - b);
-  const step = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 1;
+  const step = gaps.length >= 5 ? gaps[Math.floor(gaps.length / 2)] : gaps.length ? gaps[0] : 1;
+  // and periods longer than the history are the same as "Desde o início": left out too
+  const span = (Date.parse(last) - Date.parse(first)) / 864e5;
   let sortCol = "all", showAll = false;
   const LIMIT = 20;  // the first 20 by the chosen column; a button shows the rest
   function draw() {
-    const cols = PERIODS.filter(([, d]) => d >= step).map(([k, d]) => ({ key: k, label: k, from: shift(last, d), to: last }))
+    const cols = PERIODS.filter(([, d]) => d >= step && d < span).map(([k, d]) => ({ key: k, label: k, from: shift(last, d), to: last }))
       .concat([{ key: "custom", label: "Personalizado", from: custom.from, to: custom.to }, { key: "all", label: "Desde o início", from: "0000-01-01", to: last }]);
     const rows = series.map((s) => ({ s, a: byName[s.name], cells: Object.fromEntries(cols.map((c) => [c.key, between(s, c.from, c.to, c.key === "all")])) }));
     const best = Object.fromEntries(cols.map((c) => [c.key, Math.max(...rows.map((r) => r.cells[c.key].v ?? -Infinity))]));
@@ -1474,7 +1515,8 @@ if (PRETRAIN && $("pt-race")) {
     chapters($("pt-detail").firstElementChild);
     if (scroll) $("pt-detail").scrollIntoView({ behavior: "smooth", block: "start" });
   };
-  markPt = agentPicker("pt-chips", ptAgents, (a) => a.backtest?.return_pct, (i) => showPt(ptAgents[i], true), () => "Estratégias");
+  markPt = agentPicker("pt-chips", ptAgents, (a) => a.backtest?.return_pct, (i) => showPt(ptAgents[i], true),
+    (a) => ({ conservador: "🛡️ Perfil conservador", arrojado: "🔥 Perfil arrojado" })[a.perfil] || "⚖️ Perfil equilibrado");
   race("pt-", PRETRAIN, ptAgents, (a) => showPt(a, true));
   lineChart("pt-chart", PRETRAIN);
   if (ptAgents.length) showPt(ptAgents.slice().sort((x, y) => (y.backtest?.return_pct ?? 0) - (x.backtest?.return_pct ?? 0))[0], false);

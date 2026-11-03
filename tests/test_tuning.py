@@ -81,6 +81,7 @@ def _synthetic_training(monkeypatch):
                         ("SESSIONS_PER_YEAR", 150), ("MIN_TRADES", 0)):
         monkeypatch.setattr(pretrain, name, value)
     monkeypatch.setattr(pretrain, "_MARKETS", markets)
+    monkeypatch.setattr(pretrain, "other_profiles_choices", lambda strategy: [])  # not the local private reports
 
 
 def test_train_strategy_runs_end_to_end_on_synthetic_markets(monkeypatch):
@@ -245,3 +246,16 @@ def test_a_series_inside_one_job_stops_when_the_choice_stays(monkeypatch):
     r = pretrain.series([], {"foguetao"}, 10)
     assert r["series_runs"] == 4 and r["strategies"]["foguetao"]["chosen"] == {"n": 4}  # 3 → 4 → 4 → 4: stable twice
     assert len(set(seeds)) == 4 and histories[1] == [{"n": 3}] and histories[3][0] == {"n": 4}
+
+
+def test_each_profile_also_tries_the_other_profiles_choices(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(agents, "REPO_AGENTS", tmp_path)
+    monkeypatch.setattr(pretrain, "PROFILE", "equilibrado")
+    (tmp_path / "pretrain-conservador.json").write_text(json.dumps({"strategies": {"foguetao": {"chosen": {"n": 3}}}}))
+    (tmp_path / "pretrain-arrojado.json").write_text(json.dumps({"strategies": {"foguetao": {"chosen": {"n": 9, "zzz": 1}}}}))
+    (tmp_path / "pretrain.json").write_text(json.dumps({"strategies": {"foguetao": {"chosen": {"n": 5}}}}))  # its own: not here
+    assert [c["from"] for c in pretrain.other_profiles_choices("foguetao")] == ["conservador", "arrojado"]
+    assert pretrain.cross_candidates("foguetao", {"n": 5, "cada": 5}) == [{"n": 3, "cada": 5}, {"n": 9, "cada": 5}]
+    assert pretrain.other_profiles_choices("sniper") == []

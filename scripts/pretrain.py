@@ -648,6 +648,32 @@ def previous_choices(strategy: str) -> list[dict]:
     return kept[:HISTORY_KEEP]
 
 
+def other_profiles_choices(strategy: str) -> list[dict]:
+    """The latest choices of the other investor profiles for this strategy: three searches at once, each one also
+    trying what the others found (they still pass this profile's own tests: years, crises, exam, walk-forward)."""
+    out = []
+    for profile in agents.PROFILES:
+        if profile == PROFILE:
+            continue
+        try:
+            r = json.loads(agents.pretrain_path(profile).read_text()).get("strategies", {}).get(strategy) or {}
+        except (OSError, ValueError):
+            continue
+        if r.get("chosen"):
+            out.append({"chosen": r["chosen"], "from": profile})
+    return out
+
+
+def cross_candidates(strategy: str, base: dict) -> list[dict]:
+    """The other profiles' latest choices as ordinary candidates: they must pass every test of this profile."""
+    out = []
+    for h in other_profiles_choices(strategy):
+        cand = {**base, **{k: v for k, v in h["chosen"].items() if k in base or k == "por_zona"}}
+        if cand != base and cand not in out:
+            out.append(cand)
+    return out
+
+
 def incumbent_candidates(strategy: str, base: dict) -> list[dict]:
     """Earlier choices as candidates (zone parameters included), so a retrain only replaces them with something better."""
     out = []
@@ -1006,7 +1032,9 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
     pool += [c["params"] for c in claude]
     # a walk-forward fold searches as if those years had not happened: the earlier choices saw them
     history = previous_choices(strategy) if strategy != "indexador" and not fold else []
-    incumbents = incumbent_candidates(strategy, pool[0]) if strategy != "indexador" and not fold else []
+    cross = [c for c in cross_candidates(strategy, pool[0]) if c not in pool] if strategy != "indexador" and not fold else []
+    pool += cross
+    incumbents = [c for c in incumbent_candidates(strategy, pool[0]) if c not in cross] if strategy != "indexador" and not fold else []
     first_incumbent = len(pool)
     pool += incumbents
     # The original first (every candidate is judged against it), then the new candidates, which stop early once they
@@ -1195,7 +1223,8 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
         "kept_previous": kept_previous,
         "incumbents": [{"score": round(weighted(scored[first_incumbent + j][0]), 1), "picked": best_i == first_incumbent + j,
                         "adopted": adopt and best_i == first_incumbent + j} for j in range(len(incumbents))],
-        "search": {"candidates": len(pool), "generation2": len(pool) - n_random - len(claude) - len(incumbents), "claude": len(claude), "incumbents": len(incumbents),
+        "search": {"candidates": len(pool), "generation2": len(pool) - n_random - len(claude) - len(cross) - len(incumbents), "claude": len(claude),
+                   "other_profiles": len(cross), "incumbents": len(incumbents),
                    "plateau": plateau.get(best_i), "recency": RECENCY, "min_trades": MIN_TRADES},
         "year": strip(full), "curve": light_curve(full["curve"]),
     }
@@ -1425,7 +1454,10 @@ def pct(x: float) -> str:
 def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
     config = agents.load_config()
     by_strategy = {}
-    for cfg in agents.active_agents(config):
+    for cfg in agents.active_agents(config):  # this profile's agent of each strategy (its name says the profile)
+        if agents.profile_of(cfg) == PROFILE and agents.mode_of(cfg) == agents.REACTIVE:
+            by_strategy.setdefault(cfg["strategy"], cfg)
+    for cfg in agents.active_agents(config):  # strategies without a copy in this profile (the Indexador)
         by_strategy.setdefault(cfg["strategy"], cfg)
     bench = results["strategies"].get("indexador", {}).get("year", {})
     lines = []
