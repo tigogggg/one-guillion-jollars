@@ -278,6 +278,7 @@ PARAM_BOUNDS = {
     # the stock's sector, technical levels and fundamentals; 0 = off
     "filtro_setor": (1, 2, int),
     "ema_filtro": (1, 1, int),
+    "filtro_agenda": (0.1, 1.5, float),  # no buys in a sector the political agenda disfavours by more than this
     "stop_suporte": (0.25, 1.5, float),
     "qualidade_fund_min": (30.0, 75.0, float),
     "valor_fund_min": (20.0, 70.0, float),
@@ -311,12 +312,12 @@ PARAM_BOUNDS = {
 COMMON = {"stop_atr": 0, "trail_atr": 0, "tempo_max": 0, "min_tecnico": 0, "max_ext": 0, "gap_max": 0.08, "regiao": 0,
           "peso_noticias": NEWS_VETO_DEFAULT,
           "vix_max": 0, "vix_meio": 0, "epu_max": 0, "credito_max": 0, "juros_max": 0, "usd_max": 0, "filtro_spy": 0,
-          "gpr_max": 0, "petroleo_max": 0, "ouro_max": 0, "filtro_setor": 0, "ema_filtro": 0, "stop_suporte": 0,
-          "qualidade_fund_min": 0, "valor_fund_min": 0,
+          "gpr_max": 0, "petroleo_max": 0, "ouro_max": 0, "filtro_setor": 0, "ema_filtro": 0, "filtro_agenda": 0,
+          "stop_suporte": 0, "qualidade_fund_min": 0, "valor_fund_min": 0,
           "dias_resultados": EARNINGS_AVOID_DAYS_DEFAULT, "evita_macro": 0, "evita_geo": 0}
 OFFABLE = {"stop_atr", "trail_atr", "tempo_max", "min_tecnico", "max_ext", "gap_max", "regiao", "vix_max", "vix_meio", "epu_max", "credito_max",
            "juros_max", "usd_max", "filtro_spy", "gpr_max", "petroleo_max", "ouro_max", "filtro_setor", "ema_filtro", "stop_suporte",
-           "qualidade_fund_min", "valor_fund_min", "evita_macro", "evita_geo"}
+           "qualidade_fund_min", "valor_fund_min", "evita_macro", "evita_geo", "filtro_agenda"}
 CONTEXT_RULES = {"vix_max", "vix_meio", "epu_max", "credito_max", "juros_max", "usd_max", "filtro_spy", "gpr_max", "petroleo_max", "ouro_max"}
 # no history: not in the backtest (the earnings dates have one: data/earnings, from the SEC, so dias_resultados is trained)
 LIVE_TUNED = {"peso_noticias", "evita_macro", "evita_geo"}
@@ -2000,6 +2001,20 @@ def sector_state(mkt: Market, sector: str | None, symbol: str | None = None) -> 
     return mkt.context.get(f"{key}_trend"), mkt.context.get(f"{key}_rs")
 
 
+def agenda_level(mkt: Market, sector: str | None, symbol: str | None = None) -> float | None:
+    """How the political agenda treats the stock's sector (policy.py, its region's signals): the mean of public
+    spending's surprise, the low exposure to policy uncertainty and minus the investment growth (z-scores across
+    sectors, 0 = average), or None without any of them."""
+    import context
+
+    key = context.sector_key(sector or "", us=is_us(symbol) if symbol else True)
+    if not key:
+        return None
+    gov, epub, capex = (mkt.context.get(f"{key}_{x}") for x in ("gov", "epub", "capex"))
+    known = [x for x in (gov, epub, None if capex is None else -capex) if x is not None]
+    return sum(known) / len(known) if known else None
+
+
 def stock_filter(m: dict, mkt: Market, p: dict, symbol: str | None = None) -> str | None:
     """Why a stock fails the sector, moving-average and fundamental rules, or None. Missing data never blocks."""
     if p.get("filtro_setor") and m.get("sector"):
@@ -2010,6 +2025,10 @@ def stock_filter(m: dict, mkt: Market, p: dict, symbol: str | None = None) -> st
         if p["filtro_setor"] >= 2 and rs is not None and rs < 0:
             index = "S&P 500" if symbol is None or is_us(symbol) else "STOXX Europe 600"
             return f"setor {sector} mais fraco do que o {index} em 3 meses"
+    if p.get("filtro_agenda") and m.get("sector"):
+        level = agenda_level(mkt, m["sector"], symbol)
+        if level is not None and level < -p["filtro_agenda"]:
+            return f"setor {SECTORS_PT.get(m['sector'], m['sector'])} fora da agenda política ({level:+.1f})"
     if p.get("ema_filtro") and m.get("ema21") and m.get("ema50") and not (m["price"] > m["ema21"] > m["ema50"]):
         return "abaixo das médias exponenciais de 21 e 50 dias"
     if p.get("qualidade_fund_min") and m.get("fund_q") is not None and m["fund_q"] < p["qualidade_fund_min"]:

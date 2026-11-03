@@ -51,6 +51,7 @@ PARAMS = {
     "petroleo_max": "não compra quando o petróleo subiu mais do que isto em 3 meses (choque petrolífero; 0 = desligado)",
     "ouro_max": "não compra quando o ouro subiu mais do que isto em 3 meses (fuga para ativos de refúgio; 0 = desligado)",
     "filtro_setor": "só compra se o setor da ação estiver acima da média de 200 dias (1) e também mais forte do que o S&P 500 em 3 meses (2) (0 = desligado)",
+    "filtro_agenda": "não compra em setores que a agenda política desfavorece mais do que este valor (gasto público, incerteza política e investimento; 0 = desligado)",
     "ema_filtro": "só compra com o preço acima das médias exponenciais de 21 e 50 dias, e a de 21 acima da de 50 (1 = ligado)",
     "stop_suporte": "põe o stop abaixo do último suporte (mínimo confirmado) menos este múltiplo do ATR, se estiver a menos de 15% (0 = desligado)",
     "qualidade_fund_min": "só compra empresas com qualidade dos fundamentos (margens, crescimento, cash flow, liquidez, dívida) de pelo menos isto, 0-100 (0 = desligado)",

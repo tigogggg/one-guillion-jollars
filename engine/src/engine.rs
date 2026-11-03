@@ -521,6 +521,22 @@ fn stock_filter(m: &Mkt, rows: &Rows, r: usize, p: &P) -> bool {
             }
         }
     }
+    if p.on("filtro_agenda") && sector >= 0 {  // agents.agenda_level
+        let us = m.data.symbols[rows.sym[r] as usize].is_us;
+        let has = if us { m.data.sector_has_key[sector as usize] } else { m.data.sector_eu_has_key[sector as usize] };
+        if has != 0 {
+            let cols = if us { [&m.data.sector_gov, &m.data.sector_epub, &m.data.sector_capex] }
+                       else { [&m.data.sector_eu_gov, &m.data.sector_eu_epub, &m.data.sector_eu_capex] };
+            let get = |ix: &Vec<i32>| { let i = ix[sector as usize]; if i < 0 { None } else { let x = m.data.ctx_val[m.d * m.data.n_ctx + i as usize]; if x.is_nan() { None } else { Some(x) } } };
+            let known: Vec<f64> = [get(cols[0]), get(cols[1]), get(cols[2]).map(|x| -x)].into_iter().flatten().collect();
+            if !known.is_empty() {
+                let level = crate::pyround::py_sum(known.iter().copied()) / known.len() as f64;
+                if level < -p.req("filtro_agenda") {
+                    return true;
+                }
+            }
+        }
+    }
     if p.on("ema_filtro") {
         let get = |field: Option<usize>| field.and_then(|i| m.g(rows, r, i));
         if let (Some(a), Some(b)) = (get(f.ema21), get(f.ema50)) {

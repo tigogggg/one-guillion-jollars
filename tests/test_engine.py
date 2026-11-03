@@ -287,3 +287,11 @@ def test_the_estratega_trades_exactly_like_python(markets, monkeypatch):
     assert eu  # Europe's sectors with Europe's signals
     compare("estratega", {**base, "min_acoes_setor": 2, "regiao": 2, "filtro_setor": 2}, agenda, monkeypatch, min_trades=5)
     compare("estratega", {**base, "min_acoes_setor": 2}, agenda, monkeypatch, min_trades=10)
+    # every agent can use the agenda as a filter (filtro_agenda): the same trades in both engines, and it does block
+    fog = {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES["foguetao"][2], "n": 8}
+    free = rust_run("foguetao", fog, agenda)[1]
+    gated = rust_run("foguetao", {**fog, "filtro_agenda": 0.3}, agenda)[1]
+    assert free != gated
+    compare("foguetao", {**fog, "filtro_agenda": 0.3}, agenda, monkeypatch, min_trades=10)
+    compare("quant", {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES["quant"][2],
+                      "filtro_agenda": 0.2, "regiao": 2}, agenda, monkeypatch, min_trades=1)
