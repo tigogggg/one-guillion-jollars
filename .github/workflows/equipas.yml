@@ -1,0 +1,88 @@
+name: Equipas
+run-name: "Equipas de agentes (${{ inputs.perfis || 'todos os perfis' }})"
+
+# The teams (scripts/teams.py): the strategies as signal desks under a portfolio manager and a risk manager, each
+# team searching its parameters on the training years, judged on the exam year and walk-forward, compared with the
+# strategies alone and the S&P 500 over the pre-training's 20 years. One machine per investor profile. The repo is
+# public: the results go only to the private repo (agents/lab/), the log only shows progress.
+on:
+  workflow_dispatch:
+    inputs:
+      perfis:
+        description: "Perfis (separados por vírgulas)"
+        required: false
+        default: "equilibrado,conservador,arrojado"
+      procura:
+        description: "Configurações aleatórias por equipa"
+        required: false
+        default: "80"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: equipas
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      perfis: ${{ steps.p.outputs.perfis }}
+    steps:
+      - id: p
+        env:
+          PERFIS: ${{ inputs.perfis || 'equilibrado,conservador,arrojado' }}
+        run: echo "perfis=$(echo "$PERFIS" | tr ', ' '\n\n' | sed '/^$/d' | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  teams:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        perfil: ${{ fromJson(needs.plan.outputs.perfis) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Dia (Lisboa)
+        id: dia
+        run: echo "day=$(TZ=Europe/Lisbon date +%F)" >> "$GITHUB_OUTPUT"
+      - name: Preços e contexto do pré-treino
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            precos/
+            ctx/
+          key: pretrain-data-${{ steps.dia.outputs.day }}-20-${{ hashFiles('data/universe/europe.csv') }}
+          restore-keys: pretrain-data-
+      - name: Contexto de mercado
+        if: ${{ steps.cache.outputs.cache-matched-key == '' }}
+        run: uv run python scripts/context.py --guardar ctx/context.csv
+      - name: Equipas (${{ matrix.perfil }})
+        env:
+          PRICE_CACHE_DIR: precos
+          PRETRAIN_PERFIL: ${{ matrix.perfil }}
+          EQUIPAS_PROCURA: ${{ inputs.procura || '80' }}
+        run: uv run python scripts/teams.py --perfil "${{ matrix.perfil }}" --contexto ctx/context.csv
+      - name: Guardar no repositório privado
+        working-directory: agents
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lab/
+          git diff --cached --quiet && exit 0
+          git commit -m "Equipas: ${{ matrix.perfil }} $(date -u +%F)"
+          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep $((i * 5)); done
+          exit 1
