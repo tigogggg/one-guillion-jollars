@@ -50,3 +50,37 @@ def test_capex_growth_uses_only_the_filings_known_that_day():
     out = policy.capex_growth(fund, {"X": "Energy", "Y": "Energy"})
     assert np.isnan(out.loc["2021-01-31", "sec_XLE"])  # the 2020 filings not out yet
     assert out.loc["2021-02-28", "sec_XLE"] == pytest.approx(200 / 150 - 1)
+
+
+def test_federal_spending_is_asked_year_by_year_and_kept(monkeypatch, tmp_path):
+    calls = []
+
+    class Resp:
+        status_code = 200
+
+        def __init__(self, body):
+            self.body = body
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            first = pd.Timestamp(self.body["filters"]["time_period"][0]["start_date"])
+            fy = first.year + 1
+            return {"results": [{"time_period": {"fiscal_year": str(fy), "month": str(m)}, "aggregated_amount": 10.0 * m}
+                                for m in range(1, 13)]}
+
+    def post(url, json, timeout):
+        calls.append(json)
+        return Resp(json)
+
+    monkeypatch.setattr(policy.requests, "post", post)
+    monkeypatch.setattr(policy, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(policy, "NAICS", {"sec_XLU": ["2211"]})
+    gov = policy.download_spending()
+    assert gov.index[0] == pd.Timestamp("2007-10-31") and gov.loc["2007-10-31", "sec_XLU"] == 10.0
+    assert gov.loc["2008-09-30", "sec_XLU"] == 120.0  # month 12 of FY2008 is September 2008
+    gov.to_csv(tmp_path / "gasto_publico.csv")
+    n = len(calls)
+    policy.download_spending()
+    assert len(calls) - n == 2  # cached: only the last two fiscal years asked again

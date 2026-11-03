@@ -115,7 +115,7 @@ def download_spending(budget_s: float = 1500) -> pd.DataFrame | None:
     cols = {}
     failures = 0
     for key, codes in NAICS.items():
-        have = old[key].dropna() if old is not None and key in old else pd.Series(dtype=float)
+        have = old[key].dropna() if old is not None and key in old else pd.Series(dtype=float, index=pd.DatetimeIndex([]))
         parts = [have]
         for fy in range(2008, last_fy + 1):
             first, last = pd.Timestamp(fy - 1, 10, 1), min(pd.Timestamp(fy, 9, 30), today - pd.offsets.MonthEnd(1))
