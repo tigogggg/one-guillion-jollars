@@ -29,7 +29,8 @@ def next_run(before: dict, after: dict, trained: list[str], state: dict, benched
         if s == "indexador" or s not in after:
             continue
         quiet[s] = 0 if before.get(s) != after.get(s) else quiet.get(s, 0) + 1
-    todo = sorted(s for s in after if s != "indexador" and s not in benched and quiet.get(s, 0) < STABLE)
+    todo = sorted(s for s, chosen in after.items()  # not the live-only ones (no parameters: skipped by the backtest)
+                  if chosen is not None and s != "indexador" and s not in benched and quiet.get(s, 0) < STABLE)
     return todo, {**state, "quiet": quiet, "runs": state.get("runs", 0) + 1}
 
 
