@@ -178,9 +178,9 @@ fn parse_params(zones: Vec<String>) -> PyResult<Vec<P>> {
 /// The day loop of pretrain.simulate over days [start, end) of the data: returns what the Python wrapper needs to
 /// grade the run (trades, the equity history, points, deepest fall, tax owed if sold at the end, ...).
 #[pyfunction]
-#[pyo3(signature = (data, strategy, zone_params, start, end, capital=1000.0, detail=true))]
+#[pyo3(signature = (data, strategy, zone_params, start, end, capital=1000.0, detail=true, signals=false))]
 fn simulate<'py>(py: Python<'py>, data: &EngineData, strategy: &str, zone_params: Vec<String>, start: usize, end: usize,
-                 capital: f64, detail: bool) -> PyResult<Bound<'py, PyDict>> {
+                 capital: f64, detail: bool, signals: bool) -> PyResult<Bound<'py, PyDict>> {
     if !strategies::SUPPORTED.contains(&strategy) {
         return Err(PyValueError::new_err(format!("estratégia não portada: {strategy}")));
     }
@@ -190,8 +190,19 @@ fn simulate<'py>(py: Python<'py>, data: &EngineData, strategy: &str, zone_params
         return Err(PyValueError::new_err("intervalo de dias inválido"));
     }
     let f = d.f();
-    let r = py.detach(|| run(d, &f, strategy, &params, start, end, capital));
+    let (r, sig) = py.detach(|| {
+        engine::record_signals(signals);
+        let r = run(d, &f, strategy, &params, start, end, capital);
+        (r, engine::record_signals(false))
+    });
     let out = PyDict::new(py);
+    if signals {
+        let list = PyList::empty(py);
+        for &(day, s, c) in &sig {
+            list.append((day, d.symbols[s].name.clone(), c))?;
+        }
+        out.set_item("signals", list)?;
+    }
     if detail {
         let trades = PyList::empty(py);
         for t in &r.port.trades {

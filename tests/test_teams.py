@@ -81,3 +81,26 @@ def test_selection_keeps_different_paths():
     fams = [t["familia"] for t in kept]
     assert len(kept) == teams.KEEP and fams.count("qualidade") == teams.KEEP // len(teams.FAMILIES)
     assert len({teams.team_key(t) for t in kept}) == len(kept)
+
+
+def test_a_desks_insights_are_its_views_without_its_sizing():
+    ix = {"a": 0, "b": 1, "c": 2}
+    desk = {"equity": np.ones(10), "changes": {1: {"a": 5.0}, 8: {"a": -5.0}},
+            "signals": {0: {"a": 1.0, "b": 0.5}, 9: {"c": 1.0}}}
+    w = teams.desk_insights(desk, ix)
+    assert w[0] == pytest.approx([2 / 3, 1 / 3, 0])  # ranked: the first twice the last
+    assert w[6] == pytest.approx([1, 0, 0])  # b never bought: expired after SIGNAL_LIFE sessions; a held
+    assert w[8].sum() == 0  # sold out: the view ends, flat
+    assert w[9] == pytest.approx([0, 0, 1])
+
+
+def test_the_team_sizes_by_volatility_and_caps_sectors():
+    weights = {"a": np.array([[0.5, 0.5, 0.0]]), "b": np.array([[0.0, 0.0, 1.0]])}
+    p = {"consenso": 0.0, "max_posicoes": 0, "normalizar": 1, "max_nome": 1.0, "dimensao": "vol"}
+    vol = np.array([[0.1, 0.4, 0.2]])
+    w = teams.target_weights(p, ["a", "b"], weights, np.array([0.5, 0.5]), 0, vol)
+    assert w.sum() == pytest.approx(1.0) and w[0] / w[1] == pytest.approx(4.0)
+    sectors = np.array([0, 0, -1])  # the third an ETF: no sector
+    w = teams.target_weights({**p, "dimensao": "peso", "max_setor": 0.3}, ["a", "b"], weights, np.array([0.5, 0.5]), 0,
+                             vol, sectors)
+    assert w == pytest.approx([0.15, 0.15, 0.7])  # the sector capped, what it frees to the rest

@@ -239,3 +239,23 @@ def json_copy(x):
     import json
 
     return json.loads(json.dumps(x, default=str))
+
+
+def test_the_desks_insights_are_recorded_without_changing_the_run(markets):
+    params = {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES["foguetao"][2]}
+    plain = engine.run("foguetao", params, markets)
+    with_signals = engine.run("foguetao", params, markets, signals=True)
+    assert plain["trades"] == with_signals["trades"] and plain["history"] == with_signals["history"]
+    assert "signals" not in plain and with_signals["signals"]
+    by_day = {}
+    for day, sym, conf in with_signals["signals"]:
+        assert 0.5 <= conf <= 1.0 and isinstance(sym, str)
+        by_day.setdefault(day, []).append(conf)
+    for confs in by_day.values():  # a ranked list: the first at full confidence, falling
+        assert confs[0] == 1.0 and confs == sorted(confs, reverse=True)
+    bought = {(t[0], t[2]) for t in plain["trades"] if t[1] == 0}
+    signalled = {(d, s) for d, s, _ in with_signals["signals"]}
+    days = sorted(by_day)
+    for d, s in bought:  # every buy follows an insight on the decision day before (the order fills at the next open)
+        prev = max((x for x in days if x < d), default=None)
+        assert (prev, s) in signalled

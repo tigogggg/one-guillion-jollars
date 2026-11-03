@@ -50,6 +50,15 @@ scripts/pretrain.py ──► scripts/engine.py ──► ogj_engine (Rust: engi
      differences. OGJ_SHADOW=0 turns it off.
    - **4c — switch:** the rounds trade with the engine; the Python copy of the engine is deleted.
 
+## Insights (signals)
+
+`engine.run(..., signals=True)` also returns the desk's insights, `[(day, symbol, confidence)]`: on each decision day,
+what the strategy wants to hold before any sizing or risk rule (LEAN's alpha model). A ranked rebalance gives its list
+(targets, then the rest of the ones it keeps) from 1 (the first) to 0.5 (the last); any other buy is an insight at 1.
+They are recorded on the side (`engine::record_signals`) and change nothing in the run (a test checks the trades and
+the history are the same). The teams use them (`scripts/teams.py`, `entrada="sinais"`): the desk runs without its own
+risk rules and the team sizes and limits the risk once. Rust only: the Python reference has no insights.
+
 ## Build
 
 `uv sync` builds `engine/` with maturin (Rust toolchain needed; GitHub's runners have it). `uv` rebuilds it when

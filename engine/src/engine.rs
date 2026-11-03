@@ -24,6 +24,36 @@ pub const EARNINGS_AVOID_DAYS: i64 = 5;
 pub const NEWS_VETO: i32 = 3;
 pub const GEO_RISK_HIGH: f64 = 4.0;
 
+// The desks' insights (LEAN's alpha model): on each decision day, what the strategy wants to hold and how strongly,
+// before any sizing or risk rule (shared rules, volatility scaling, sector cap, brake, the order's size). Recorded
+// only while a run asks for them (simulate with signals=True); nothing in the day loop reads them.
+thread_local! {
+    static SIGNALS: std::cell::RefCell<Option<Vec<(i32, usize, f32)>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Start (true) or stop (false) recording insights; stopping returns what was recorded (day, symbol, confidence).
+pub fn record_signals(on: bool) -> Vec<(i32, usize, f32)> {
+    SIGNALS.with(|c| {
+        let old = c.borrow_mut().take().unwrap_or_default();
+        if on {
+            *c.borrow_mut() = Some(Vec::new());
+        }
+        old
+    })
+}
+
+fn signal(day: i32, sym: usize, confidence: f32) {
+    SIGNALS.with(|c| {
+        if let Some(v) = c.borrow_mut().as_mut() {
+            v.push((day, sym, confidence));
+        }
+    });
+}
+
+fn signalled_today(day: i32, sym: usize) -> bool {
+    SIGNALS.with(|c| c.borrow().as_ref().is_some_and(|v| v.iter().rev().take_while(|x| x.0 == day).any(|x| x.1 == sym)))
+}
+
 /// Parameters in force (agents.effective for one zone): numbers, booleans as 0/1.
 #[derive(Clone, Default)]
 pub struct P(pub HashMap<String, f64>);
@@ -681,6 +711,11 @@ pub fn decide(strategy: &str, port: &mut Port, m: &Mkt, p: &P) -> Vec<Order> {
     let before = port.last_rebalance;
     let region = if crate::strategies::uses_region(strategy) { p.get("regiao").unwrap_or(0.0) as i64 } else { 0 };
     let mut orders = crate::strategies::run(strategy, port, m, p, region);
+    for o in orders.iter().filter(|o| o.buy) {  // a buy outside a ranked rebalance: an insight at full confidence
+        if !signalled_today(m.day, o.sym) {
+            signal(m.day, o.sym, 1.0);
+        }
+    }
     let mut noted = false;
     if strategy != "indexador" {
         let (o, n) = shared_rules(orders, port, m, p);
@@ -729,6 +764,12 @@ pub fn due(port: &mut Port, m: &Mkt, every: f64) -> bool {
 
 /// agents.rebalance
 pub fn rebalance(port: &Port, m: &Mkt, targets: &[usize], weight: f64, keep: &[usize], stop_pct: Option<f64>, reason: &str) -> Vec<Order> {
+    // insights: the ranked list (targets, then the rest of `keep`), from 1 (the first) down to 0.5 (the last)
+    let ranked: Vec<usize> = targets.iter().chain(keep.iter().filter(|s| !targets.contains(s))).copied().collect();
+    let last = ranked.len().saturating_sub(1).max(1) as f32;
+    for (r, &s) in ranked.iter().enumerate() {
+        signal(m.day, s, 1.0 - 0.5 * r as f32 / last);
+    }
     let mut orders: Vec<Order> = port.positions.keys().filter(|s| !targets.contains(s) && !keep.contains(s))
         .map(|&s| order_sell(s, "saiu da lista")).collect();
     let eq = equity(port, m);

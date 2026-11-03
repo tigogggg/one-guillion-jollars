@@ -4,6 +4,9 @@ the pre-training years and compared, the same way, with the S&P 500 and with eac
 A team (TEAMS):
 - signal desks (members): strategies with the parameters their agents trade with. Each runs its own day loop (the
   Rust engine) on its own capital; what it holds each day, as weights of its equity, is its recommendation.
+  With entrada="sinais" a desk is an alpha model instead (LEAN's insights): run without its own risk rules, it gives
+  what it wants to hold, ranked (engine.run(signals=True)), as weights summing to 1; the team sizes them once
+  (dimensao: as given or by inverse volatility; max_nome, max_setor) and its risk manager applies the risk once.
 - portfolio manager: the team's capital across the desks each day: "igual" (the same for each), "momento" (in
   proportion to each desk's return over the last 12 months, only those above 0; at most MAX_DESK each) or "risco"
   (in inverse proportion to each desk's volatility over the last 3 months).
@@ -85,6 +88,11 @@ PARAMS = {
     "cada": [5, 1, 21],            # decide every N sessions (1: daily, 5: weekly, 21: monthly)
     "ajuste": [1.0, 0.5, 0.25],    # move this part of the way to the target each time (Gârleanu & Pedersen)
     "colheita": [0, 1],            # December: realise the losses (sell and buy back) to offset the year's gains
+    # what the desks give the team: "posicoes" what each holds (its cash and its own risk sizing included); "sinais"
+    # its insights (LEAN's alpha model: what it wants to hold, ranked, run without its own risk rules), sized here once
+    "entrada": ["posicoes", "sinais"],
+    "dimensao": ["peso", "vol"],   # each stock's size: as the desks give it; by inverse 3-month volatility (same total)
+    "max_setor": [0.0, 0.25, 0.35],  # at most this share of the team in one sector (0: no cap)
 }
 SEARCH = int(os.environ.get("EQUIPAS_PROCURA") or 80)  # random configurations per team, besides the template
 TREND_DAYS = 200
@@ -139,11 +147,15 @@ def eur_matrix(markets: list, symbols: list[str], field: str) -> np.ndarray:
     return out
 
 
-def desk_run(strategy: str, params: dict, markets: list, capital: float) -> dict:
-    """One desk alone: its daily equity and, per day, how much of each stock it holds."""
+def desk_run(strategy: str, params: dict, markets: list, capital: float, signals: bool = False) -> dict:
+    """One desk alone: its daily equity and, per day, how much of each stock it holds. signals=True: the desk as an
+    alpha model (LEAN's insights): without its own risk rules (ignora_risco: no volatility scaling, sector cap or
+    brake, the team has its own) and with its insights, what it wants to hold on each decision day, ranked."""
     import engine
 
-    r = engine.run(strategy, params, markets, capital, detail=True)
+    if signals:
+        params = {**params, "ignora_risco": True}
+    r = engine.run(strategy, params, markets, capital, detail=True, signals=signals)
     days = [engine.day_num(m.as_of) for m in markets]
     pos = {d: i for i, d in enumerate(days)}
     equity = np.full(len(days), np.nan)
@@ -158,7 +170,13 @@ def desk_run(strategy: str, params: dict, markets: list, capital: float) -> dict
             continue
         changes.setdefault(pos[day], {}).setdefault(sym, 0.0)
         changes[pos[day]][sym] += qty if side == 0 else -qty
-    return {"equity": equity, "changes": changes, "final": r["final"], "tax_owed": r["tax_owed"], "trades": r["n_trades"]}
+    out = {"equity": equity, "changes": changes, "final": r["final"], "tax_owed": r["tax_owed"], "trades": r["n_trades"]}
+    if signals:
+        out["signals"] = {}
+        for day, sym, conf in r["signals"]:
+            if day in pos:
+                out["signals"].setdefault(pos[day], {})[sym] = float(conf)
+    return out
 
 
 def desk_weights(desk: dict, symbols: dict[str, int], close: np.ndarray) -> np.ndarray:
@@ -171,6 +189,36 @@ def desk_weights(desk: dict, symbols: dict[str, int], close: np.ndarray) -> np.n
             held[symbols[s]] = max(0.0, held[symbols[s]] + dq)
         if desk["equity"][i] > 0:
             w[i] = np.nan_to_num(held * close[i]) / desk["equity"][i]
+    return w
+
+
+SIGNAL_LIFE = 5  # sessions an insight the desk did not act on stays active (a buy it could not afford, a vetoed one)
+
+
+def desk_insights(desk: dict, symbols: dict[str, int]) -> np.ndarray:
+    """Days x symbols: the desk's active insights as weights summing to 1 (or 0: no view, flat). Active: a stock it
+    holds, or one it signalled in the last SIGNAL_LIFE sessions and has not sold since; the weight is the latest
+    confidence (1 for the first of a ranked list, down to 0.5 for the last). The desk's cash, its exposure by zone and
+    the size of each order are left out: sizing and risk are the team's (no risk counted twice)."""
+    n = len(desk["equity"])
+    k = len(symbols)
+    w = np.zeros((n, k), dtype=np.float32)
+    held = np.zeros(k)
+    conf = np.ones(k)
+    seen = np.full(k, -10**9)
+    for i in range(n):
+        for s, dq in desk["changes"].get(i, {}).items():
+            j = symbols[s]
+            held[j] = max(0.0, held[j] + dq)
+            if held[j] <= 1e-9 and dq < 0:  # sold out: the insight ends
+                held[j], seen[j] = 0.0, -10**9
+        for s, c in desk["signals"].get(i, {}).items():
+            j = symbols[s]
+            conf[j], seen[j] = c, i
+        active = (held > 1e-9) | (seen >= i - SIGNAL_LIFE)
+        if active.any():
+            row = np.where(active, conf, 0.0)
+            w[i] = row / row.sum()
     return w
 
 
@@ -265,14 +313,23 @@ def drawdown(eq: np.ndarray) -> float:
     return float(np.max(1 - eq / peak)) if len(eq) else 0.0
 
 
-def target_weights(p: dict, members: list[str], weights: dict, a: np.ndarray, i: int) -> np.ndarray:
-    """The picks: the desks' holdings weighted by their capital, consensus, the N biggest, filled and capped."""
+def target_weights(p: dict, members: list[str], weights: dict, a: np.ndarray, i: int, vol: np.ndarray | None = None,
+                   sectors: np.ndarray | None = None) -> np.ndarray:
+    """The picks: the desks' holdings (or insights) weighted by their capital, consensus, the N biggest, sized (by
+    volatility, as LEAN's portfolio construction), filled and capped by stock and by sector."""
     w = np.zeros(weights[members[0]].shape[1])
     held_by = np.zeros_like(w)
     for m, s in enumerate(members):
         row = weights[s][i]
         w += a[m] * row
         held_by += row > 0
+    if p.get("dimensao") == "vol" and vol is not None and w.sum() > 0:  # inverse volatility, the same total
+        total = w.sum()
+        v = vol[i]
+        inv = np.where(np.isfinite(v) & (v > 0), 1 / np.maximum(v, 0.05), 0.0)
+        inv = np.where(inv > 0, inv, np.nanmean(np.where(inv > 0, inv, np.nan)) if (inv > 0).any() else 1.0)
+        w = w * inv
+        w = w / w.sum() * total if w.sum() > 0 else w
     if p.get("min_mesas", 1) > 1:
         w[held_by < p["min_mesas"]] = 0.0
     if p["consenso"]:
@@ -296,13 +353,36 @@ def target_weights(p: dict, members: list[str], weights: dict, a: np.ndarray, i:
         if not p["normalizar"] or not free.any():
             break
         w[free] += spare * w[free] / w[free].sum()
+    cap = p.get("max_setor", 0.0)
+    if cap and sectors is not None:  # at most this share of the team in one sector (ETFs and unknown: no sector)
+        for _ in range(4):
+            total = w.sum()
+            sec = np.bincount(sectors[sectors >= 0], weights=w[sectors >= 0], minlength=int(sectors.max()) + 1)
+            over = np.nonzero(sec > cap + 1e-12)[0]
+            if not len(over):
+                break
+            spare = 0.0
+            for g in over:
+                inside = sectors == g
+                spare += sec[g] - cap
+                w[inside] *= cap / sec[g]
+            free = (w > 0) & ~np.isin(sectors, over)
+            if not p["normalizar"] or not free.any():
+                break
+            w[free] += spare * w[free] / w[free].sum()
+            if abs(w.sum() - total) > 1e-9:
+                w = w / w.sum() * total
     return w
 
 
 def run_team(p: dict, members: list[str], desks: dict, weights: dict, markets: list, symbols: list[str],
-             open_: np.ndarray, close: np.ndarray, capital: float, lo: int = 0, hi: int | None = None) -> dict:
+             open_: np.ndarray, close: np.ndarray, capital: float, lo: int = 0, hi: int | None = None,
+             vol: np.ndarray | None = None, sectors: np.ndarray | None = None) -> dict:
     """The team from session lo to hi with fresh capital (the desks keep running from the start: their history feeds
-    the manager); at the end, the tax still owed if everything were sold (as the pre-training grades a year)."""
+    the manager); at the end, the tax still owed if everything were sold (as the pre-training grades a year).
+    entrada="sinais": the desks as alpha models (their insights, run without their own risk rules)."""
+    if p.get("entrada") == "sinais" and all(f"sinais:{s}" in desks for s in members):
+        members = [f"sinais:{s}" for s in members]
     equities = np.column_stack([desks[s]["equity"] for s in members])
     peaks = np.maximum.accumulate(equities, axis=0)
     desk_vol = (pd.DataFrame(equities).pct_change().rolling(MOMENTUM_DAYS).std() * math.sqrt(252)).to_numpy()
@@ -381,7 +461,7 @@ def run_team(p: dict, members: list[str], desks: dict, weights: dict, markets: l
             a = manager(p["gestor"], equities, i)
             if p["corte_mesa"]:
                 a = pod_cut(a, equities, peaks, desk_vol, i)
-            picks = target_weights(p, members, weights, a, i)
+            picks = target_weights(p, members, weights, a, i, vol, sectors)
         w = picks.copy()
         invested = float(w.sum())
         refuge_w = 0.0
@@ -394,9 +474,9 @@ def run_team(p: dict, members: list[str], desks: dict, weights: dict, markets: l
         scale = 1.0
         if p["vol_alvo"] and i - lo > VOL_DAYS:  # ...the team's own volatility...
             seg = curve[i - lo - VOL_DAYS:i - lo + 1]
-            vol = float(np.std(seg[1:] / seg[:-1] - 1)) * math.sqrt(252)
-            if vol > 0:
-                scale = min(1.0, p["vol_alvo"] / vol)
+            team_vol = float(np.std(seg[1:] / seg[:-1] - 1)) * math.sqrt(252)
+            if team_vol > 0:
+                scale = min(1.0, p["vol_alvo"] / team_vol)
         if p["travao_dd"] and now < peak * (1 - p["travao_dd"]):  # ...and its fall from the top
             scale *= 0.5
         w = w * scale
@@ -437,14 +517,15 @@ def year_points(curve: np.ndarray, bench: np.ndarray, blocks: list[tuple[int, in
 
 
 def team_points(p: dict, members: list[str], desks: dict, weights: dict, markets: list, symbols: list[str],
-                open_: np.ndarray, close: np.ndarray, capital: float, blocks: list[tuple[int, int]]) -> list[float]:
+                open_: np.ndarray, close: np.ndarray, capital: float, blocks: list[tuple[int, int]],
+                vol: np.ndarray | None = None, sectors: np.ndarray | None = None) -> list[float]:
     """As the pre-training grades a strategy (pretrain._years and _graded): each year (and the exam) on fresh capital,
     what is left after the tax still owed, the profile's grade minus the index's over the same days."""
     import pretrain
 
     out = []
     for a, b in blocks:
-        r = run_team(p, members, desks, weights, markets, symbols, open_, close, capital, a, b)
+        r = run_team(p, members, desks, weights, markets, symbols, open_, close, capital, a, b, vol, sectors)
         years = (b - a) / pretrain.SESSIONS_PER_YEAR
         own = agents.profile_score((r["curve"][-1] - r["tax_owed"]) / capital - 1, years, drawdown(r["curve"]), pretrain.PROFILE)
         out.append(agents.relative_points(own, pretrain.index_score(markets[a:b], years)))
@@ -530,24 +611,37 @@ def prepare(markets: list, profile: str, capital: float) -> dict:
     desks = {}
     for s in ALL:
         desks[s] = desk_run(s, desk_params(s, profile), markets, capital)
+        desks[f"sinais:{s}"] = desk_run(s, desk_params(s, profile), markets, capital, signals=True)
         print(f"Mesa {s}: pronta", flush=True)
     symbols = sorted({sym for d in desks.values() for ch in d["changes"].values() for sym in ch}
+                     | {sym for d in desks.values() for day in d.get("signals", {}).values() for sym in day}
                      | {agents.BENCHMARK} | {r for r in PARAMS["refugio"] if r})
     ix = {s: j for j, s in enumerate(symbols)}
     close = eur_matrix(markets, symbols, "Close")
     open_ = eur_matrix(markets, symbols, "Open")
-    weights = {s: desk_weights(d, ix, close) for s, d in desks.items()}
+    weights = {s: (desk_insights(d, ix) if "signals" in d else desk_weights(d, ix, close)) for s, d in desks.items()}
+    rets = pd.DataFrame(close).pct_change(fill_method=None)
+    vol = (rets.rolling(VOL_DAYS, min_periods=20).std() * math.sqrt(252)).to_numpy(dtype=np.float32)
+    names = {}
+    sectors = np.full(len(symbols), -1, dtype=np.int64)
+    sector_of = {}
+    for m in markets[::63] + markets[-1:]:  # a stock's sector as the market lists it (also those that left the index)
+        sector_of.update({s: v.get("sector") for s, v in m.stocks.items()})
+    for j, s in enumerate(symbols):
+        sec = sector_of.get(s)
+        if sec and sec != "Unknown":
+            sectors[j] = names.setdefault(sec, len(names))
     bench = pd.Series(close[:, ix[agents.BENCHMARK]]).ffill().bfill().to_numpy()
     bench = bench / bench[0] * capital
     index = grade(bench, bench, blocks, max(0.0, bench[-1] - capital) * agents.TAX_RATE, 1)
-    alone = {s: grade(d["equity"], bench, blocks, d["tax_owed"], d["trades"]) for s, d in desks.items()}
+    alone = {s: grade(d["equity"], bench, blocks, d["tax_owed"], d["trades"]) for s, d in desks.items() if ":" not in s}
     reports = report_verdicts(profile)
     for s in alone:  # the verdict as the pre-training gave it (yearly, fresh capital): the one to compare with
         alone[s]["continuous_overall"] = alone[s]["overall"]
         if s in reports:
             alone[s].update({k: v for k, v in reports[s].items() if v is not None})
     return {"split": split, "blocks": blocks, "desks": desks, "symbols": symbols, "close": close, "open": open_,
-            "weights": weights, "bench": bench, "index": index, "alone": alone}
+            "weights": weights, "bench": bench, "index": index, "alone": alone, "vol": vol, "sectors": sectors}
 
 
 def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, seed: int = 0) -> dict:
@@ -557,6 +651,7 @@ def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, s
     split, blocks, desks, symbols = ctx["split"], ctx["blocks"], ctx["desks"], ctx["symbols"]
     close, open_, weights, bench = ctx["close"], ctx["open"], ctx["weights"], ctx["bench"]
     index, alone = ctx["index"], ctx["alone"]
+    vs = (ctx["vol"], ctx["sectors"])
     rng = np.random.default_rng(seed)
     teams = {}
     for key, team in TEAMS.items():
@@ -565,11 +660,11 @@ def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, s
             members = pick_members(members.split(":", 1)[1], alone, desks, split)
         tried = []
         for c in configs(rng, search, team.get("procura")):
-            tried.append((c, None, team_points(c, members, desks, weights, markets, symbols, open_, close, capital, blocks)))
+            tried.append((c, None, team_points(c, members, desks, weights, markets, symbols, open_, close, capital, blocks, *vs)))
         # the choice on the training years only (recency-weighted, as the pre-training); the exam judges it after
         best = max(range(len(tried)), key=lambda t: pretrain.weighted(tried[t][2][:-1]))
         c, _, pts = tried[best]
-        r = run_team(c, members, desks, weights, markets, symbols, open_, close, capital)  # the 20 years in one go
+        r = run_team(c, members, desks, weights, markets, symbols, open_, close, capital, vol=vs[0], sectors=vs[1])  # 20 years
         # walk-forward: the choice made on the years before each of the last 3 years, judged on that year, against the
         # template (the first configuration)
         folds = []
@@ -580,7 +675,7 @@ def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, s
         gc = grade(r["curve"], bench, blocks, r["tax_owed"], r["trades"])
         g = {**gc, **verdict(pts), "continuous_overall": gc["overall"]}
         g0 = verdict(tried[0][2])
-        r0 = run_team(tried[0][0], members, desks, weights, markets, symbols, open_, close, capital)
+        r0 = run_team(tried[0][0], members, desks, weights, markets, symbols, open_, close, capital, vol=vs[0], sectors=vs[1])
         g0.update(grade(r0["curve"], bench, blocks, r0["tax_owed"], r0["trades"]) | verdict(tried[0][2]))
         teams[key] = {"nome": team["nome"], "ideia": team["ideia"], "membros": members, "params": c, **g,
                       "exposure": round(r["exposure"], 3), "turnover_per_year": round(float(r["turnover"]), 2),
@@ -648,6 +743,8 @@ def mutate_team(team: dict, rng: np.random.Generator, gen: int, n: int) -> dict:
         params[k] = PARAMS[k][int(rng.integers(len(PARAMS[k])))]
     if "nucleo" in params and rng.random() < 0.3:
         params["nucleo"] = float(rng.choice([0.3, 0.5, 0.6]))
+    if rng.random() < 0.25:  # the desks' input (holdings or insights) is the biggest change: tried more often
+        params["entrada"] = "sinais" if params.get("entrada", "posicoes") == "posicoes" else "posicoes"
     members = list(team["membros"])
     if rng.random() < 0.4:
         out = [s for s in ALL if s not in members]
@@ -676,7 +773,7 @@ def judge(team: dict, ctx: dict, markets: list, capital: float) -> dict:
 
     members = [s for s in team["membros"] if s in ctx["desks"]]
     pts = team_points(team["params"], members, ctx["desks"], ctx["weights"], markets, ctx["symbols"], ctx["open"],
-                      ctx["close"], capital, ctx["blocks"])
+                      ctx["close"], capital, ctx["blocks"], ctx["vol"], ctx["sectors"])
     train, val, exam = pts[:-1 - VAL_YEARS], pts[-1 - VAL_YEARS:-1], pts[-1]
     return {"train": round(pretrain.weighted(train), 1), "val": round(float(np.mean(val)), 1),
             "val_wins": int(sum(v > 0 for v in val)), "val_years": [round(v, 1) for v in val], "exam": round(exam, 1),
@@ -756,11 +853,16 @@ def evolve(markets: list, profile: str, capital: float, generations: int = GENER
     detail = []
     for t in keep:
         members = [s for s in t["membros"] if s in ctx["desks"]]
-        r = run_team(t["params"], members, ctx["desks"], ctx["weights"], markets, ctx["symbols"], ctx["open"], ctx["close"], capital)
+        r = run_team(t["params"], members, ctx["desks"], ctx["weights"], markets, ctx["symbols"], ctx["open"], ctx["close"],
+                     capital, vol=ctx["vol"], sectors=ctx["sectors"])
         g = grade(r["curve"], ctx["bench"], ctx["blocks"], r["tax_owed"], r["trades"])
+        # the same team with the other input (holdings or insights): does treating the desks as alpha models help?
+        other = "posicoes" if t["params"].get("entrada") == "sinais" else "sinais"
+        flipped = judge({**t, "params": {**t["params"], "entrada": other}}, ctx, markets, capital)
         detail.append({**{k: t[k] for k in ("id", "familia", "membros", "params", "origem")}, "score": t["score"],
                        "sobreviveu": t.get("sobreviveu", 0), "return_after_tax": g["return_after_tax"],
-                       "max_drawdown": g["max_drawdown"], "exposure": round(r["exposure"], 3), "trades": r["trades"]})
+                       "max_drawdown": g["max_drawdown"], "exposure": round(r["exposure"], 3), "trades": r["trades"],
+                       "outra_entrada": {"entrada": other, **flipped}})
     state = {"generation": gen, "profile": profile, "broker": agents.BROKER, "teams": pop, "log": log[-200:],
              "trials": state.get("trials", 0) + generations * POP_SIZE, "version": POP_VERSION}
     path.write_text(json.dumps(state, ensure_ascii=False, indent=1, default=float) + "\n")
