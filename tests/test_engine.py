@@ -151,3 +151,64 @@ def test_a_slice_of_the_days_reuses_the_data_and_matches(markets, monkeypatch):
     _, py_trades = python_run("foguetao", params, part, monkeypatch)
     _, rs_trades = rust_run("foguetao", params, part)
     assert py_trades == rs_trades
+
+
+def test_a_live_round_in_the_engine_matches_python(markets, monkeypatch, tmp_path):
+    """Phase 4b: a reactive round (pending orders at today's open, stops so far, exits and decisions at the price of
+    now) on real-looking portfolios, in Python and again in the engine from the same state: no differences."""
+    import copy
+    from datetime import datetime, timezone
+
+    import earnings as E
+
+    k = 400
+    past, today = markets[:k], markets[k]
+    names = ("foguetao", "sniper", "pescador", "quant", "abutre", "kamikaze", "guardiao", "rotador")
+    config = {"agents": []}
+    state = {"agents": {}}
+    for i, s in enumerate(names):
+        params = {**{x: agents.COMMON[x] for x in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES[s][2]}
+        if s == "sniper":
+            params["aperto_pct"] = 0.15
+        if i % 3 == 1:
+            params.update(reatividade=1, espera_min=30, esticado_max=0.02)
+        if i % 3 == 2:
+            params["reatividade"] = 0
+        port = pretrain.simulate(s, params, past, keep_port=True)["port"]
+        port["params"] = params
+        config["agents"].append({"id": s, "name": s, "emoji": "🤖", "strategy": s, "capital": 1000, "params": params})
+        state["agents"][s] = port
+    config["agents"].append({"id": "foguetao-diario", "name": "f", "emoji": "🤖", "strategy": "foguetao", "capital": 1000,
+                             "params": state["agents"]["foguetao"]["params"], "modo": "diario"})
+    state["agents"]["foguetao-diario"] = copy.deepcopy(state["agents"]["foguetao"])
+    # the market at 15:00 New York: each stock's bars up to yesterday, plus today's bar so far
+    day = today.as_of
+    hist = {}
+    for s, df in today.hist.items():
+        cut = df[df.index.date <= day].copy()
+        if len(cut) and cut.index[-1].date() == day:
+            cut.iloc[-1, cut.columns.get_loc("Close")] = cut["Open"].iloc[-1] * 1.004
+            cut.iloc[-1, cut.columns.get_loc("High")] = max(cut["Open"].iloc[-1], cut["Close"].iloc[-1])
+        hist[s] = cut
+    live = copy.copy(today)
+    live.hist, live.closes, live.earnings_dates, live.earnings = hist, None, None, {}
+    live.news = {"US03": {"score": -5}, "US07": {"score": 4}}
+    live.vcp = {"US11", "US12"}
+    live.league = {}
+    monkeypatch.setattr(E, "next_earnings", lambda s, d: d + timedelta(days=(hash(s) % 9) + 1) if s.startswith("US1") else None)
+    monkeypatch.setattr(engine, "SHADOW_DIR", tmp_path)
+    now = datetime(day.year, day.month, day.day, 20, 0, tzinfo=timezone.utc)
+    before = json_copy(state)
+    moves, _ = agents.reactive_round(config, state, live, now)
+    r = engine.shadow_round(config, before, state, live, now)
+    assert r["agents"] == len(names) + 1
+    lines = (tmp_path / f"{day.isoformat()}.jsonl").read_text().splitlines()
+    import json
+    assert json.loads(lines[-1])["diffs"] == [] and r["diffs"] == 0
+    assert moves  # the round did trade
+
+
+def json_copy(x):
+    import json
+
+    return json.loads(json.dumps(x, default=str))

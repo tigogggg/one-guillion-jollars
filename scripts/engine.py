@@ -191,13 +191,19 @@ def build(markets: list, symbols: list[str] | None = None, sectors: list[str] | 
         for k, mkt in enumerate(markets):
             v = close.asof(pd.Timestamp(mkt.as_of) + pd.Timedelta(hours=23))
             bench[k] = float(v) if pd.notna(v) else np.nan
-    ctx_fields = sorted({k for mkt in markets for k, v in (mkt.context or {}).items() if isinstance(v, (int, float))})
+    def context_of(mkt) -> dict:  # numbers only; the live macro calendar as how many events are near
+        c = {k: v for k, v in (mkt.context or {}).items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        if (mkt.context or {}).get("macro"):
+            c["macro_n"] = len(mkt.context["macro"])
+        return c
+
+    contexts = [context_of(m) for m in markets]
+    ctx_fields = sorted({k for c in contexts for k in c})
     ctx_val = np.full((n_days, len(ctx_fields)), np.nan)
-    for k, mkt in enumerate(markets):
+    for k, c in enumerate(contexts):
         for j, f in enumerate(ctx_fields):
-            v = (mkt.context or {}).get(f)
-            if isinstance(v, (int, float)) and v is not None:
-                ctx_val[k, j] = float(v)
+            if f in c:
+                ctx_val[k, j] = float(c[f])
     import context
 
     sectors = sorted(sector_ix, key=sector_ix.get)
@@ -251,6 +257,18 @@ def build(markets: list, symbols: list[str] | None = None, sectors: list[str] | 
                 ex_open[k, j] = 1 if agents.market_open(probe[e], now) else 0
                 ex_since[k, j], ex_to_close[k, j] = agents.session_minutes(probe[e], now)
         data["ex_open"], data["ex_since"], data["ex_to_close"] = ex_open.ravel(), ex_since.ravel(), ex_to_close.ravel()
+    last = markets[-1]
+    data["news"] = np.array([int((last.news or {}).get(s, {}).get("score", 0) or 0) for s in symbols], dtype=np.int32)
+    data["vcp"] = np.array([1 if s in (last.vcp or ()) else 0 for s in symbols], dtype=np.uint8)
+    if last.earnings_dates is None and last.earnings:  # live: the next date looked up for each symbol
+        off, days = [0], []
+        for s in symbols:
+            d = last.earnings.get(s)
+            if d:
+                days.append(day_num(d))
+            off.append(len(days))
+        data["earn_off"] = np.array(off, dtype=np.int64)
+        data["earn_day"] = np.array(days, dtype=np.int32)
     if markets[-1].earnings_dates is not None:
         dates = markets[-1].earnings_dates
         off, days = [0], []
@@ -316,3 +334,82 @@ def from_day(n: int) -> date:
 
 def is_finite(x) -> bool:
     return x is not None and not (isinstance(x, float) and math.isnan(x))
+
+
+# --------------------------------------------------------------------------
+# Shadow rounds (phase 4b): the live round again in the engine, compared with what Python did
+# --------------------------------------------------------------------------
+
+SHADOW_DIR = agents.REPO_AGENTS / "sombra"
+
+
+def _day(iso: str | None) -> int | None:
+    return day_num(date.fromisoformat(iso[:10])) if iso else None
+
+
+def port_to_engine(port: dict, ix: dict[str, int], today: date) -> str:
+    """A live portfolio as the engine reads it (engine/src/portjson.rs)."""
+    t = today.isoformat()
+    return json.dumps({
+        "cash": port["cash"], "deposits": port["deposits"],
+        "positions": [[ix[s], p["qty"], p["entry"], _day(p.get("entry_date")), p["cost_eur"], p.get("stop"), p.get("tp"),
+                       _day(p.get("checked"))] for s, p in port["positions"].items()],
+        "pending": [[o["side"] == "buy", ix[o["symbol"]], o.get("eur", 0.0), o.get("stop"), o.get("tp"), o.get("fraction", 1.0),
+                     o.get("reason", ""), o.get("ref"), o.get("gap_max"), _day(o.get("created"))] for o in port["pending"]],
+        "hist": [[_day(h["date"]), h["equity"]] for h in port["history"]],
+        "points": port.get("points", 0), "peak": port.get("peak"), "max_dd": port.get("max_dd", 0.0),
+        "brake_until": _day(port.get("brake_until")), "brake_peak": port.get("brake_peak"),
+        "last_rebalance": _day(port.get("last_rebalance")),
+        "realized": [[int(y), g] for y, g in port.get("realized", {}).items()], "taxed": [int(y) for y in port.get("taxed", [])],
+        "sold_today": [[ix[x["symbol"]], _day(x["date"])] for x in port["trades"] if x["side"] == "venda" and x["date"] == t
+                       and x["symbol"] in ix],
+    })
+
+
+def _python_view(port: dict, ix: dict[str, int]) -> dict:
+    """What the engine exports, from a Python portfolio (to compare)."""
+    return {
+        "cash": port["cash"],
+        "positions": sorted([ix[s], p["qty"], p["entry"], _day(p.get("entry_date")), p["cost_eur"], p.get("stop"), p.get("tp"),
+                             _day(p.get("checked"))] for s, p in port["positions"].items()),
+        "pending": [[o["side"] == "buy", ix[o["symbol"]], o.get("eur", 0.0), o.get("stop"), o.get("tp"), o.get("fraction", 1.0),
+                     o.get("reason", ""), o.get("ref"), o.get("gap_max"), _day(o.get("created"))] for o in port["pending"]],
+        "last_rebalance": _day(port.get("last_rebalance")),
+    }
+
+
+def shadow_round(config: dict, before: dict, after: dict, mkt, now) -> dict:
+    """The round Python just did, again in the engine from the portfolios as they were before it; every difference is
+    written to the private repo (agents/sombra/<day>.jsonl). Never changes the agents. Returns counts."""
+    import copy
+
+    if ogj_engine is None:
+        return {"skipped": "motor Rust não compilado"}
+    cfgs = [c for c in agents.active_agents(config) if c["id"] in before["agents"] and c["strategy"] in ogj_engine.SUPPORTED]
+    held = {s for c in cfgs for s in list(before["agents"][c["id"]]["positions"]) + [o["symbol"] for o in before["agents"][c["id"]]["pending"]]}
+    m = copy.copy(mkt)
+    symbols = sorted(set(m.stocks) | set(m.etfs) | held | {s for s, df in (m.hist or {}).items() if df is not None and len(df)})
+    ix = {s: i for i, s in enumerate(symbols)}
+    part_open = np.full((1, len(symbols)), np.nan)
+    part_low = np.full((1, len(symbols)), np.nan)
+    for s, i in ix.items():
+        df = m.hist.get(s)
+        if df is not None and len(df) and df.index[-1].date() == m.as_of:
+            part_open[0, i], part_low[0, i] = float(df["Open"].iloc[-1]), float(df["Low"].iloc[-1])
+    data = build([m], symbols=symbols, slots={"partial": [True], "part_open": part_open, "part_low": part_low, "now": [now]})
+    ports = [before["agents"][c["id"]] for c in cfgs]
+    batch = ogj_engine.Batch.from_state([c["strategy"] for c in cfgs], [zone_params(c["strategy"], p.get("params", c["params"])) for c, p in zip(cfgs, ports)],
+                                        [port_to_engine(p, ix, m.as_of) for p in ports], [agents.mode_of(c) == agents.REACTIVE for c in cfgs])
+    batch.live_round(data, 0)
+    diffs = []
+    for c, (pj, _) in zip(cfgs, batch.export()):
+        rust = json.loads(pj)
+        rust["positions"] = sorted(rust["positions"])
+        py = json.loads(json.dumps(_python_view(after["agents"][c["id"]], ix)))
+        for k in ("cash", "positions", "pending", "last_rebalance"):
+            if py[k] != rust[k]:
+                diffs.append({"agent": c["id"], "field": k, "python": py[k], "rust": rust[k]})
+    SHADOW_DIR.mkdir(parents=True, exist_ok=True)
+    with (SHADOW_DIR / f"{m.as_of.isoformat()}.jsonl").open("a") as f:
+        f.write(json.dumps({"at": now.isoformat(timespec="minutes"), "agents": len(cfgs), "diffs": diffs}) + "\n")
+    return {"agents": len(cfgs), "diffs": len(diffs)}

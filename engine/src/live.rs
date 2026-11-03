@@ -140,12 +140,30 @@ pub struct Agent {
     pub final_equity: f64,
     pub tax_owed: f64,
     pub sells: Vec<(f64, i64)>,
+    /// Reactive (decides in every round) or a daily twin.
+    pub reactive: bool,
+    /// The trades of the last live round.
+    pub round_trades: Vec<Trade>,
 }
 
 impl Agent {
     pub fn new(strategy: &str, params: Vec<P>, capital: f64) -> Self {
         Agent { strategy: strategy.to_string(), params, port: Port::new(capital), bankrupt: None, n_trades: 0,
-                final_equity: capital, tax_owed: 0.0, sells: Vec::new() }
+                final_equity: capital, tax_owed: 0.0, sells: Vec::new(), reactive: true, round_trades: Vec::new() }
+    }
+
+    /// reactive_round in agents.py: pending orders that met a real open, stops and targets so far, and (reactive
+    /// agents) the decision of this moment. Daily twins only do the first part (no targets at the price of now).
+    pub fn live_round(&mut self, m: &Mkt) {
+        let p = &self.params[m.zone].clone();
+        let mut done = engine::fill_pending(&mut self.port, m);
+        done.extend(engine::check_exits(&mut self.port, m));
+        done.extend(live_exits(&mut self.port, m, self.reactive));
+        if self.reactive {
+            done.extend(react(&self.strategy, &mut self.port, m, p));
+        }
+        self.count(&done);
+        self.round_trades = done;
     }
 
     fn count(&mut self, done: &[Trade]) {

@@ -3010,7 +3010,16 @@ def main() -> int:
                             for s, d in json.loads(earnings_cache.read_text()).items()}
         except (OSError, ValueError):
             pass
+        shadow_before = json.loads(json.dumps(state, default=str)) if os.environ.get("OGJ_SHADOW", "1") != "0" else None
         moves, avoided = reactive_round(config, state, mkt, now)
+        if shadow_before is not None:  # phase 4b: the same round in the Rust engine, compared (never changes the agents)
+            try:
+                import engine
+
+                r = engine.shadow_round(config, shadow_before, state, mkt, now)
+                print(f"Ronda-sombra (motor Rust): {r}", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"WARN: ronda-sombra: {e!r}", file=sys.stderr)
         try:
             PRICE_CACHE.mkdir(parents=True, exist_ok=True)
             earnings_cache.write_text(json.dumps({s: (d.isoformat() if d else None) for s, d in mkt.earnings.items()}))

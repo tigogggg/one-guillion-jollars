@@ -103,6 +103,9 @@ pub struct Data {
     pub ex_open: Vec<bool>,
     pub ex_since: Vec<f64>,
     pub ex_to_close: Vec<f64>,
+    /// The news signal's score of each symbol (news.py; 0 when none) and the VCP watchlist (live only).
+    pub news: Vec<i32>,
+    pub vcp: Vec<bool>,
 }
 
 /// Field indexes the engine reads, resolved once.

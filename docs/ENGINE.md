@@ -43,8 +43,11 @@ scripts/pretrain.py ──► scripts/engine.py ──► ogj_engine (Rust: engi
      run `react`, `live_exits` and the fills and stops of a session under way in Rust (`engine/src/live.rs`), many
      agents at once through chunks of days (`ogj_engine.Batch`). Same results as Python (tests/test_intraday_lab.py);
      12 runs over 250 days: 124 s in Python, 2.2 s in Rust.
-   - **4b — shadow rounds:** every live round also runs the engine on the same state and market, without saving;
-     any difference from Python is written to the private repo. A week without differences, on real rounds.
+   - **4b — shadow rounds (running):** every live round also runs the engine on the same state and market, without
+     saving (`engine.shadow_round`, `ogj_engine.Batch.from_state/live_round`); any difference from Python is written to
+     the private repo (`agents/sombra/<day>.jsonl`). The test replays a round with real-looking portfolios (reactivity
+     levels, a daily twin, news veto, VCP list, earnings) with no difference. Goal: a week of real rounds without
+     differences. OGJ_SHADOW=0 turns it off.
    - **4c — switch:** the rounds trade with the engine; the Python copy of the engine is deleted.
 
 ## Build

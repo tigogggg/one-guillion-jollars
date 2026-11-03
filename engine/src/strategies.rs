@@ -355,8 +355,9 @@ fn sniper(port: &mut Port, m: &Mkt, p: &P, region: i64) -> Vec<Order> {
     }
     let (r10, h20, l10) = (v.field("range10"), v.field("high20_prev"), v.field("low10_prev"));
     let mut picks: Vec<usize> = v.list.iter().copied().filter(|&r| {
-        v.rows.stage2[r] && v.v(r, r10) <= p.req("aperto_pct") && v.v(r, f.price) >= v.v(r, h20) * 0.97 && v.rows.trend[r] >= 80.0
-            && !port.positions.contains_key(&v.sym(r))
+        let own = v.rows.stage2[r] && v.v(r, r10) <= p.req("aperto_pct") && v.v(r, f.price) >= v.v(r, h20) * 0.97
+            && v.rows.trend[r] >= 80.0;
+        (own || m.data.vcp[v.sym(r)]) && !port.positions.contains_key(&v.sym(r))
     }).collect();
     sort_by_key(&mut picks, |r| v.rows.trend[r], true);
     let slots = py_max(free_slots(port, p.req("n")) as f64, 0.0) as usize;
@@ -365,7 +366,7 @@ fn sniper(port: &mut Port, m: &Mkt, p: &P, region: i64) -> Vec<Order> {
         let stop = v.v(r, l10);
         let eur = risk_sized(port, m, s, stop, p.req("risco_pct"), p.req("max_pos"));
         if eur >= MIN_ORDER_EUR {
-            orders.push(order_buy(s, eur, "contração", Some(round_to(stop, 4)), None));
+            orders.push(order_buy(s, eur, if m.data.vcp[s] { "VCP" } else { "contração" }, Some(round_to(stop, 4)), None));
         }
     }
     orders

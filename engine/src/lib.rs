@@ -3,6 +3,7 @@
 pub mod data;
 pub mod engine;
 pub mod live;
+pub mod portjson;
 pub mod pyround;
 pub mod strategies;
 
@@ -135,6 +136,8 @@ impl EngineData {
             ex_open: { let v = opt_arr::<u8>(d, "ex_open")?; if v.is_empty() { vec![false; n_days] } else { v.into_iter().map(|x| x != 0).collect() } },
             ex_since: { let v = opt_arr::<f64>(d, "ex_since")?; if v.is_empty() { vec![0.0; n_days] } else { v } },
             ex_to_close: { let v = opt_arr::<f64>(d, "ex_to_close")?; if v.is_empty() { vec![0.0; n_days] } else { v } },
+            news: { let v = opt_arr::<i32>(d, "news")?; if v.is_empty() { vec![0; n_syms] } else { v } },
+            vcp: { let v = opt_arr::<u8>(d, "vcp")?; if v.is_empty() { vec![false; n_syms] } else { v.into_iter().map(|x| x != 0).collect() } },
             days,
         };
         if data.closes.len() != n_days * n_syms || data.bench.len() != n_days || data.zone.len() != n_days {
@@ -278,6 +281,44 @@ impl Batch {
         let agents = &mut self.agents;
         py.detach(|| live::step(agents, d, &f, start, end));
         Ok(())
+    }
+
+    /// Agents as they are in the live state (one compact JSON each, see scripts/engine.py port_to_engine).
+    #[staticmethod]
+    fn from_state(strategies: Vec<String>, zone_params: Vec<Vec<String>>, ports: Vec<String>, reactive: Vec<bool>) -> PyResult<Self> {
+        let mut agents = Vec::new();
+        for (((s, zp), pj), r) in strategies.iter().zip(zone_params).zip(ports).zip(reactive) {
+            if !strategies::SUPPORTED.contains(&s.as_str()) {
+                return Err(PyValueError::new_err(format!("estratégia não portada: {s}")));
+            }
+            let mut a = live::Agent::new(s, parse_params(zp)?, 0.0);
+            a.port = portjson::read(&pj).map_err(PyValueError::new_err)?;
+            a.reactive = r;
+            agents.push(a);
+        }
+        Ok(Batch { agents })
+    }
+
+    /// One live round (agents.reactive_round) at slot `d` of this data, every agent.
+    fn live_round(&mut self, py: Python<'_>, data: &EngineData, d: usize) -> PyResult<()> {
+        let dd = &data.inner;
+        if d >= dd.days.len() {
+            return Err(PyValueError::new_err("slot inválido"));
+        }
+        let f = dd.f();
+        let agents = &mut self.agents;
+        py.detach(|| {
+            for a in agents.iter_mut() {
+                let m = engine::Mkt { data: dd, f: &f, d, day: dd.days[d], zone: dd.zone[d] as usize };
+                a.live_round(&m);
+            }
+        });
+        Ok(())
+    }
+
+    /// Each agent's portfolio and the trades of its last round, as compact JSON (symbols by index in the data).
+    fn export(&self) -> Vec<(String, String)> {
+        self.agents.iter().map(|a| (portjson::write(&a.port), portjson::trades(&a.round_trades))).collect()
     }
 
     /// Each agent's result: points, deepest fall, final equity, tax owed if sold, trades, bankruptcy, daily history.

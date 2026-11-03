@@ -21,6 +21,8 @@ pub const BRAKE_DAYS: i32 = 14;
 pub const PENDING_MAX_SESSIONS: i64 = 5;
 pub const SUPPORT_MAX_RISK: f64 = 0.15;
 pub const EARNINGS_AVOID_DAYS: i64 = 5;
+pub const NEWS_VETO: i32 = 3;
+pub const GEO_RISK_HIGH: f64 = 4.0;
 
 /// Parameters in force (agents.effective for one zone): numbers, booleans as 0/1.
 #[derive(Clone, Default)]
@@ -437,7 +439,7 @@ fn ctx_gt(m: &Mkt, key: &str, limit: f64) -> bool {
     m.data.context(m.d, key).unwrap_or(0.0) > limit
 }
 
-/// agents.context_gate (the backtest's context: no Claude geopolitics, no macro calendar)
+/// agents.context_gate
 fn context_gate(m: &Mkt, p: &P) -> bool {
     (p.on("vix_max") && ctx_gt(m, "vix", p.req("vix_max")))
         || (p.on("epu_max") && ctx_gt(m, "epu_pct", p.req("epu_max")))
@@ -447,6 +449,9 @@ fn context_gate(m: &Mkt, p: &P) -> bool {
         || (p.on("gpr_max") && ctx_gt(m, "gpr_pct", p.req("gpr_max")))
         || (p.on("petroleo_max") && ctx_gt(m, "oil_chg", p.req("petroleo_max")))
         || (p.on("ouro_max") && ctx_gt(m, "gold_chg", p.req("ouro_max")))
+        // live only: Claude's geopolitical risk (0-5) and the macro calendar (scripts/engine.py: macro_n)
+        || (p.on("evita_geo") && m.data.context(m.d, "geo_risk").unwrap_or(0.0) >= GEO_RISK_HIGH)
+        || (p.on("evita_macro") && m.data.context(m.d, "macro_n").unwrap_or(0.0) > 0.0)
 }
 
 /// agents.stock_filter: true when the stock fails a rule.
@@ -672,6 +677,12 @@ pub fn decide(strategy: &str, port: &mut Port, m: &Mkt, p: &P) -> Vec<Order> {
         let (o, n) = skip_earnings(orders, m, days);
         orders = o;
         noted |= n;
+    }
+    if !p.on("ignora_noticias") && strategy != "cetico" {  // agents.skip_bad_news (no news in a backtest: no effect)
+        let veto = p.get("peso_noticias").filter(|&x| x != 0.0).map(|x| x.trunc() as i32).unwrap_or(NEWS_VETO);
+        let before = orders.len();
+        orders.retain(|o| !(o.buy && m.data.news[o.sym] <= -veto));
+        noted |= orders.len() != before;
     }
     if !p.on("ignora_risco") {
         let (o, n) = risk_filter(orders, port, m);
