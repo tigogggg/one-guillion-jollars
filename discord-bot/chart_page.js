@@ -23,6 +23,29 @@ const JOBS = [
   { key: "treino", label: "🧠 Re-treino dos agentes (20 anos)" },
 ];
 
+// 🩺 Estado: the last runs of the automatic workflows, read from GitHub. Kept 2 minutes in the isolate's memory (no KV
+// writes; the portal polls often). The repo is public: run titles, times and results are public anyway.
+const STATUS_WORKFLOWS = ["agents.yml", "news.yml", "pretrain.yml", "discord-daily.yml", "opportunity-alerts.yml", "alert-followups.yml",
+  "health.yml", "weekly-summary.yml", "intraday-lab.yml", "context-data.yml", "backup.yml", "arquivo-mensal.yml", "deploy-worker.yml", "tests.yml"];
+let RUNS_CACHE = { at: 0, runs: null };
+export async function workflowRuns(env) {
+  if (!env.GITHUB_TOKEN || !env.GITHUB_REPO) return null;
+  if (RUNS_CACHE.runs && Date.now() - RUNS_CACHE.at < 120000) return RUNS_CACHE.runs;
+  const headers = { Authorization: `Bearer ${env.GITHUB_TOKEN}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "coutotrading-discord-bot" };
+  const runs = {};
+  await Promise.all(STATUS_WORKFLOWS.map(async (f) => {
+    try {
+      const r = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${f}/runs?per_page=${f === "agents.yml" ? 30 : 5}&exclude_pull_requests=true`, { headers });
+      if (!r.ok) return;
+      runs[f] = ((await r.json()).workflow_runs || []).map((x) => ({ title: x.display_title, status: x.status, conclusion: x.conclusion,
+        started: x.run_started_at || x.created_at, updated: x.updated_at, url: x.html_url }));
+    } catch (e) { /* one workflow unreadable: the others still show */ }
+  }));
+  RUNS_CACHE = { at: Date.now(), runs };
+  return runs;
+}
+
 export async function chartResponse(env, id, schedule) {
   const data = await env.CONFIG.get(`chart:${id}`, "json");
   if (!data) {
@@ -64,7 +87,8 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
   const pretrain = ptId && ptId !== latest ? await env.CONFIG.get(`chart:${ptId}`, "json") : null;
   const user = session ? { name: session.data.name || "membro", wallet: `/c/${session.tok}` } : null;
   const version = await portalVersion(env);
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution, version,
+  const runs = await workflowRuns(env);
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution, version, runs,
                                                                        manifest: token === null ? "/manifest.webmanifest" : `/p/${token}/manifest.webmanifest` }));
 }
 
@@ -332,6 +356,7 @@ const MARKET = ${safeJson(extras.market || null)};
 const PROPOSALS = ${safeJson(extras.proposals || null)};
 const CALENDAR = ${safeJson(extras.calendar || null)};
 const PRETRAIN = ${safeJson(extras.pretrain || null)};
+const RUNS = ${safeJson(extras.runs || null)};
 const GEO = ${safeJson(extras.geo || null)};
 const EVOLUTION = ${safeJson(extras.evolution || null)};
 </script>
@@ -435,7 +460,8 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .wallet-frame { width:100%; min-height:900px; border:0; display:block; background:transparent; }
 body.embed .tabs { position:static !important; } body.embed main { padding-top:4px; padding-bottom:12px; } body.embed .embed-hide { display:none !important; }
 .search { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 10px; } .search input { flex:1; min-width:220px; background:var(--card); color:var(--fg); border:2px solid var(--neon); border-radius:6px; padding:9px 11px; font:inherit; }
-.dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; } .dot.ok { background:var(--up); box-shadow:0 0 6px var(--up); } .dot.old { background:var(--gold); } .dot.bad { background:var(--down); }
+.dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; } .dot.ok { background:var(--up); box-shadow:0 0 6px var(--up); } .dot.old { background:var(--gold); } .dot.bad { background:var(--down); } .dot.run { background:var(--neon); box-shadow:0 0 6px var(--neon); }
+td .wrap { display:block; white-space:normal; min-width:280px; max-width:560px; line-height:1.35; }
 #guide { position:fixed; inset:0; z-index:80; background:rgba(5,3,20,.78); display:flex; align-items:center; justify-content:center; padding:16px; }
 #guide[hidden] { display:none; } #guide .panel { max-width:520px; width:100%; } #guide .steps { font-family:var(--pixel); font-size:.55rem; color:var(--muted); }
 .alert { border-radius:6px; padding:6px 10px; font-size:.85rem; margin:6px 0; } .alert.down { background:rgba(255,77,109,.14); border:1px solid var(--down); } .alert.warn { background:rgba(255,225,77,.10); border:1px solid var(--gold); }
@@ -1521,35 +1547,92 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
   document.addEventListener("click", (e) => { const a = e.target.closest("[data-go]"); if (a) { e.preventDefault(); openTab(a.dataset.go); } });
 })();
 
-// ---- status: when each part was last updated ----
+// ---- status: every part and automatic job, its state, last and next update and what makes it run ----
 (function status() {
   if (!$("status")) return;
   const when = (x) => x && (x.updated || x.as_of || x.date || x.created);
-  const hours = (iso) => iso ? (Date.now() - Date.parse(iso.length === 10 ? iso + "T18:00:00Z" : iso)) / 3.6e6 : null;
+  const ms = (iso) => iso ? Date.parse(iso.length === 10 ? iso + "T18:00:00Z" : iso) : null;
   const weekendSlack = [0, 1].includes(new Date().getDay()) ? 48 : 0;  // Sunday and Monday: Friday's data is fine
-  // [part, last update, hours before it counts as late, how often, the schedule's jobs that update it (UPCOMING keys)]
-  const rows = [
-    ["🏁 Liga dos agentes", DATA.updated, 30 + weekendSlack, "a cada ronda nos dias úteis (10 em 10 min) e às 07:30", ["ronda", "agentes"]],
-    ["📰 Notícias", NEWS && NEWS.updated, 8 + weekendSlack, "várias vezes por dia", ["noticias"]],
-    ["🎯 Oportunidades e contexto", when(MARKET), 30 + weekendSlack, "com a liga", ["agentes"]],
-    ["🧠 Propostas", when(PROPOSALS), 30 + weekendSlack, "com a liga", ["agentes"]],
-    ["📅 Agenda", when(CALENDAR), 30 + weekendSlack, "com a liga", ["agentes"]],
-    ["⏪ Pré-treino", PRETRAIN && PRETRAIN.updated, 24 * 8, "ao domingo", ["treino"]],
-  ];
-  const soon = (ms) => { const m = Math.round(ms / 60000); return m < 1 ? "agora" : m < 60 ? m + " min" : m < 2880 ? Math.round(m / 60) + " h" : Math.round(m / 1440) + " dias"; };
-  const next = (keys) => {
-    const at = Math.min(...UPCOMING.filter((j) => keys.includes(j.key)).map((j) => j.at));
-    return isFinite(at) ? esc(lisbon(at, { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) +
-      ' <span class="muted">(em ' + soon(at - Date.now()) + ")</span>" : "—";
+  const runsOf = (wf, title) => ((RUNS || {})[wf] || []).filter((r) => !title || title.test(r.title || ""));
+  // next run of a GitHub cron (UTC): daily at h:m, weekly on a weekday, monthly on a day
+  const cron = (h, m, { dow = null, dom = null } = {}) => () => {
+    const now = new Date();
+    for (let i = 0; i < 40; i++) {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + i, h, m));
+      if (d > now && (dow === null || d.getUTCDay() === dow) && (dom === null || d.getUTCDate() === dom)) return d.getTime();
+    }
+    return null;
   };
-  const dot = (h, max) => h == null ? '<span class="dot bad"></span>sem dados' : h <= max ? '<span class="dot ok"></span>em dia' : h <= max * 2 ? '<span class="dot old"></span>atrasado' : '<span class="dot bad"></span>parado';
-  const ago = (h) => h == null ? "—" : h < 1 ? Math.max(1, Math.round(h * 60)) + " min" : h < 48 ? Math.round(h) + " h" : Math.round(h / 24) + " dias";
-  const draw = () => { $("status").innerHTML = '<h2>🩺 Estado do sistema</h2><p class="muted small">Quando cada parte do portal foi atualizada pela última vez e quando volta a ser; todas as tarefas em baixo.</p>' +
-    table(["Parte", "Estado", "Última atualização", "Há", "Próxima", "Costuma atualizar"], rows.map(([k, iso, max, every, keys]) => { const h = hours(iso);
-      return [k, dot(h, max), iso ? esc(lisbon(Date.parse(iso.length === 10 ? iso + "T18:00:00Z" : iso), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) : "—", ago(h), next(keys), esc(every)]; })) +
-    '<p class="muted small">🟢 em dia · 🟡 atrasado (mais do que o normal) · 🔴 parado ou sem dados. Se algo ficar parado, avisa no Discord: o canal 🔧-estado mostra os erros.</p>'; };
+  const sched = (...keys) => () => { const at = Math.min(...UPCOMING.filter((j) => keys.includes(j.key)).map((j) => j.at)); return isFinite(at) ? at : null; };
+  const d = "dias úteis (seg–sex, hora de Lisboa)", D = "Dias úteis (seg–sex, hora de Lisboa)";
+  // part, its data's last update (null: the job's last run), hours before late, workflow (+ run title), next run, condition
+  const rows = [
+    { k: "🏁 Liga dos agentes", iso: DATA.updated, max: 30 + weekendSlack, wf: "agents.yml", next: sched("ronda", "agentes"),
+      when: "Em cada ronda, " + d + ", de 10 em 10 min das 08:05 às 20:55: cada agente decide com os preços do momento nas bolsas abertas (Europa 08:00–16:30, EUA 14:30–21:00) e a ronda-sombra do motor Rust repete-a. Às 07:30 o fecho diário com as sessões completas da véspera. Ao fim de semana não muda." },
+    { k: "📰 Notícias", iso: NEWS && NEWS.updated, max: 8 + weekendSlack, wf: "news.yml", next: sched("noticias"),
+      when: D + " às 12:00, 16:00 e 20:30: o Claude lê as notícias das ações seguidas, os 8-K da SEC e o risco geopolítico; os agentes usam-nas para vetar compras." },
+    { k: "🎯 Oportunidades e contexto", iso: when(MARKET), max: 30 + weekendSlack, wf: "agents.yml", title: /daily/, next: sched("agentes"),
+      when: "Na liga diária (" + d + ", 07:30), com os fechos da véspera: VIX, crédito, juros, dólar, petróleo, ouro, setores, VCP e rankings." },
+    { k: "🧠 Propostas", iso: when(PROPOSALS), max: 30 + weekendSlack, wf: "agents.yml", title: /daily/, next: sched("agentes"),
+      when: "Na liga diária (07:30): o que os agentes querem comprar ou vender na abertura, com entrada, stop, alvo e score." },
+    { k: "📅 Agenda", iso: when(CALENDAR), max: 30 + weekendSlack, wf: "agents.yml", title: /daily/, next: sched("agentes"),
+      when: "Na liga diária (07:30): resultados das empresas e calendário macro dos 14 dias seguintes." },
+    { k: "⏪ Pré-treino", iso: PRETRAIN && PRETRAIN.updated, max: 24 * 8, wf: "pretrain.yml", title: /Pré-treino/, next: sched("treino"),
+      when: "Ao domingo às 06:00 (depois dos dados da semana) e quando pedido: cada perfil treina em série até a escolha estabilizar; a seguir conservador e arrojado, e voltas aos 3 perfis enquanto alguma escolha mudar." },
+    { k: "⚡ Treino da reatividade", wf: "intraday-lab.yml", max: 24 * 8, next: null,
+      when: "Quando acaba o último perfil do pré-treino: barras de 30 min da Alpaca (EUA, guardadas e só as novas descarregadas) e a reatividade de cada estratégia (abertura, confirmação ou tempo real)." },
+    { k: "📊 Dicas do dia e rankings", wf: "discord-daily.yml", max: 30 + weekendSlack, next: sched("dicas"),
+      when: D + " às 07:00, antes da abertura europeia: ideias do dia e rankings no Discord." },
+    { k: "🚨 Alertas de rompimento", wf: "opportunity-alerts.yml", max: 30 + weekendSlack, next: sched("alertas"),
+      when: D + " às 15:40, 17:40 e 19:40, com a bolsa americana aberta: ações que rompem com volume ou mexem 5% ou mais; mensagens privadas a quem as segue (/seguir)." },
+    { k: "🔁 Acompanhamento dos alertas", wf: "alert-followups.yml", max: 30 + weekendSlack, next: sched("acompanhamento"),
+      when: D + " às 22:30, depois do fecho dos EUA: como correu cada alerta 5 e 20 sessões depois." },
+    { k: "🔧 Estado do bot", wf: "health.yml", max: 30 + weekendSlack, next: sched("estado"),
+      when: D + " às 23:00, depois de todas as tarefas do dia: confirma que correram e avisa no canal 🔧-estado." },
+    { k: "🗓️ Resumo semanal", wf: "weekly-summary.yml", max: 24 * 8, next: sched("semanal"),
+      when: "Ao sábado às 10:00: a semana da liga e do mercado no Discord." },
+    { k: "🗂️ Dados de contexto e fundamentos", wf: "context-data.yml", max: 24 * 8, next: cron(3, 17, { dow: 0 }),
+      when: "Ao domingo às 03:17 UTC, antes do pré-treino: VIX, incerteza, crédito, juros, dólar, risco geopolítico, petróleo, ouro, ETFs de setor e fundamentos da SEC." },
+    { k: "💾 Cópia de segurança", wf: "backup.yml", max: 30, next: cron(3, 17),
+      when: "Todos os dias às 03:17 UTC: carteiras e contas dos membros, cifradas, guardadas 30 dias (e 14 cópias diárias na própria base de dados)." },
+    { k: "📦 Arquivo mensal", wf: "arquivo-mensal.yml", max: 24 * 32, next: cron(2, 23, { dom: 1 }),
+      when: "No dia 1 de cada mês às 02:23 UTC: os preços de cada ronda do mês e as barras de 5 min das ações europeias (o Yahoo só as guarda 60 dias), cifrados num ficheiro só." },
+    { k: "🌐 Site (Cloudflare)", wf: "deploy-worker.yml", max: null, next: null,
+      when: "A cada alteração do código do site: publica o portal e o bot do Discord." },
+    { k: "✅ Testes", wf: "tests.yml", max: null, next: null,
+      when: "A cada alteração do código: os testes do Python e do motor Rust têm de passar." },
+  ];
+  const fmt = (t) => esc(lisbon(t, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }));
+  const ago = (t) => { if (t == null) return "—"; const h = (Date.now() - t) / 3.6e6; return h < 1 ? Math.max(1, Math.round(h * 60)) + " min" : h < 48 ? Math.round(h) + " h" : Math.round(h / 24) + " dias"; };
+  const dot = (cls, text) => '<span class="dot ' + cls + '"></span>' + text;
+  const state = (r) => {
+    const runs = r.wf ? runsOf(r.wf, r.title) : [];
+    const last = runs[0], done = runs.find((x) => x.status === "completed");
+    const data = r.iso !== undefined ? ms(r.iso) : (done && done.conclusion === "success" ? ms(done.updated) : null);
+    const lastOk = r.iso !== undefined ? data : (runs.find((x) => x.conclusion === "success") || {}).updated;
+    let st;
+    if (last && last.status !== "completed") st = dot("run", "a correr");
+    else if (done && done.conclusion === "failure") st = dot("bad", "falhou");
+    else if (r.iso !== undefined || r.max) {
+      const t = r.iso !== undefined ? data : ms(lastOk), h = t == null ? null : (Date.now() - t) / 3.6e6;
+      st = h == null ? dot("bad", RUNS ? "sem dados" : "—") : !r.max || h <= r.max ? dot("ok", "em dia") : h <= r.max * 2 ? dot("old", "atrasado") : dot("bad", "parado");
+    } else st = done ? dot(done.conclusion === "success" ? "ok" : "old", done.conclusion === "success" ? "ok" : esc(done.conclusion || "")) : "—";
+    const t = r.iso !== undefined ? data : (done ? ms(done.updated) : null);
+    const link = (done || last) ? ' <a class="muted" href="' + esc((done || last).url) + '" target="_blank" rel="noopener" title="Ver no GitHub">↗</a>' : "";
+    return [st, t ? fmt(t) + link : "—", ago(t)];
+  };
+  const nextCell = (r) => { const at = r.next && r.next(); return at ? fmt(at) + '<br><span class="muted small" data-at="' + at + '"></span>' : '<span class="muted">' + (r.next === null && r.wf === "intraday-lab.yml" ? "depois do pré-treino" : "a cada alteração") + "</span>"; };
+  const tick = () => document.querySelectorAll("#status [data-at]").forEach((e) => { e.textContent = "daqui a " + left(+e.dataset.at - Date.now()); });
+  const draw = () => {
+    $("status").innerHTML = '<h2>🩺 Estado do sistema</h2><p class="muted small">Cada parte do portal e cada tarefa automática: como está, quando correu e quando volta a correr, e o que a faz correr. ' +
+      (RUNS ? "As execuções vêm do GitHub Actions (↗ abre a última)." : "Sem acesso às execuções do GitHub agora: o estado vem só da data dos dados.") + "</p>" +
+      table(["Parte", "Estado", "Última atualização", "Há", "Próxima", "Condição de atualização"], rows.map((r) => [r.k, ...state(r), nextCell(r), '<span class="small wrap">' + esc(r.when) + "</span>"])) +
+      '<p class="muted small">🟢 em dia · 🔵 a correr · 🟡 atrasado (mais do que o normal) · 🔴 falhou, parado ou sem dados. Se algo ficar parado, avisa no Discord: o canal 🔧-estado mostra os erros.</p>';
+    tick();
+  };
   draw();
-  setInterval(() => { if (!$("status").closest("section").hidden) draw(); }, 30000);
+  setInterval(() => { if (!$("status").closest("section").hidden) tick(); }, 1000);
+  setInterval(() => { if (!$("status").closest("section").hidden) draw(); }, 60000);
 })();
 
 // ---- quick guide on the first visit ----
