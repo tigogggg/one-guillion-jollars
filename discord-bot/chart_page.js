@@ -701,6 +701,16 @@ function intervalLegend(elId, traces, pick) {
     if (r) apply(day(r[0]), day(r[1]));
   });
 }
+// The league's curves end at the last close; each live agent's return of this moment (the round's prices) is added as
+// one more point, so the chart, the Desempenho table and the sheets all tell the same result and the same order.
+(function liveNow() {
+  const live = Object.fromEntries((DATA.agents || []).filter((a) => !a.backtest && a.return_pct != null).map((a) => [a.name, a.return_pct]));
+  const now = String(DATA.updated || "");
+  (DATA.series || []).forEach((s) => {
+    if (!(s.name in live) || !now || !s.x.length || now.slice(0, 16) <= String(s.x[s.x.length - 1]).slice(0, 16)) return;
+    s.x = s.x.concat([now]); s.y = s.y.concat([live[s.name]]);
+  });
+})();
 lineChart("chart", DATA);
 
 // ---- agents ----
@@ -1089,11 +1099,13 @@ function perfTable(boxId, data, people, pick) {
   const series = (data.series || []).filter((s) => s.x.length);
   if (!series.length) { box.innerHTML = '<p class="muted">Ainda sem histórico.</p>'; return; }
   const byName = Object.fromEntries((people || []).map((a) => [a.name, a]));
-  const last = series.reduce((m, s) => (s.x[s.x.length - 1] > m ? s.x[s.x.length - 1] : m), "");
-  const first = series.reduce((m, s) => (s.x[0] < m ? s.x[0] : m), "9999");
+  const dayOf = (v) => String(v).slice(0, 10);  // the live point has a time; the table counts in days
+  const lastX = series.reduce((m, s) => (s.x[s.x.length - 1] > m ? s.x[s.x.length - 1] : m), "");
+  const last = dayOf(lastX);
+  const first = dayOf(series.reduce((m, s) => (s.x[0] < m ? s.x[0] : m), "9999"));
   const shift = (day, days) => new Date(Date.parse(day + "T12:00:00Z") - days * 864e5).toISOString().slice(0, 10);
   // the value (% since the agent started) on the last point on or before a date; null before it started
-  const at = (s, day) => { let v = null; for (let i = 0; i < s.x.length && s.x[i] <= day; i++) v = s.y[i]; return v; };
+  const at = (s, day) => { let v = null; for (let i = 0; i < s.x.length && dayOf(s.x[i]) <= day; i++) v = s.y[i]; return v; };
   // return between two dates from the "since start" curve: (1 + end) / (1 + start) - 1
   const between = (s, from, to, whole) => {
     const end = at(s, to);
@@ -1121,7 +1133,7 @@ function perfTable(boxId, data, people, pick) {
     if (!showAll) rows.splice(LIMIT);
     box.innerHTML = '<div class="filters"><label class="small">Personalizado: de <input type="date" class="pf-from" value="' + custom.from + '" min="' + first + '" max="' + last + '"></label>' +
       '<label class="small">a <input type="date" class="pf-to" value="' + custom.to + '" min="' + first + '" max="' + last + '"></label>' +
-      '<span class="muted small">Toca no título de uma coluna para ordenar. Dados até ' + esc(last) + '.</span></div>' +
+      '<span class="muted small">Toca no título de uma coluna para ordenar. Dados até ' + esc(lastX.length > 10 ? lisbon(Date.parse(lastX), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : last) + '.</span></div>' +
       '<div class="scroll"><table><tr><th>Agente</th>' + cols.map((c) => '<th class="num"><a href="#" class="pf-sort" data-k="' + c.key + '">' + esc(c.label) + (sortCol === c.key ? " ▼" : "") + '</a></th>').join("") + '</tr>' +
       rows.map((r) => '<tr><td>' + (r.a && pick ? '<a href="#" class="pf-agent" data-n="' + esc(r.s.name) + '" title="Abrir a ficha do agente">' : "") +
         esc((r.a ? r.a.emoji + " " : "") + r.s.name) + (r.a && pick ? "</a>" : "") + '</td>' + cols.map((c) => {
