@@ -623,6 +623,7 @@ STYLES = [
     {"gestor": "sharpe", "colheita": 1, "cada": 5},
 ]
 POPULATION_DIR = OUT_DIR
+POP_VERSION = 2  # 2: at most KEEP / families per family, no copies
 
 
 def first_generation(rng: np.random.Generator) -> list[dict]:
@@ -682,13 +683,31 @@ def judge(team: dict, ctx: dict, markets: list, capital: float) -> dict:
             "overall": round(pretrain.overall(pts[:-1], exam), 1)}
 
 
+def team_key(t: dict) -> str:
+    return json.dumps([sorted(t["membros"]), t["params"]], sort_keys=True)
+
+
 def select(pop: list[dict]) -> list[dict]:
     """The KEEP teams that do well in the training years and in validation at once (mean of the two ranks): a path
-    is "correct" when it is not good in only one of them."""
-    by_train = sorted(pop, key=lambda t: -t["score"]["train"])
-    by_val = sorted(pop, key=lambda t: -t["score"]["val"])
-    rank = {t["id"]: (by_train.index(t) + by_val.index(t)) / 2 for t in pop}
-    return sorted(pop, key=lambda t: (rank[t["id"]], -t["score"]["val"]))[:KEEP]
+    is "correct" when it is not good in only one of them. Different paths: no copies, and at most KEEP / families
+    per family (the rest of the places, if any, to the best left)."""
+    unique, seen = [], set()
+    for t in pop:
+        if team_key(t) not in seen:
+            seen.add(team_key(t))
+            unique.append(t)
+    by_train = sorted(unique, key=lambda t: -t["score"]["train"])
+    by_val = sorted(unique, key=lambda t: -t["score"]["val"])
+    rank = {t["id"]: (by_train.index(t) + by_val.index(t)) / 2 for t in unique}
+    ordered = sorted(unique, key=lambda t: (rank[t["id"]], -t["score"]["val"]))
+    quota = max(1, KEEP // len(FAMILIES))
+    out, per = [], {}
+    for t in ordered:
+        if per.get(t["familia"], 0) < quota and len(out) < KEEP:
+            out.append(t)
+            per[t["familia"]] = per.get(t["familia"], 0) + 1
+    out += [t for t in ordered if t not in out][: KEEP - len(out)]
+    return out
 
 
 def evolve(markets: list, profile: str, capital: float, generations: int = GENERATIONS, seed: int = 0) -> dict:
@@ -698,7 +717,9 @@ def evolve(markets: list, profile: str, capital: float, generations: int = GENER
     try:
         state = json.loads(path.read_text())
     except (OSError, ValueError):
-        state = {"generation": 0, "teams": None, "log": []}
+        state = {}
+    if state.get("version") != POP_VERSION:  # a new way of evolving: the population starts over
+        state = {"generation": 0, "teams": None, "log": [], "version": POP_VERSION}
     rng = np.random.default_rng(seed + 1000 * state["generation"])
     ctx = prepare(markets, profile, capital)
     pop = state["teams"] or first_generation(rng)
@@ -714,13 +735,18 @@ def evolve(markets: list, profile: str, capital: float, generations: int = GENER
                     "best_train": max(t["score"]["train"] for t in pop)})
         print(f"Geração {gen}: avaliada", flush=True)
         gen += 1
-        children = []
+        children, taken = [], {team_key(t) for t in keep}
         for n in range(POP_SIZE - KEEP):
-            if n % 2 == 0:
-                children.append(mutate_team(keep[n % KEEP], rng, gen, n + 1))
-            else:
-                a, b = rng.choice(KEEP, size=2, replace=False)
-                children.append(cross_teams(keep[a], keep[b], rng, gen, n + 1))
+            for _ in range(20):  # a child that is a copy of a team already there is bred again
+                if n % 2 == 0:
+                    child = mutate_team(keep[n % len(keep)], rng, gen, n + 1)
+                else:
+                    a, b = rng.choice(len(keep), size=2, replace=False)
+                    child = cross_teams(keep[a], keep[b], rng, gen, n + 1)
+                if team_key(child) not in taken:
+                    break
+            taken.add(team_key(child))
+            children.append(child)
         pop = [dict(t, sobreviveu=t.get("sobreviveu", 0) + 1) for t in keep] + children
     for t in pop:
         if "score" not in t or t["id"].startswith(f"g{gen}-"):
@@ -736,7 +762,7 @@ def evolve(markets: list, profile: str, capital: float, generations: int = GENER
                        "sobreviveu": t.get("sobreviveu", 0), "return_after_tax": g["return_after_tax"],
                        "max_drawdown": g["max_drawdown"], "exposure": round(r["exposure"], 3), "trades": r["trades"]})
     state = {"generation": gen, "profile": profile, "broker": agents.BROKER, "teams": pop, "log": log[-200:],
-             "trials": state.get("trials", 0) + generations * POP_SIZE}
+             "trials": state.get("trials", 0) + generations * POP_SIZE, "version": POP_VERSION}
     path.write_text(json.dumps(state, ensure_ascii=False, indent=1, default=float) + "\n")
     return {"at": datetime.now(timezone.utc).isoformat(timespec="minutes"), "profile": profile, "broker": agents.BROKER,
             "generation": gen, "trials": state["trials"], "days": [markets[0].as_of.isoformat(), markets[-1].as_of.isoformat()],

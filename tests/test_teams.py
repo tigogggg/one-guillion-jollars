@@ -69,3 +69,15 @@ def test_risk_parity_gives_each_desk_the_same_risk():
     cov = np.array([[0.04, 0.0], [0.0, 0.01]])
     w = teams.risk_parity(cov)
     assert w[1] == pytest.approx(2 * w[0], rel=1e-3)  # half the volatility, twice the weight
+
+
+def test_selection_keeps_different_paths():
+    def team(i, fam, train, val):
+        return {"id": f"t{i}", "familia": fam, "membros": [fam], "params": {"i": i}, "score": {"train": train, "val": val}}
+    pop = [team(i, "qualidade", 100 - i, 100 - i) for i in range(12)] + [team(20 + 2 * i + j, f, -j, -j)
+                                                                      for i, f in enumerate(teams.FAMILIES) for j in range(2)]
+    pop.append(dict(pop[0], id="copy"))  # a copy of the best
+    kept = teams.select(pop)
+    fams = [t["familia"] for t in kept]
+    assert len(kept) == teams.KEEP and fams.count("qualidade") == teams.KEEP // len(teams.FAMILIES)
+    assert len({teams.team_key(t) for t in kept}) == len(kept)
