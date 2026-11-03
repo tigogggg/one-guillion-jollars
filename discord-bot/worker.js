@@ -119,15 +119,15 @@ const HELP = [
 ].join("\n");
 
 // Security headers on every answer. Scripts and styles inline (the pages are self-contained),
-// plus the few CDNs and the YouTube player; nothing can frame the site.
+// plus the few CDNs; nothing can frame the site.
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://www.youtube.com https://s.ytimg.com",
+  "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
   "connect-src 'self'",
-  "frame-src 'self' https://www.youtube.com https://www.youtube-nocookie.com",
+  "frame-src 'self'",
   "media-src 'self' https:",
   "object-src 'none'",
   "base-uri 'none'",

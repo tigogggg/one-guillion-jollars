@@ -216,49 +216,6 @@ export function safeJson(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
 
-// Background music on every page: a YouTube video, muted by default, with a 🔇/🔊 button.
-// The choice is remembered on this device; browsers only allow sound after a click, so a
-// remembered "on" starts at the first tap on the page.
-const MUSIC_VIDEO = "ypKD0MieAI4";
-const MUSIC_START = 7;
-const MUSIC = `<button id="music" type="button" aria-label="Ligar a música" title="Música">🔇</button>
-<div id="music-player" aria-hidden="true"></div>
-<style>
-#music { position:fixed; top:10px; right:10px; z-index:60; width:40px; height:40px; border-radius:50%; border:2px solid var(--accent, #ff2e88);
-  background:rgba(11,8,32,.85); color:#fff; font-size:18px; line-height:1; cursor:pointer; box-shadow:0 0 12px rgba(255,46,136,.45); }
-#music:hover { transform:scale(1.08); } #music.on { border-color:#38e8ff; box-shadow:0 0 14px rgba(56,232,255,.6); }
-#music-player { position:fixed; left:-10000px; top:0; width:200px; height:200px; pointer-events:none; opacity:0; }
-</style>
-<script>
-(function () {
-  var btn = document.getElementById("music"), player = null, ready = false, wantOn = false;
-  try { wantOn = localStorage.getItem("musica") === "on"; } catch (e) {}
-  function show(on) { btn.textContent = on ? "🔊" : "🔇"; btn.classList.toggle("on", on); btn.setAttribute("aria-label", on ? "Silenciar a música" : "Ligar a música"); }
-  function save(on) { try { localStorage.setItem("musica", on ? "on" : "off"); } catch (e) {} }
-  function apply(on) {
-    show(on);
-    if (!ready) return;
-    if (on) { player.unMute(); player.setVolume(35); player.playVideo(); } else { player.mute(); }
-  }
-  show(wantOn);
-  btn.addEventListener("click", function (e) { e.stopPropagation(); wantOn = !wantOn; save(wantOn); apply(wantOn); });
-  if (wantOn) document.addEventListener("pointerdown", function first() { document.removeEventListener("pointerdown", first, true); apply(wantOn); }, true);
-  var prev = window.onYouTubeIframeAPIReady;
-  window.onYouTubeIframeAPIReady = function () {
-    if (prev) prev();
-    player = new YT.Player("music-player", { width: 200, height: 200, videoId: "${MUSIC_VIDEO}",
-      playerVars: { autoplay: 1, mute: 1, start: ${MUSIC_START}, loop: 1, playlist: "${MUSIC_VIDEO}", controls: 0, playsinline: 1, disablekb: 1, rel: 0 },
-      events: {
-        onReady: function () { ready = true; player.mute(); player.playVideo(); },
-        onStateChange: function (e) { if (e.data === 0) { player.seekTo(${MUSIC_START}); player.playVideo(); } },
-        onError: function () { btn.hidden = true; },  // the video cannot be embedded or was removed
-      } });
-  };
-  var tag = document.createElement("script"); tag.src = "https://www.youtube.com/iframe_api"; tag.async = true;
-  document.head.appendChild(tag);
-})();
-</script>`;
-
 // Scripts and styles that never change between requests are served once from /static/<name>-<hash>
 // and kept by the browser for a year (a new deploy changes the hash, so nobody gets a stale copy).
 export const STATIC = {};
@@ -290,7 +247,7 @@ export function page(title, body, head = "", opts = {}) {
 <link rel="stylesheet" href="${STATIC_PATHS.css}">
 ${head}
 </head>
-<body${opts.embed ? ' class="embed"' : ""}><main>${body}</main>${opts.embed ? "" : MUSIC}</body>
+<body${opts.embed ? ' class="embed"' : ""}><main>${body}</main></body>
 </html>`;
 }
 
@@ -394,8 +351,7 @@ const DATA = ${safeJson(data)};
 const PORTAL_VERSION = ${safeJson(extras.version || null)};
 const PREFS = ${safeJson(me ? me.settings || {} : null)};  // the member's settings, kept in the account
 const WALLET = ${safeJson(me ? me.wallet : null)};
-if (PREFS) try {  // the account wins over this browser's copies (music, capital and risk for the proposals)
-  if (PREFS.music !== undefined) localStorage.setItem("musica", PREFS.music ? "on" : "off");
+if (PREFS) try {  // the account wins over this browser's copies (capital and risk for the proposals)
   if (PREFS.capital !== undefined) localStorage.setItem("capital", JSON.stringify(PREFS.capital));
   if (PREFS.risk !== undefined) localStorage.setItem("risk", JSON.stringify(PREFS.risk));
 } catch (e) {}
@@ -456,7 +412,7 @@ a.home { color:inherit; text-decoration:none; }
   .totals-col { display:grid; grid-template-columns:1fr 1fr; order:-1; }
 }
 .topbar .userbar { justify-self:end; }
-@media (max-width:640px) { .topbar { grid-template-columns:1fr auto; padding-right:48px; } .topbar .logo { width:3.5em; height:3.5em; } .topbar .userbar { grid-column:1 / -1; justify-self:start; } }
+@media (max-width:640px) { .topbar { grid-template-columns:1fr auto; } .topbar .logo { width:3.5em; height:3.5em; } .topbar .userbar { grid-column:1 / -1; justify-self:start; } }
 h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem !important; line-height:1.6; }
 .marquee { overflow:hidden; white-space:nowrap; border:2px solid var(--accent); border-radius:6px; background:#12002a; box-shadow:0 0 12px rgba(255,46,136,.5); margin:8px 0; }
 .marquee span { display:inline-block; padding:8px 0 8px 100%; font-family:var(--pixel); font-size:.75rem; color:var(--gold); animation:scroll 14s linear infinite; }
@@ -1680,7 +1636,7 @@ document.addEventListener("click", (e) => {
   window.scrollTo(0, 0);
 });
 
-// ---- settings kept in the account (edited on /perfil): the proposals' capital and risk, and the music button ----
+// ---- settings kept in the account (edited on /perfil): the proposals' capital and risk ----
 async function savePrefs(fields) {
   if (!WALLET) return null;
   const r = await fetch(WALLET + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -1689,12 +1645,6 @@ async function savePrefs(fields) {
   if (!r.ok || out.error) throw new Error(out.error || "Não consegui guardar. Tenta outra vez.");
   return out.settings;
 }
-// The 🔇/🔊 button is drawn after this script and stops its clicks, so listen in the capture phase,
-// and read the new state once its own handler has switched it.
-document.addEventListener("click", (e) => {
-  if (!WALLET || !e.target.closest("#music")) return;
-  setTimeout(() => { let on = false; try { on = localStorage.getItem("musica") === "on"; } catch (err) {} savePrefs({ music: on }).catch(() => {}); }, 0);
-}, true);
 
 // ---- ticker search: everything the portal knows about one ticker, and the member's own position ----
 (function search() {

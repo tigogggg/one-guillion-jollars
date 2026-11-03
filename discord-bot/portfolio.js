@@ -32,7 +32,7 @@ const RESERVED = ["One Guillion Jollars", "Indexador", "Guardião", "Rotador", "
 const AVATAR = /^(a_)?[0-9a-f]{32}$/;  // a Discord avatar hash (the portal draws it with avatarUrl)
 
 // Settings kept in the account (the portal and every device read them): capital and risk for sizing the proposals,
-// the music, and the portal tab that opens first. Only the fields sent are changed; an error message, or null.
+// and the portal tab that opens first. Only the fields sent are changed; an error message, or null.
 export function setPreferences(data, body) {
   const s = { capital: 10000, risk: 1, ...(data.settings || {}) };
   if (body.capital !== undefined) {
@@ -45,7 +45,6 @@ export function setPreferences(data, body) {
     if (!(risk > 0 && risk <= 5)) return "Risco inválido (entre 0,1% e 5%).";
     s.risk = risk;
   }
-  if (body.music !== undefined) s.music = !!body.music;
   if (body.start !== undefined) {
     const start = String(body.start);
     if (start && !/^[a-z]{3,15}$/.test(start)) return "Separador inválido.";
@@ -223,7 +222,7 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
     const out = await setDisplayName(env, tok, data, body.name);
     return out.error ? fail(out) : json({ ok: true, display_name: out.data.display_name || "", name: out.data.name || "" });
   }
-  if (action === "preferences") {  // answered without the quotes: the music button saves through here
+  if (action === "preferences") {  // answered without the quotes
     const out = await mutate(env, tok, "preferences", (d) => { const error = setPreferences(d, body); return error ? { error } : null; });
     return out.error ? fail(out) : json({ ok: true, settings: out.data.settings });
   }
@@ -488,7 +487,7 @@ async function change(data, body) {
   if (body.action === "settings") {
     const capital = Number(body.capital), risk = Number(body.risk);
     if (!(capital >= 0 && capital <= 1e9) || !(risk > 0 && risk <= 5)) return "Capital ou risco inválido (risco entre 0,1% e 5%).";
-    data.settings = { ...(data.settings || {}), capital, risk };  // keeps the music and start tab
+    data.settings = { ...(data.settings || {}), capital, risk };  // keeps the start tab
     return null;
   }
   if (body.action === "preferences") return setPreferences(data, body);
@@ -808,7 +807,7 @@ const START_TABS = [["", "🏠 Hoje"], ["corrida", "🏁 Corrida"], ["pretreino"
 function portfolioPage(data, tok, opts = {}) {
   const tabButton = ([t, label], on) => `<button class="tab${on ? " on" : ""}" data-tab="${t}">${label}</button>`;
   const me = { name: data.display_name || data.name || "membro", avatar: avatarUrl(data.owner, data.avatar) };
-  const prefs = { capital: 10000, risk: 1, music: false, start: "", ...(data.settings || {}) };
+  const prefs = { capital: 10000, risk: 1, start: "", ...(data.settings || {}) };
   const since = data.created ? "Membro desde " + new Date(data.created).toLocaleDateString("pt-PT", { month: "long", year: "numeric", timeZone: "Europe/Lisbon" }) + " · " : "";
   const top = opts.profile ? `
 <header>${siteTopbar(me)}</header>
@@ -822,12 +821,12 @@ function portfolioPage(data, tok, opts = {}) {
 <div class="profile-layout">
 <nav class="side" id="tabs" aria-label="Perfil">
   <p class="side-h">👤 Perfil</p>
-  ${PROFILE_TABS.map((t) => tabButton(t, false)).join("")}
+  ${PROFILE_TABS.map((t, i) => tabButton(t, i === 0)).join("")}
   <p class="side-h">💼 Carteira</p>
-  ${WALLET_TABS.map((t, i) => tabButton(t, i === 0)).join("")}
+  ${WALLET_TABS.map((t) => tabButton(t, false)).join("")}
 </nav>
 <div class="side-main">
-<section data-tab="definicoes" hidden>
+<section data-tab="definicoes">
   <h2>⚙️ Definições</h2>
   <form id="display-name" class="panel profile-form" autocomplete="off">
     <label for="dn-input"><b>🏷️ Nome a apresentar</b> <span class="muted small">· é assim que os outros membros te veem</span></label>
@@ -839,7 +838,6 @@ function portfolioPage(data, tok, opts = {}) {
     <p><b>📐 Tamanho das posições</b> <span class="muted small">· as propostas dos agentes passam a número de ações com estes valores, no portal e aqui</span></p>
     <div class="row-btns"><label class="small">Capital (€)<br><input name="capital" type="number" min="0" max="1000000000" step="100" value="${esc(prefs.capital)}"></label>
       <label class="small">Risco por operação (%)<br><input name="risk" type="number" min="0.1" max="5" step="0.1" value="${esc(prefs.risk)}"></label></div>
-    <p><b>🔊 Música</b><br><label class="small"><input name="music" type="checkbox"${prefs.music ? " checked" : ""}> Ligada ao entrar <span class="muted">(o botão 🔇/🔊 no canto também a guarda aqui)</span></label></p>
     <p><b>🏠 Separador do portal ao entrar</b><br><select name="start">${START_TABS.map(([t, label]) => `<option value="${t}"${(prefs.start || "") === t ? " selected" : ""}>${esc(label)}</option>`).join("")}</select></p>
     <div class="row-btns"><button class="btn" type="submit">GUARDAR DEFINIÇÕES</button></div>
     <p class="muted small" id="prefs-msg">Ficam na tua conta: valem em todos os aparelhos onde entras.</p>
@@ -884,7 +882,7 @@ function portfolioPage(data, tok, opts = {}) {
     <p class="muted">Apaga tudo de imediato: carteira, histórico de alterações, ligação ao Discord e Google, /seguir e análises. Não dá para desfazer (exporta antes).</p>
   </div>
 </section>
-<section data-tab="resumo">
+<section data-tab="resumo"${opts.profile ? " hidden" : ""}>
   <div class="resumo-layout">
     <div class="resumo-main">
       <h2>📈 Evolução</h2>
@@ -974,8 +972,6 @@ ${opts.profile ? "</div></div>" : ""}
 <script>
 const TOKEN = ${safeJson(tok)};
 const PROFILE = ${opts.profile ? "true" : "false"};
-const PREFS = ${safeJson(opts.profile ? data.settings || {} : null)};
-if (PREFS && PREFS.music !== undefined) try { localStorage.setItem("musica", PREFS.music ? "on" : "off"); } catch (e) {}  // the account wins
 </script>
 <script src="${CLIENT_PATH}"></script>`;
   return page(opts.profile ? `Perfil de ${me.name}` : `Carteira de ${data.name || "membro"}`, body, `${opts.embed ? '<base target="_top">' : ""}<link rel="manifest" href="/c/${tok}/manifest.webmanifest"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png?v=1gj">
@@ -1117,11 +1113,6 @@ async function savePrefs(fields) {
   const out = await post({ action: "preferences", ...fields });
   return out.settings;
 }
-const musicOn = () => { try { return localStorage.getItem("musica") === "on"; } catch (e) { return false; } };
-if (PROFILE) document.addEventListener("click", (e) => {  // the 🔇/🔊 button (drawn later, stops its clicks): capture phase
-  if (!e.target.closest("#music")) return;
-  setTimeout(() => { $("prefs").elements.music.checked = musicOn(); savePrefs({ music: musicOn() }).catch(() => {}); }, 0);
-}, true);
 function formStatus(msg) {
   const hint = msg.textContent;
   return (cls, text, back) => {
@@ -1136,12 +1127,9 @@ if ($("prefs")) {
     const f = e.target.elements, btn = e.target.querySelector("button");
     btn.disabled = true; say("muted", "A guardar…");
     try {
-      const s = await savePrefs({ capital: +f.capital.value, risk: +f.risk.value, music: f.music.checked, start: f.start.value });
+      const s = await savePrefs({ capital: +f.capital.value, risk: +f.risk.value, start: f.start.value });
       try { localStorage.setItem("capital", JSON.stringify(s.capital)); localStorage.setItem("risk", JSON.stringify(s.risk)); } catch (err) {}
       if (SNAP) { SNAP.settings = s; render(); }  // Propostas para ti follows at once
-      const music = $("music");
-      if (music && !music.hidden && !!s.music !== musicOn()) music.click();
-      else try { localStorage.setItem("musica", s.music ? "on" : "off"); } catch (err) {}
       say("up", "✅ Guardado na tua conta.", 5000);
     } catch (err) { say("down", "⚠️ " + err.message); } finally { btn.disabled = false; }
   });
