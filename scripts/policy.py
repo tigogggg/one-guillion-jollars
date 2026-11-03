@@ -16,6 +16,13 @@ only afterwards), each kept as it could have been known on each day:
   (SEC filings, from the day each was filed). High investment growth tends to predict lower returns (Cooper, Gulen &
   Schill 2008; Titman, Wei & Xie 2004): a guard, not a buy signal. A company's sector is today's (S&P 500 list).
 
+Europe (the same fields for the European sectors, keys eu_<STOXX Europe 600 sector ETF>):
+- gov: public procurement notices in the EU's Official Journal (TED), per quarter, by the CPV divisions of the
+  sector; the same surprise, known a month after the quarter ends (notices are published as they happen).
+- epub: each STOXX Europe 600 sector's monthly return over the STOXX Europe 600 against the European news-based
+  policy uncertainty index (Baker, Bloom & Davis; FRED EUEPUINDXM), no categories.
+- capex: none (no free point-in-time filings for European companies): the score leaves it out.
+
 The NAICS -> sector map is rough (a contractor's industry is not always its GICS sector): the signal is a growth
 rate, so errors dilute it rather than bias it.
 
@@ -25,6 +32,7 @@ rate, so errors dilute it rather than bias it.
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 import time
 from pathlib import Path
@@ -57,6 +65,24 @@ NAICS = {
     "sec_XLRE": ["531"],
 }
 FIELDS = ("gov", "epub", "capex")
+TED_URL = "https://api.ted.europa.eu/v3/notices/search"
+TED_FIRST_YEAR = 2008
+TED_LAG_MONTHS = 1
+EU_EPU = "EUEPUINDXM"
+# CPV divisions (the first two digits of the common procurement vocabulary) -> the European sector's key
+CPV = {
+    "eu_EXH1": ["09"],                                       # petroleum products, fuel, energy
+    "eu_EXV6": ["14", "24", "44"],                           # mining and metals, chemicals, construction materials
+    "eu_EXH4": ["31", "34", "35", "42", "43", "45", "50", "60", "71", "90"],  # machinery, transport and defence
+    "eu_EXV3": ["30", "32", "48", "72"],                      # computers, communication equipment, software, IT
+    "eu_EXV4": ["33", "85"],                                 # medical equipment and pharmaceuticals, health services
+    "eu_EXV5": ["18", "37", "39", "55"],                     # clothing, sport goods, furniture, hotels and catering
+    "eu_EXH3": ["03", "15"],                                 # agriculture, food and beverages
+    "eu_EXH9": ["65"],                                       # public utilities
+    "eu_EXV2": ["64", "92"],                                 # post and telecommunications, media and culture
+    "eu_EXV1": ["66"],                                       # financial and insurance services
+    "eu_EXI5": ["70"],                                       # real estate services
+}
 
 
 def warn(message: str) -> None:
@@ -149,11 +175,106 @@ def download_spending(budget_s: float = 1500) -> pd.DataFrame | None:
     return pd.DataFrame(cols) if cols else None
 
 
+_TED_FORM = 0  # which query syntax TED accepted
+
+
+def ted_count(key: str, divisions: list[str], first: pd.Timestamp, last: pd.Timestamp, tries: int = 3) -> float | None:
+    """How many notices TED published between two dates with a CPV code in these divisions."""
+    global _TED_FORM
+    a, b = first.strftime("%Y%m%d"), last.strftime("%Y%m%d")
+    forms = [
+        "(" + " OR ".join(f"classification-cpv={d}*" for d in divisions) + f") AND publication-date>={a} AND publication-date<={b}",
+        "classification-cpv IN (" + " ".join(f"{d}000000" for d in divisions) + f") AND publication-date>={a}<={b}",
+        "PC=[" + " or ".join(f"{d}*" for d in divisions) + f"] AND PD=[{a} <> {b}]",
+    ]
+    for attempt in range(tries):
+        body = {"query": forms[_TED_FORM % len(forms)], "fields": ["publication-number"], "limit": 1, "page": 1}
+        try:
+            resp = requests.post(TED_URL, json=body, timeout=60)
+            if resp.status_code in (400, 422):
+                warn(f"TED {key} {a}: {resp.status_code} {resp.text[:300]}")
+                _TED_FORM += 1
+                continue
+            resp.raise_for_status()
+            return float(resp.json()["totalNoticeCount"])
+        except (requests.RequestException, ValueError, KeyError) as e:
+            if attempt == tries - 1:
+                warn(f"TED {key} {a}: {e}")
+            time.sleep(3 * (attempt + 1))
+    return None
+
+
+def download_procurement(budget_s: float = 900) -> pd.DataFrame | None:
+    """Quarter ends x European sectors: notices per quarter, keeping what is cached (only the missing quarters and the
+    last two are asked for)."""
+    old = cached("gasto_publico_eu")
+    today = pd.Timestamp.today()
+    quarters = pd.date_range(f"{TED_FIRST_YEAR}-03-31", today - pd.offsets.QuarterEnd(1), freq="QE")
+    t0, failures, cols = time.time(), 0, {}
+    for key, divisions in CPV.items():
+        have = old[key].dropna() if old is not None and key in old else pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+        got = dict(have.items())
+        for q in quarters:
+            if q in got and q < quarters[-2]:
+                continue
+            if time.time() - t0 > budget_s or failures >= 6:
+                break
+            n = ted_count(key, divisions, q - pd.offsets.QuarterBegin(1, startingMonth=1), q)
+            if n is None:
+                failures += 1
+            else:
+                failures = 0
+                got[q] = n
+        if got:
+            cols[key] = pd.Series(got).sort_index()
+        print(f"TED {key}: {len(got)} trimestres ({time.time() - t0:.0f} s)", flush=True)
+        if failures >= 6:
+            warn("TED: 6 pedidos falhados seguidos, desisto por agora")
+            break
+    if old is not None:
+        for key in old:
+            cols.setdefault(key, old[key].dropna())
+    return pd.DataFrame(cols) if cols else None
+
+
+EPU_SITE = {  # the authors' own files, tried before FRED (slow from the cloud): column text -> FRED id
+    "https://www.policyuncertainty.com/media/Categorical_EPU_Data.xlsx": {
+        "government spending": "EPUGOVTSPEND", "national security": "EPUNATSEC", "trade policy": "EPUTRADE",
+        "health care": "EPUHEALTHCARE", "regulation": "EPUREG"},
+    "https://www.policyuncertainty.com/media/Europe_Policy_Uncertainty_Data.xlsx": {"european_news_index": EU_EPU},
+}
+
+
+def epu_site() -> dict[str, pd.Series]:
+    out = {}
+    for url, wanted in EPU_SITE.items():
+        try:
+            resp = requests.get(url, timeout=90, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            df = pd.read_excel(io.BytesIO(resp.content))
+            cols = {str(c).strip().lower(): c for c in df.columns}
+            year, month = cols.get("year"), cols.get("month")
+            if not year or not month:
+                warn(f"EPU {url}: colunas inesperadas {list(df.columns)[:6]}")
+                continue
+            df = df[pd.to_numeric(df[year], errors="coerce").notna()]
+            idx = pd.to_datetime({"year": df[year].astype(int), "month": df[month].astype(int), "day": 1}) + pd.offsets.MonthEnd(0)
+            for text, series in wanted.items():
+                match = [c for low, c in cols.items() if text in low and not (text == "regulation" and "financial" in low)]
+                if match:
+                    out[series] = pd.Series(pd.to_numeric(df[match[0]], errors="coerce").to_numpy(), index=idx).dropna()
+        except Exception as e:  # noqa: BLE001 - FRED is tried next
+            warn(f"EPU {url}: {e!r}")
+    return out
+
+
 def download_epu() -> pd.DataFrame | None:
     import context
 
-    cols = {}
-    for series in EPU_CATEGORIES:
+    cols = epu_site()
+    for series in [*EPU_CATEGORIES, EU_EPU]:
+        if series in cols and len(cols[series]) > 200:
+            continue
         s = context.fred_in_pieces(series, 1985, years=10)  # one long request times out from the cloud
         if s is not None and len(s):
             cols[series] = s
@@ -194,25 +315,27 @@ def capex_growth(fund: pd.DataFrame, sector_of: dict[str, str]) -> pd.DataFrame:
 
 
 def refresh() -> dict[str, str]:
+    """Each source saved as soon as it is ready (the step may be stopped by its time limit): uncertainty, US spending,
+    European procurement, then investment."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     done = {}
-    gov = download_spending(budget_s=1200)
-    if gov is not None:
-        gov.to_csv(CACHE_DIR / "gasto_publico.csv")
-        done["gasto_publico"] = f"{gov.index.min().date()} a {gov.index.max().date()} ({gov.shape[1]} setores)"
-    epu = download_epu()
-    if epu is not None:
-        epu.to_csv(CACHE_DIR / "epu_categorias.csv")
-        done["epu_categorias"] = f"{epu.index.min().date()} a {epu.index.max().date()} ({epu.shape[1]} categorias)"
+
+    def keep(name: str, frame: pd.DataFrame | None, what: str) -> None:
+        if frame is not None and len(frame):
+            frame.to_csv(CACHE_DIR / f"{name}.csv")
+            done[name] = f"{frame.index.min().date()} a {frame.index.max().date()} ({frame.shape[1]} {what})"
+            print(f"{name}: {done[name]}", flush=True)
+
+    keep("epu_categorias", download_epu(), "séries")
+    keep("gasto_publico", download_spending(budget_s=900), "setores")
+    keep("gasto_publico_eu", download_procurement(budget_s=600), "setores")
     try:
         import fundamentals
         from rankings import load_constituents
 
         sector_of = {c["symbol"]: c["sector"] for c in load_constituents()}
-        cap = capex_growth(pd.concat(fundamentals.load().values()).reset_index(), sector_of)
-        cap.to_csv(CACHE_DIR / "capex_setor.csv")
-        done["capex_setor"] = f"{cap.index.min().date()} a {cap.index.max().date()}"
-    except Exception as e:  # noqa: BLE001 - the other files are still worth keeping
+        keep("capex_setor", capex_growth(pd.concat(fundamentals.load().values()).reset_index(), sector_of), "setores")
+    except Exception as e:  # noqa: BLE001 - the other files are kept
         warn(f"capex por setor: {e}")
     return done
 
@@ -235,12 +358,13 @@ def known_from(frame: pd.DataFrame, lag_months: int) -> pd.DataFrame:
     return out
 
 
-def gov_signal(obligations: pd.DataFrame) -> pd.DataFrame:
-    """Month ends (when known) x sectors: the surprise in federal contract spending growth, z-scored across sectors."""
-    ttm = obligations.clip(lower=0).rolling(12, min_periods=12).sum()
-    growth = np.log(ttm / ttm.shift(12)).replace([np.inf, -np.inf], np.nan)
-    surprise = growth - growth.expanding(min_periods=12).mean().shift(1)
-    return known_from(zscore(surprise), GOV_LAG_MONTHS)
+def gov_signal(obligations: pd.DataFrame, per_year: int = 12, lag_months: int = GOV_LAG_MONTHS) -> pd.DataFrame:
+    """Period ends (when known) x sectors: the surprise in public spending growth (the last year against the one
+    before, minus that growth's past mean), z-scored across sectors."""
+    ttm = obligations.clip(lower=0).rolling(per_year, min_periods=per_year).sum()
+    growth = np.log(ttm / ttm.shift(per_year)).replace([np.inf, -np.inf], np.nan)
+    surprise = growth - growth.expanding(min_periods=per_year).mean().shift(1)
+    return known_from(zscore(surprise), lag_months)
 
 
 def epu_signal(epu: pd.DataFrame, etf_monthly: dict[str, pd.Series], spy_monthly: pd.Series) -> pd.DataFrame:
@@ -283,10 +407,21 @@ def fields(raw: dict[str, pd.Series], days: pd.DatetimeIndex) -> pd.DataFrame:
     if gov is not None and len(gov):
         for k, s in gov_signal(gov).items():
             cols[f"{k}_gov"] = s
+    eu_gov = cached("gasto_publico_eu")
+    if eu_gov is not None and len(eu_gov):
+        for k, s in gov_signal(eu_gov, per_year=4, lag_months=TED_LAG_MONTHS).items():
+            cols[f"{k}_gov"] = s
     epu = cached("epu_categorias")
+
+    def month(s: pd.Series) -> pd.Series:
+        s = s.copy()
+        if s.index.tz is not None:
+            s.index = s.index.tz_localize(None)
+        return s.resample("ME").last().pct_change()
+
     spy = raw.get("spy")
-    if epu is not None and len(epu) and spy is not None:
-        month = lambda s: s.resample("ME").last().pct_change()
+    us_cats = [c for c in EPU_CATEGORIES if epu is not None and c in epu]
+    if us_cats and spy is not None:
         etfs = {}
         for sector, tickers in context.SECTOR_ETFS.items():
             px = None
@@ -295,7 +430,13 @@ def fields(raw: dict[str, pd.Series], days: pd.DatetimeIndex) -> pd.DataFrame:
                     px = raw[f"etf:{t}"] if px is None else px.combine_first(raw[f"etf:{t}"])
             if px is not None:
                 etfs[context.sector_key(sector)] = month(px)
-        for k, s in epu_signal(epu.resample("ME").last(), etfs, month(spy)).items():
+        for k, s in epu_signal(epu[us_cats].resample("ME").last(), etfs, month(spy)).items():
+            cols[f"{k}_epub"] = s
+    stoxx = raw.get(f"etf:{context.EU_BENCHMARK}")
+    if epu is not None and EU_EPU in epu and stoxx is not None:
+        etfs = {context.sector_key(sec, us=False): month(raw[f"etf:{t}"])
+                for sec, (t,) in context.EU_SECTOR_ETFS.items() if f"etf:{t}" in raw}
+        for k, s in epu_signal(epu[[EU_EPU]].resample("ME").last(), etfs, month(stoxx)).items():
             cols[f"{k}_epub"] = s
     cap = cached("capex_setor")
     if cap is not None and len(cap):

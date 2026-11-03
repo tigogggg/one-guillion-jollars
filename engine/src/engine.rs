@@ -504,7 +504,9 @@ fn stock_filter(m: &Mkt, rows: &Rows, r: usize, p: &P) -> bool {
     let f = m.f;
     let sector = rows.sector[r];
     if p.on("filtro_setor") && sector >= 0 {
-        let (ti, ri) = (m.data.sector_trend[sector as usize], m.data.sector_rs[sector as usize]);
+        let us = m.data.symbols[rows.sym[r] as usize].is_us;
+        let (ti, ri) = if us { (m.data.sector_trend[sector as usize], m.data.sector_rs[sector as usize]) }
+                       else { (m.data.sector_eu_trend[sector as usize], m.data.sector_eu_rs[sector as usize]) };
         let get = |i: i32| if i < 0 { None } else { let x = m.data.ctx_val[m.d * m.data.n_ctx + i as usize]; if x.is_nan() { None } else { Some(x) } };
         if let Some(t) = get(ti) {
             if t < 0.0 {

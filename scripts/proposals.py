@@ -208,7 +208,7 @@ def build(config: dict, state: dict, mkt: Market) -> dict:
         from agents import sector_state
 
         score, parts = opportunities.safety(m, quality.get(sym), days, (mkt.news.get(sym) or {}).get("score"), mkt.zone,
-                                            etf=sym in mkt.etfs, sector_trend=None if sym in mkt.etfs else sector_state(mkt, m.get("sector"))[0])
+                                            etf=sym in mkt.etfs, sector_trend=None if sym in mkt.etfs else sector_state(mkt, m.get("sector"), sym)[0])
         return score, opportunities.level(score), parts
 
     def record(votes: list) -> dict:

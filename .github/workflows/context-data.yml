@@ -25,7 +25,7 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # measured 16-24 min (FRED)
+    timeout-minutes: 75  # measured 16-24 min (FRED), plus up to 40 for the political agenda
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -50,6 +50,7 @@ jobs:
         run: uv run python scripts/earnings.py --atualizar
       - name: Agenda política por setor (USAspending, FRED, capex da SEC)
         continue-on-error: true
+        timeout-minutes: 40  # each file is saved as soon as it is ready: what came is kept even when this stops
         run: uv run python scripts/policy.py --atualizar
       - name: Guardar
         if: ${{ !cancelled() }}

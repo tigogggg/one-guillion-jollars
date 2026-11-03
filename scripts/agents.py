@@ -1502,13 +1502,14 @@ def s_campeao(cfg, port, mkt, p):
                      "setor forte: " + ", ".join(SECTORS_PT.get(s, s) for s in top))
 
 
-def agenda_scores(mkt: Market, sectors: list[str], p: dict) -> dict[str, float]:
-    """Each sector's political-agenda score (policy.py): where public contract spending is growing more than usual,
-    the least exposed to policy uncertainty, the strongest over 3 months against the S&P 500 (as a z-score across these
-    sectors), minus the growth of its companies' investment (a guard). A missing signal counts 0."""
+def agenda_scores(mkt: Market, sectors: list[tuple[str, bool]], p: dict) -> dict[tuple[str, bool], float]:
+    """Each sector's political-agenda score (policy.py), per region ((sector, US?): the American sectors with the US
+    signals, the European ones with Europe's): where public spending is growing more than usual, the least exposed to
+    policy uncertainty, the strongest over 3 months against its index (as a z-score across these sectors), minus the
+    growth of its companies' investment (a guard). A missing signal counts 0."""
     import context
 
-    keys = {sec: context.sector_key(sec) for sec in sectors}
+    keys = {sec: context.sector_key(*sec) for sec in sectors}
     rs = [mkt.context.get(f"{keys[sec]}_rs") for sec in sectors]
     known = [x for x in rs if x is not None]
     mean = sum(known) / len(known) if known else 0.0
@@ -1531,11 +1532,12 @@ def s_estratega(cfg, port, mkt, p):
 
     if not due(port, mkt, p["cada"]):
         return []
-    by_sector: dict[str, list[str]] = {}
+    by_sector: dict[tuple[str, bool], list[str]] = {}
     for s, m in mkt.stocks.items():
-        if context.sector_key(m["sector"]):
-            by_sector.setdefault(m["sector"], []).append(s)
-    sectors = [sec for sec, syms in by_sector.items() if len(syms) >= 5]
+        group = (m["sector"], is_us(s))
+        if context.sector_key(*group):
+            by_sector.setdefault(group, []).append(s)
+    sectors = [sec for sec, syms in by_sector.items() if len(syms) >= p.get("min_acoes_setor", 5)]
     score = agenda_scores(mkt, sectors, p)
     top = [sec for sec in sorted(sectors, key=score.get, reverse=True) if score[sec] > 0][: p["setores"]]
     targets = []
@@ -1546,7 +1548,7 @@ def s_estratega(cfg, port, mkt, p):
     core = BENCHMARK
     weight = (1 - p["nucleo"]) * (exposure(mkt) if p["segue_zona"] else 1.0) / max(len(targets), 1)
     orders = rebalance(port, mkt, targets, weight, {core}, p.get("stop_pct"),
-                       "agenda: " + ", ".join(SECTORS_PT.get(s, s) for s in top))
+                       "agenda: " + ", ".join(SECTORS_PT.get(sec, sec) + ("" if us else " (Europa)") for sec, us in top))
     eq = equity(port, mkt)
     pos = port["positions"].get(core)
     current = position_value(mkt, core, pos) / eq if pos else 0.0
@@ -1987,25 +1989,27 @@ def tech_score(m: dict) -> float:
 SUPPORT_MAX_RISK = 0.15  # stop_suporte only when the support is at most 15% below
 
 
-def sector_state(mkt: Market, sector: str | None) -> tuple[float | None, float | None]:
-    """(sector ETF vs its 200-day average, sector 3-month return minus the S&P 500's) from the context, or Nones."""
+def sector_state(mkt: Market, sector: str | None, symbol: str | None = None) -> tuple[float | None, float | None]:
+    """(sector ETF vs its 200-day average, sector 3-month return minus its index's) from the context, or Nones: a
+    European stock (symbol) reads its STOXX Europe 600 sector against the STOXX Europe 600."""
     import context
 
-    key = context.sector_key(sector or "")
+    key = context.sector_key(sector or "", us=is_us(symbol) if symbol else True)
     if not key:
         return None, None
     return mkt.context.get(f"{key}_trend"), mkt.context.get(f"{key}_rs")
 
 
-def stock_filter(m: dict, mkt: Market, p: dict) -> str | None:
+def stock_filter(m: dict, mkt: Market, p: dict, symbol: str | None = None) -> str | None:
     """Why a stock fails the sector, moving-average and fundamental rules, or None. Missing data never blocks."""
     if p.get("filtro_setor") and m.get("sector"):
-        trend, rs = sector_state(mkt, m["sector"])
+        trend, rs = sector_state(mkt, m["sector"], symbol)
         sector = SECTORS_PT.get(m["sector"], m["sector"])
         if trend is not None and trend < 0:
             return f"setor {sector} abaixo da média de 200 dias"
         if p["filtro_setor"] >= 2 and rs is not None and rs < 0:
-            return f"setor {sector} mais fraco do que o S&P 500 em 3 meses"
+            index = "S&P 500" if symbol is None or is_us(symbol) else "STOXX Europe 600"
+            return f"setor {sector} mais fraco do que o {index} em 3 meses"
     if p.get("ema_filtro") and m.get("ema21") and m.get("ema50") and not (m["price"] > m["ema21"] > m["ema50"]):
         return "abaixo das médias exponenciais de 21 e 50 dias"
     if p.get("qualidade_fund_min") and m.get("fund_q") is not None and m["fund_q"] < p["qualidade_fund_min"]:
@@ -2087,7 +2091,7 @@ def shared_rules(orders: list[dict], port: dict, mkt: Market, p: dict) -> tuple[
             if p.get("min_tecnico") and tech_score(m) < p["min_tecnico"]:
                 notes.append(f"{o['symbol']} (score técnico {tech_score(m):.0f} < {p['min_tecnico']:.0f})")
                 continue
-            why = stock_filter(m, mkt, p)
+            why = stock_filter(m, mkt, p, o["symbol"])
             if why:
                 notes.append(f"{o['symbol']} ({why})")
                 continue
@@ -2172,7 +2176,7 @@ def decision_context(order: dict, port: dict, mkt: Market) -> dict:
         for k in ("fund_q", "fund_v", "pe", "mos"):
             if m.get(k) is not None:
                 ctx[k] = round(m[k], 2)
-        trend, _ = sector_state(mkt, m.get("sector"))
+        trend, _ = sector_state(mkt, m.get("sector"), s)
         if trend is not None:
             ctx["sector_trend"] = round(trend * 100, 1)
     score = news_score(mkt, s)

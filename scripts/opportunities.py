@@ -198,15 +198,16 @@ def build(mkt, holders: dict[str, list[str]], fetch_earnings=None) -> dict:
         base = m.get("low10_prev", m["price"] * 0.92)
         return min(base, m["price"] - 1.5 * atr) if atr else min(base, m["price"] * 0.97)
 
-    def sector_trend(m: dict) -> float | None:
+    def sector_trend(m: dict, sym: str) -> float | None:
+        import agents
         import context
 
-        key = context.sector_key(m.get("sector") or "")
+        key = context.sector_key(m.get("sector") or "", us=agents.is_us(sym))
         return (getattr(mkt, "context", {}) or {}).get(f"{key}_trend") if key else None
 
     def row(sym: str, m: dict, etf: bool = False) -> dict:
         news_score, headline = news_of(sym)
-        score, parts = safety(m, quality.get(sym), days_to(sym), news_score, mkt.zone, etf, None if etf else sector_trend(m))
+        score, parts = safety(m, quality.get(sym), days_to(sym), news_score, mkt.zone, etf, None if etf else sector_trend(m, sym))
         stop = stop_of(m, etf)
         return {
             "symbol": sym, "name": m.get("name", ""), "sector": m.get("sector", ""), "etf": etf,
@@ -220,7 +221,7 @@ def build(mkt, holders: dict[str, list[str]], fetch_earnings=None) -> dict:
             "news": headline, "held_by": holders.get(sym, []),
             "fund": {k: round(m[k], 3) for k in ("fund_q", "fund_v", "mos", "pe", "fcf_yield", "rev_growth", "op_margin", "current_ratio")
                      if m.get(k) is not None} if not etf else {},
-            "sector_trend": None if etf or sector_trend(m) is None else round(sector_trend(m) * 100, 1),
+            "sector_trend": None if etf or sector_trend(m, sym) is None else round(sector_trend(m, sym) * 100, 1),
         }
 
     def stage2(m: dict) -> bool:

@@ -84,3 +84,29 @@ def test_federal_spending_is_asked_year_by_year_and_kept(monkeypatch, tmp_path):
     n = len(calls)
     policy.download_spending()
     assert len(calls) - n == 2  # cached: only the last two fiscal years asked again
+
+
+def test_the_uncertainty_categories_are_read_from_the_authors_files(monkeypatch):
+    import io
+
+    def xlsx(frame):
+        buf = io.BytesIO()
+        frame.to_excel(buf, index=False)
+        return buf.getvalue()
+
+    cat = pd.DataFrame({"Year": [2020, 2020, None], "Month": [1, 2, None], "1. Economic Policy Uncertainty": [100, 110, None],
+                        "4. Government spending": [80, 90, None], "8. Regulation": [50, 55, None],
+                        "Financial Regulation": [10, 11, None], "6. National security": [70, 60, None]})
+    eu = pd.DataFrame({"Year": [2020, 2020], "Month": [1, 2], "European_News_Index": [200.0, 210.0]})
+
+    class Resp:
+        def __init__(self, content):
+            self.content = content
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(policy.requests, "get", lambda url, timeout, headers: Resp(xlsx(cat if "Categorical" in url else eu)))
+    out = policy.epu_site()
+    assert out["EPUGOVTSPEND"].tolist() == [80, 90] and out["EPUREG"].tolist() == [50, 55]
+    assert out["EUEPUINDXM"].index[1] == pd.Timestamp("2020-02-29") and "EPUTRADE" not in out

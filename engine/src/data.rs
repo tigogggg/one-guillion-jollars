@@ -87,6 +87,13 @@ pub struct Data {
     pub sector_epub: Vec<i32>,
     pub sector_capex: Vec<i32>,
     pub sector_has_key: Vec<u8>,
+    /// The same for a sector's European stocks (their STOXX Europe 600 sector against the STOXX Europe 600).
+    pub sector_eu_trend: Vec<i32>,
+    pub sector_eu_rs: Vec<i32>,
+    pub sector_eu_gov: Vec<i32>,
+    pub sector_eu_epub: Vec<i32>,
+    pub sector_eu_capex: Vec<i32>,
+    pub sector_eu_has_key: Vec<u8>,
     pub days: Vec<i32>,
     pub zone: Vec<u8>,
     pub sessions: Vec<i32>,

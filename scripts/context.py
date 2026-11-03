@@ -54,14 +54,25 @@ SECTOR_ETFS = {
     "Industrials": ["XLI"], "Consumer Discretionary": ["XLY"], "Consumer Staples": ["XLP"], "Utilities": ["XLU"],
     "Materials": ["XLB"], "Real Estate": ["XLRE", "IYR"], "Communication Services": ["XLC", "VOX"],
 }
+# The same sectors in Europe: iShares STOXX Europe 600 sector ETFs (Xetra, EUR), against the STOXX Europe 600
+EU_SECTOR_ETFS = {
+    "Information Technology": ["EXV3.DE"], "Financials": ["EXV1.DE"], "Energy": ["EXH1.DE"], "Health Care": ["EXV4.DE"],
+    "Industrials": ["EXH4.DE"], "Consumer Discretionary": ["EXV5.DE"], "Consumer Staples": ["EXH3.DE"],
+    "Utilities": ["EXH9.DE"], "Materials": ["EXV6.DE"], "Real Estate": ["EXI5.DE"], "Communication Services": ["EXV2.DE"],
+}
+EU_BENCHMARK = "EXSA.DE"
 CREDIT_PAIRS = [("VWEHX", "VFITX"), ("HYG", "IEF")]  # (high yield, Treasuries), longest history first
 CACHE_DIR = Path(__file__).resolve().parents[1] / "data" / "context"
 SESSIONS_3M = 63
 EPU_WINDOW = 3 * 252
 
 
-def sector_key(sector: str) -> str | None:
-    """The context prefix of a GICS sector (its main ETF), or None for an unknown sector."""
+def sector_key(sector: str, us: bool = True) -> str | None:
+    """The context prefix of a GICS sector (its main ETF; for a European stock, us=False, the STOXX Europe 600
+    sector's), or None for an unknown sector."""
+    if not us:
+        etfs = EU_SECTOR_ETFS.get(sector)
+        return f"eu_{etfs[0].split('.')[0]}" if etfs else None
     etfs = SECTOR_ETFS.get(sector)
     return f"sec_{etfs[0]}" if etfs else None
 
@@ -233,7 +244,7 @@ def download(period: str, spy: pd.DataFrame | None, fx: pd.Series | None) -> pd.
         if s is not None and len(s):
             raw[name] = s
     step("ETFs de setor")
-    sector_tickers = sorted({t for ts in SECTOR_ETFS.values() for t in ts})
+    sector_tickers = sorted({t for ts in [*SECTOR_ETFS.values(), *EU_SECTOR_ETFS.values()] for t in ts} | {EU_BENCHMARK})
     sectors = download_history(sector_tickers, period=period)
     for t, df in sectors.items():
         raw[f"etf:{t}"] = df["Close"]
@@ -300,6 +311,15 @@ def features(raw: dict[str, pd.Series]) -> pd.DataFrame:
             cols[f"{key}_trend"] = trend
         if rs is not None:
             cols[f"{key}_rs"] = rs
+    stoxx = raw.get(f"etf:{EU_BENCHMARK}")
+    for sector, (ticker,) in EU_SECTOR_ETFS.items():  # Europe: each sector against the STOXX Europe 600
+        px = raw.get(f"etf:{ticker}")
+        if px is None or px.empty:
+            continue
+        key = sector_key(sector, us=False)
+        cols[f"{key}_trend"] = px / px.rolling(200).mean() - 1
+        if stoxx is not None and not stoxx.empty:
+            cols[f"{key}_rs"] = (px / px.shift(SESSIONS_3M) - 1) - (stoxx / stoxx.shift(SESSIONS_3M) - 1).reindex(px.index)
     if not cols:
         return pd.DataFrame()
     frame = pd.DataFrame({k: v.groupby(v.index.normalize()).last() for k, v in cols.items()})

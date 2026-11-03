@@ -264,11 +264,13 @@ def test_the_desks_insights_are_recorded_without_changing_the_run(markets):
 def test_the_estratega_trades_exactly_like_python(markets, monkeypatch):
     import dataclasses
 
-    keys = ["sec_XLV", "sec_XLE", "sec_XLF", "sec_XLI"]
+    keys = ["sec_XLV", "sec_XLE", "sec_XLF", "sec_XLI", "eu_EXV4", "eu_EXH1", "eu_EXV1", "eu_EXH4"]
     agenda = []
     for k, m in enumerate(markets):
         ctx = dict(m.context)
         for j, key in enumerate(keys):  # the agenda signals move at different speeds; some missing early on
+            if key.startswith("eu_"):
+                ctx[f"{key}_trend"] = round(math.sin(k / (40 + 3 * j)), 5)
             if k > 40 * j:
                 ctx[f"{key}_gov"] = round(math.sin(k / (30 + 7 * j)), 5)
             ctx[f"{key}_epub"] = round(math.cos(k / (50 + 11 * j)), 5)
@@ -281,3 +283,7 @@ def test_the_estratega_trades_exactly_like_python(markets, monkeypatch):
     compare("estratega", {**base, "nucleo": 0.2, "setores": 2, "cada": 7, "segue_zona": 1, "stop_pct": 0.1, "peso_capex": 0},
             agenda, monkeypatch, min_trades=10)
     compare("estratega", {**base, **SHARED}, agenda, monkeypatch, min_trades=1)
+    eu = [t for t in rust_run("estratega", {**base, "min_acoes_setor": 2, "regiao": 2}, agenda)[1] if "(Europa)" in t[7]]
+    assert eu  # Europe's sectors with Europe's signals
+    compare("estratega", {**base, "min_acoes_setor": 2, "regiao": 2, "filtro_setor": 2}, agenda, monkeypatch, min_trades=5)
+    compare("estratega", {**base, "min_acoes_setor": 2}, agenda, monkeypatch, min_trades=10)
