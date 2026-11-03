@@ -313,6 +313,7 @@ class Lab:
 
     def __init__(self, intraday: dict[str, pd.DataFrame], sector_of: dict[str, str], member, days_wanted: int,
                  fx: pd.Series, ctx_frame: pd.DataFrame, funds: dict):
+        self.sector_of = dict(sector_of)
         per = {s: checkpoint_bars(df) for s, df in intraday.items()}
         self.full = {s: bars[-1] for s, bars in per.items() if len(bars[-1]) > 0}  # late listings too (valid days only)
         spy = self.full.get("SPY")
@@ -355,8 +356,23 @@ class Lab:
             pc[agents.BENCHMARK] = closes[agents.BENCHMARK]
             self.part_close.append(pc.combine_first(self.full_close.shift(1)).reindex(columns=closes.columns))
         self.cols = {c: k for k, c in enumerate(closes.columns)}
+        # today's bar so far at each checkpoint (for the engine), as day x symbol arrays in sorted(self.full) order
+        names = sorted(self.full)
+        self.part_cols = np.arange(len(names))
+        self._part_rows = {d: i for i, d in enumerate(closes.index.date)}
+        self._part = []
+        for j in range(SLOTS):
+            o = pd.DataFrame({s: self.parts[j][s]["Open"] for s in names if s in self.parts[j]}).reindex(closes.index, columns=names)
+            l = pd.DataFrame({s: self.parts[j][s]["Low"] for s in names if s in self.parts[j]}).reindex(closes.index, columns=names)
+            self._part.append((o.to_numpy(dtype=float), l.to_numpy(dtype=float)))
         self.full_values = self.full_close.to_numpy(dtype=float)
         self.part_values = [pc.to_numpy(dtype=float) for pc in self.part_close]
+
+    def part_ohlc(self, j: int, day: date) -> tuple[np.ndarray, np.ndarray]:
+        """Each symbol's open and low so far at checkpoint j of `day` (NaN: no bar), in sorted(self.full) order."""
+        i = self._part_rows[day]
+        o, l = self._part[j]
+        return o[i], l[i]
 
     def market(self, day: date, j: int | None) -> Market:
         """The market at checkpoint j of `day`, or (j=None) at its close."""
@@ -428,6 +444,54 @@ def run_reactive(strategy: str, params: dict, lab: Lab, capital: float = 1000.0)
             trades += len(agents.liquidate(port, mkt, "falência"))
             bankrupt = day.isoformat()
     return summary(port, capital, trades, sells, bankrupt)
+
+
+CHUNK_DAYS = 40  # days of checkpoints the engine gets at a time (bounded memory)
+
+
+def run_reactive_engine(jobs: list[tuple[str, dict]], lab: Lab, capital: float = 1000.0) -> list[dict]:
+    """run_reactive for many (strategy, parameters) at once in the Rust engine: one pass over the checkpoints, every
+    agent stepping through each chunk of days (the data is built once per chunk for all of them). Same results."""
+    import engine
+
+    symbols = sorted(lab.full)
+    sectors = sorted({s for s in lab.sector_of.values()} | {"Unknown"})
+    batch = engine.ogj_engine.Batch([s for s, _ in jobs], [engine.zone_params(s, p) for s, p in jobs], capital)
+    col = {s: i for i, s in enumerate(symbols)}
+    day_pos = {d: i for i, d in enumerate(lab.full_close.index.date)}
+    for c in range(0, len(lab.days), CHUNK_DAYS):
+        markets, partial, nows, rows = [], [], [], []
+        for day in lab.days[c:c + CHUNK_DAYS]:
+            for j in range(SLOTS):
+                if day not in lab.snap[j] or not lab.snap[j][day]:
+                    continue
+                markets.append(lab.market(day, j))
+                partial.append(True)
+                nows.append(checkpoint_time(day, j))
+                rows.append((j, day))
+            markets.append(lab.market(day, None))
+            partial.append(False)
+            nows.append(None)
+            rows.append((None, day))
+        part_open = np.full((len(markets), len(symbols)), np.nan)
+        part_low = np.full((len(markets), len(symbols)), np.nan)
+        for k, (j, day) in enumerate(rows):
+            if j is None:
+                continue
+            o, l = lab.part_ohlc(j, day)
+            part_open[k, lab.part_cols] = o
+            part_low[k, lab.part_cols] = l
+        data = engine.build(markets, symbols=symbols, sectors=sectors, bars_hist=lab.full,
+                            slots={"partial": partial, "part_open": part_open, "part_low": part_low, "now": nows})
+        batch.step(data, 0, len(markets))
+    out = []
+    for (strategy, _), r in zip(jobs, batch.results()):
+        history = [{"date": engine.from_day(d).isoformat(), "equity": e} for d, e in r["history"]]
+        port = {"history": history, "points": r["points"], "max_dd": r["max_dd"]}
+        sells = [{"ret": ret, "held": held} for ret, held in r["sells"]]
+        bankrupt = engine.from_day(r["bankrupt"]).isoformat() if r["bankrupt"] is not None else None
+        out.append(summary(port, capital, r["n_trades"], sells, bankrupt))
+    return out
 
 
 def run_daily(strategy: str, params: dict, lab: Lab) -> dict:
@@ -559,10 +623,16 @@ def yearly_points(equity: list[float], index: list[float], profile: str) -> list
     return pts
 
 
+def _react_params(base: dict, k: int) -> dict:
+    return {key: v for key, v in base.items() if key not in REACT_KEYS} | GRID_OR_LIVE[k]
+
+
 def _react_job(job: tuple[str, str, int, dict]) -> tuple[str, str, int, dict]:
     strategy, profile, k, base = job
-    params = {key: v for key, v in base.items() if key not in REACT_KEYS} | GRID_OR_LIVE[k]
-    r = run_reactive(strategy, params, LAB)
+    return _react_scored(strategy, profile, k, run_reactive(strategy, _react_params(base, k), LAB))
+
+
+def _react_scored(strategy: str, profile: str, k: int, r: dict) -> tuple[str, str, int, dict]:
     equity = [1 + pct / 100 for _, pct in r["curve"]]
     index = LAB.full[agents.BENCHMARK]["Close"].reindex(pd.to_datetime([d for d, _ in r["curve"]])).ffill().bfill()
     scores = yearly_points(equity, index.tolist(), profile)
@@ -602,10 +672,19 @@ def train_reactivity(profile: str, strategies: dict[str, dict], workers: int) ->
         jobs += [(s, profile, k, base) for k in range(len(GRID_OR_LIVE))
                  if k < len(GRID) or GRID_OR_LIVE[k] == lives[s]]
     out: dict = {}
-    with multiprocessing.get_context("fork").Pool(workers) as pool:
-        for s, prof, k, r in pool.imap_unordered(_react_job, jobs):
-            out.setdefault(s, {"runs": []})["runs"].append(r)
-            print(f"Reatividade {profile}: {sum(len(v['runs']) for v in out.values())}/{len(jobs)}", flush=True)
+    import engine
+
+    if engine.ogj_engine is not None and all(engine.enabled(s) for s, _, _, _ in jobs):  # one pass in the Rust engine
+        runs = run_reactive_engine([(s, _react_params(base, k)) for s, _, k, base in jobs], LAB)
+        for (s, prof, k, _), r in zip(jobs, runs):
+            _, _, _, scored = _react_scored(s, prof, k, r)
+            out.setdefault(s, {"runs": []})["runs"].append(scored)
+        print(f"Reatividade {profile}: {len(jobs)} execuções no motor Rust", flush=True)
+    else:
+        with multiprocessing.get_context("fork").Pool(workers) as pool:
+            for s, prof, k, r in pool.imap_unordered(_react_job, jobs):
+                out.setdefault(s, {"runs": []})["runs"].append(r)
+                print(f"Reatividade {profile}: {sum(len(v['runs']) for v in out.values())}/{len(jobs)}", flush=True)
     for s, v in out.items():
         agent_id, p = agents_of[s]
         v["runs"].sort(key=lambda r: GRID_OR_LIVE.index(r["config"]))

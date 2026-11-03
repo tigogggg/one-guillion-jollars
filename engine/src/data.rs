@@ -92,6 +92,17 @@ pub struct Data {
     /// Past earnings dates per symbol (sorted), when the markets carry them.
     pub earnings: Option<Vec<Vec<i32>>>,
     pub day_index: HashMap<i32, usize>,
+    /// Slots taken during a session (the intraday rounds and the lab's checkpoints): the day so far.
+    pub partial: Vec<bool>,
+    /// Today's bar so far in a partial slot (slot x symbol; NaN: no bar today yet): its open and its low.
+    pub part_open: Vec<f64>,
+    pub part_low: Vec<f64>,
+    /// Each symbol's exchange, and each exchange's session in each slot (agents.market_open, session_minutes).
+    pub sym_ex: Vec<u16>,
+    pub n_ex: usize,
+    pub ex_open: Vec<bool>,
+    pub ex_since: Vec<f64>,
+    pub ex_to_close: Vec<f64>,
 }
 
 /// Field indexes the engine reads, resolved once.
@@ -134,6 +145,73 @@ impl Data {
     #[inline]
     pub fn val(&self, rows: &Rows, row: usize, field: usize) -> f64 {
         rows.val[row * self.n_fields + field] as f64
+    }
+
+    /// Today's bar so far of a symbol in a partial slot: (open, low).
+    pub fn part_bar(&self, d: usize, s: usize) -> Option<(f64, f64)> {
+        if !self.partial.get(d).copied().unwrap_or(false) || self.part_open.is_empty() {
+            return None;
+        }
+        let i = d * self.n_syms + s;
+        let o = self.part_open[i];
+        if o.is_nan() && self.part_low[i].is_nan() {
+            None
+        } else {
+            Some((o, self.part_low[i]))
+        }
+    }
+
+    /// The bars a slot sees for a symbol after `after` (exclusive) up to the slot's day: the complete days, and in a
+    /// partial slot today's bar so far instead of the complete one. (day, open, high, low, close); a partial bar has
+    /// no high or close (NaN): nothing reads them during the session.
+    pub fn bars_after(&self, d: usize, s: usize, after: i32) -> Vec<(i32, f64, f64, f64, f64)> {
+        let b = &self.bars[s];
+        let day = self.days[d];
+        let partial = self.partial.get(d).copied().unwrap_or(false);
+        let i0 = b.day.partition_point(|&x| x <= after);
+        let i1 = if partial { b.day.partition_point(|&x| x < day) } else { b.day.partition_point(|&x| x <= day) };
+        let mut out: Vec<(i32, f64, f64, f64, f64)> =
+            (i0..i1.max(i0)).map(|i| (b.day[i], b.open[i], b.high[i], b.low[i], b.close[i])).collect();
+        if partial && day > after {
+            if let Some((o, l)) = self.part_bar(d, s) {
+                out.push((day, o, f64::NAN, l, f64::NAN));
+            }
+        }
+        out
+    }
+
+    /// The date of the last bar a slot sees for a symbol (today's when its session has a bar already), or None.
+    pub fn last_bar_day(&self, d: usize, s: usize) -> Option<i32> {
+        if self.part_bar(d, s).is_some() {
+            return Some(self.days[d]);
+        }
+        let b = &self.bars[s];
+        let day = self.days[d];
+        let partial = self.partial.get(d).copied().unwrap_or(false);
+        let i = if partial { b.day.partition_point(|&x| x < day) } else { b.day.partition_point(|&x| x <= day) };
+        if i == 0 { None } else { Some(b.day[i - 1]) }
+    }
+
+    /// The close of the last complete session before today's bar (agents.move_today's reference), with how many bars
+    /// the slot sees (Python needs at least two).
+    pub fn prev_close(&self, d: usize, s: usize) -> Option<f64> {
+        let b = &self.bars[s];
+        let day = self.days[d];
+        let partial = self.partial.get(d).copied().unwrap_or(false);
+        let complete = if partial { b.day.partition_point(|&x| x < day) } else { b.day.partition_point(|&x| x <= day) };
+        let today = self.part_bar(d, s).is_some() || (!partial && complete > 0 && b.day[complete - 1] == day);
+        let seen = complete + usize::from(self.part_bar(d, s).is_some());
+        if seen < 2 {
+            return None;
+        }
+        // the last bar is today's: the one before it; otherwise the last one
+        let idx = if today && !partial { complete - 2 } else { complete - 1 };
+        Some(b.close[idx])
+    }
+
+    pub fn exchange(&self, d: usize, s: usize) -> (bool, f64, f64) {
+        let e = d * self.n_ex + self.sym_ex[s] as usize;
+        (self.ex_open[e], self.ex_since[e], self.ex_to_close[e])
     }
 
     /// `m.get(field)` as Python's Row: None when the symbol's table lacks it or a nullable value is NaN.

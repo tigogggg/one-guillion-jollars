@@ -104,6 +104,8 @@ pub struct Port {
     pub taxed: Vec<i32>,
     pub zone_stats: [(f64, i64); 4],
     pub trades: Vec<Trade>,
+    /// The benchmark's close at the last history entry (score_day's reference, so a run can continue on new data).
+    pub last_bench: f64,
 }
 
 impl Port {
@@ -224,22 +226,21 @@ pub fn buy(port: &mut Port, m: &Mkt, o: &Order, price: f64, on: i32) -> Option<T
     Some(t)
 }
 
-/// agents.fill_pending (complete days only): the previous decision's orders at the open of the next session.
+/// agents.fill_pending: the previous decision's orders at the open of the next session (during a session, only at a
+/// real open: today's bar so far gives its open, never the price of the moment).
 pub fn fill_pending(port: &mut Port, m: &Mkt) -> Vec<Trade> {
     let mut done = Vec::new();
     let mut still = Vec::new();
     let mut orders = std::mem::take(&mut port.pending);
     orders.sort_by_key(|o| o.buy); // sells first (stable)
     for o in orders {
-        let bars = &m.data.bars[o.sym];
-        let i0 = bars.day.partition_point(|&x| x <= o.created);
-        let i1 = bars.day.partition_point(|&x| x <= m.day);
+        let partial_day = if m.data.partial.get(m.d).copied().unwrap_or(false) { Some(m.day) } else { None };
         let mut found: Option<(i32, f64)> = None;
-        for i in i0..i1 {
+        for (day, open, _, _, close) in m.data.bars_after(m.d, o.sym, o.created) {
             let valid = |x: f64| !x.is_nan() && x > 0.0;
-            let price = if valid(bars.open[i]) { Some(bars.open[i]) } else if valid(bars.close[i]) { Some(bars.close[i]) } else { None };
+            let price = if valid(open) { Some(open) } else if Some(day) != partial_day && valid(close) { Some(close) } else { None };
             if let Some(p) = price {
-                found = Some((bars.day[i], p));
+                found = Some((day, p));
                 break;
             }
         }
@@ -272,26 +273,25 @@ pub fn fill_pending(port: &mut Port, m: &Mkt) -> Vec<Trade> {
 pub fn check_exits(port: &mut Port, m: &Mkt) -> Vec<Trade> {
     let mut done = Vec::new();
     let held: Vec<usize> = port.positions.keys().copied().collect();
+    let open_day = if m.data.partial.get(m.d).copied().unwrap_or(false) { Some(m.day) } else { None };
     for s in held {
-        let bars = &m.data.bars[s];
         let Some(pos) = port.positions.get(&s).cloned() else { continue };
-        let i0 = bars.day.partition_point(|&x| x <= pos.checked);
-        let i1 = bars.day.partition_point(|&x| x <= m.day);
-        for i in i0..i1 {
-            let on = bars.day[i];
+        for (on, open, high, low, _) in m.data.bars_after(m.d, s, pos.checked) {
             let stop = port.positions[&s].stop;
             let tp = port.positions[&s].tp;
-            if truthy(stop) && bars.low[i] <= stop.unwrap() {
+            if truthy(stop) && low <= stop.unwrap() {
                 let st = stop.unwrap();
-                done.push(sell(port, m, s, py_min(bars.open[i], st), on, "stop", 1.0));
+                done.push(sell(port, m, s, py_min(open, st), on, "stop", 1.0));
                 break;
             }
-            if truthy(tp) && bars.high[i] >= tp.unwrap() {
+            if truthy(tp) && Some(on) != open_day && high >= tp.unwrap() {
                 let t = tp.unwrap();
-                done.push(sell(port, m, s, py_max(bars.open[i], t), on, "alvo", 1.0));
+                done.push(sell(port, m, s, py_max(open, t), on, "alvo", 1.0));
                 break;
             }
-            port.positions.get_mut(&s).unwrap().checked = on;
+            if Some(on) != open_day {
+                port.positions.get_mut(&s).unwrap().checked = on;
+            }
         }
     }
     done
@@ -350,9 +350,8 @@ pub fn pay_taxes(port: &mut Port, m: &Mkt) -> Option<Trade> {
     last
 }
 
-/// agents.benchmark_return between the ends of two market days (the benchmark's close at each).
-fn benchmark_return(m: &Mkt, since_d: usize) -> f64 {
-    let a = m.data.bench[since_d];
+/// agents.benchmark_return between the end of the last history entry and the end of this day.
+fn benchmark_return(m: &Mkt, a: f64) -> f64 {
     let b = m.data.bench[m.d];
     if a.is_nan() || b.is_nan() || a == 0.0 {
         0.0
@@ -369,10 +368,9 @@ pub fn score_day(port: &mut Port, m: &Mkt) {
     port.peak = Some(peak);
     let dd = py_max(0.0, 1.0 - ratio / peak);
     port.max_dd = round_to(py_max(port.max_dd, dd), 4);
-    if let Some(&(prev_day, prev_eq)) = port.hist.last() {
+    if let Some(&(_, prev_eq)) = port.hist.last() {
         let day = if prev_eq != 0.0 { eq / prev_eq - 1.0 } else { 0.0 };
-        let since = *m.data.day_index.get(&prev_day).expect("dia anterior fora dos dados");
-        let excess = day - benchmark_return(m, since);
+        let excess = day - benchmark_return(m, port.last_bench);
         let z = &mut port.zone_stats[m.zone];
         z.0 = round_to(z.0 + excess, 6);
         z.1 += 1;
@@ -381,6 +379,7 @@ pub fn score_day(port: &mut Port, m: &Mkt) {
         port.points += pts;
     }
     port.hist.push((m.day, round_to(eq, 2)));
+    port.last_bench = m.data.bench[m.d];
 }
 
 pub fn is_bankrupt(port: &Port, m: &Mkt) -> bool {

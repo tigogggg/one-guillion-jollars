@@ -2,6 +2,7 @@
 
 pub mod data;
 pub mod engine;
+pub mod live;
 pub mod pyround;
 pub mod strategies;
 
@@ -27,6 +28,14 @@ fn list<'py, T: for<'a> FromPyObjectOwned<'a>>(d: &Bound<'py, PyDict>, k: &str) 
 }
 
 use pyo3::conversion::FromPyObjectOwned;
+
+/// An optional array (absent: empty).
+fn opt_arr<'py, T: numpy::Element + Copy>(d: &Bound<'py, PyDict>, k: &str) -> PyResult<Vec<T>> {
+    if d.get_item(k)?.is_none() {
+        return Ok(Vec::new());
+    }
+    arr(d, k)
+}
 
 fn rows(d: &Bound<'_, PyDict>, prefix: &str, n_days: usize, n_syms: usize) -> PyResult<Rows> {
     let mut r = Rows {
@@ -118,6 +127,14 @@ impl EngineData {
             ctx_val: arr::<f64>(d, "ctx_val")?,
             earnings,
             day_index: days.iter().enumerate().map(|(i, &x)| (x, i)).collect(),
+            partial: { let v = opt_arr::<u8>(d, "partial")?; if v.is_empty() { vec![false; n_days] } else { v.into_iter().map(|x| x != 0).collect() } },
+            part_open: opt_arr::<f64>(d, "part_open")?,
+            part_low: opt_arr::<f64>(d, "part_low")?,
+            sym_ex: { let v = opt_arr::<u16>(d, "sym_ex")?; if v.is_empty() { vec![0; n_syms] } else { v } },
+            n_ex: d.get_item("n_ex")?.map(|x| x.extract()).transpose()?.unwrap_or(1),
+            ex_open: { let v = opt_arr::<u8>(d, "ex_open")?; if v.is_empty() { vec![false; n_days] } else { v.into_iter().map(|x| x != 0).collect() } },
+            ex_since: { let v = opt_arr::<f64>(d, "ex_since")?; if v.is_empty() { vec![0.0; n_days] } else { v } },
+            ex_to_close: { let v = opt_arr::<f64>(d, "ex_to_close")?; if v.is_empty() { vec![0.0; n_days] } else { v } },
             days,
         };
         if data.closes.len() != n_days * n_syms || data.bench.len() != n_days || data.zone.len() != n_days {
@@ -228,9 +245,64 @@ pub fn run(d: &Data, f: &data::F, strategy: &str, params: &[P], start: usize, en
     RunResult { port, n_trades, final_equity, tax_owed, bankrupt }
 }
 
+/// Agents stepping through slots of market data, chunk after chunk (the intraday lab now; the live rounds next).
+#[pyclass]
+pub struct Batch {
+    agents: Vec<live::Agent>,
+}
+
+#[pymethods]
+impl Batch {
+    /// strategies[i] with zone_params[i] (four JSON objects, as for simulate).
+    #[new]
+    #[pyo3(signature = (strategies, zone_params, capital=1000.0))]
+    fn new(strategies: Vec<String>, zone_params: Vec<Vec<String>>, capital: f64) -> PyResult<Self> {
+        let mut agents = Vec::new();
+        for (s, zp) in strategies.iter().zip(zone_params) {
+            if !strategies::SUPPORTED.contains(&s.as_str()) {
+                return Err(PyValueError::new_err(format!("estratégia não portada: {s}")));
+            }
+            agents.push(live::Agent::new(s, parse_params(zp)?, capital));
+        }
+        Ok(Batch { agents })
+    }
+
+    /// Every agent through slots [start, end) of this data (reactive rounds at partial slots, the day's books at
+    /// complete ones), the agents in parallel.
+    fn step(&mut self, py: Python<'_>, data: &EngineData, start: usize, end: usize) -> PyResult<()> {
+        let d = &data.inner;
+        if start > end || end > d.days.len() {
+            return Err(PyValueError::new_err("intervalo de dias inválido"));
+        }
+        let f = d.f();
+        let agents = &mut self.agents;
+        py.detach(|| live::step(agents, d, &f, start, end));
+        Ok(())
+    }
+
+    /// Each agent's result: points, deepest fall, final equity, tax owed if sold, trades, bankruptcy, daily history.
+    fn results<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let out = PyList::empty(py);
+        for a in &self.agents {
+            let r = PyDict::new(py);
+            r.set_item("points", a.port.points)?;
+            r.set_item("max_dd", a.port.max_dd)?;
+            r.set_item("final", a.final_equity)?;
+            r.set_item("tax_owed", a.tax_owed)?;
+            r.set_item("n_trades", a.n_trades)?;
+            r.set_item("bankrupt", a.bankrupt)?;
+            r.set_item("sells", a.sells.clone())?;
+            r.set_item("history", a.port.hist.clone())?;
+            out.append(r)?;
+        }
+        Ok(out)
+    }
+}
+
 #[pymodule]
 fn ogj_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EngineData>()?;
+    m.add_class::<Batch>()?;
     m.add_function(wrap_pyfunction!(simulate, m)?)?;
     m.add("SUPPORTED", strategies::SUPPORTED.to_vec())?;
     Ok(())

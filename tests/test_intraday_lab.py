@@ -117,3 +117,29 @@ def test_reactivity_training_runs_every_level_for_each_strategy(monkeypatch):
     v = out["foguetao"]
     assert len(v["runs"]) == len(lab.GRID) and v["live"] == {"reatividade": 2} and v["europe_only"]
     assert v["chosen"] in lab.GRID and all(len(r["years"]) >= 1 for r in v["runs"])
+
+
+@pytest.mark.parametrize("strategy,params", [
+    ("foguetao", {"n": 3, "cada": 5, "stop_pct": 0.1}),
+    ("foguetao", {"n": 3, "cada": 5, "stop_pct": 0.05, "reatividade": 0}),
+    ("foguetao", {"n": 3, "cada": 4, "stop_pct": 0.06, "reatividade": 1, "espera_min": 90, "esticado_max": 0.01}),
+    ("sniper", {"n": 3, "risco_pct": 0.02, "aperto_pct": 0.2, "max_pos": 0.3}),
+    ("pescador", {"n": 3, "queda_pct": 0.01, "alvo_pct": 0.02, "stop_pct": 0.03, "max_dias": 5}),
+    ("kamikaze", {"n": 2, "stop_pct": 0.05, "cada": 3, "ignora_risco": True, "ignora_resultados": True}),
+])
+def test_the_engine_replays_the_checkpoints_exactly_like_python(strategy, params, monkeypatch):
+    import engine
+
+    if engine.ogj_engine is None:
+        pytest.skip("Rust engine not built")
+    intra = {"SPY": intraday(300, seed=1), "AAA": intraday(300, seed=2), "BBB": intraday(300, seed=4),
+             "CCC": intraday(300, seed=6), "DDD": intraday(300, seed=8)}
+    fx = pd.Series(1.1, index=pd.bdate_range("2023-12-01", periods=400))
+    sectors = {"AAA": "Industrials", "BBB": "Health Care", "CCC": "Energy", "DDD": "Technology"}
+    built = lab.Lab(intra, sectors, None, 60, fx, pd.DataFrame(), {})
+    monkeypatch.setattr(lab, "CHUNK_DAYS", 7)  # several chunks: the agents carry their state across them
+    py = lab.run_reactive(strategy, params, built)
+    rs = lab.run_reactive_engine([(strategy, params)], built)[0]
+    for k in ("points", "return", "max_drawdown", "trades", "bankrupt", "trade_stats", "curve"):
+        assert rs[k] == py[k], k
+    assert py["trades"] > 0

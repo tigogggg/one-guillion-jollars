@@ -94,20 +94,30 @@ def _rows(markets: list, attr: str, sym_ix: dict, fields: list, field_ix: dict, 
             "trend": np.array(trend, dtype=np.float64), "stage2": np.array(stage2, dtype=np.uint8), "present": present}
 
 
-def build(markets: list) -> "ogj_engine.EngineData":
-    """The engine's data for these consecutive markets (the days of a backtest)."""
-    hist = markets[-1].hist
-    symbols: list[str] = []
-    sym_ix: dict[str, int] = {}
+def build(markets: list, symbols: list[str] | None = None, sectors: list[str] | None = None, bars_hist: dict | None = None,
+          slots: dict | None = None) -> "ogj_engine.EngineData":
+    """The engine's data for these consecutive markets (the days of a backtest, or slots of sessions).
+
+    symbols, sectors: fixed lists, so that agents stepping through several chunks of data (Batch) keep their symbols;
+    bars_hist: the complete daily bars (default: the last market's hist); slots: sessions under way, as
+    {"partial": [bool per market], "part_open"/"part_low": arrays markets x symbols (today's bar so far, NaN: none),
+    "now": [datetime per market]} (see intraday_lab)."""
+    hist = bars_hist if bars_hist is not None else markets[-1].hist
+    fixed = symbols is not None
+    symbols = list(symbols or [])
+    sym_ix: dict[str, int] = {s: i for i, s in enumerate(symbols)}
 
     def add(s: str) -> None:
         if s not in sym_ix:
+            if fixed:
+                raise ValueError(f"símbolo fora da lista fixa: {s}")
             sym_ix[s] = len(symbols)
             symbols.append(s)
 
     closes0 = markets[0].closes
     for s in (getattr(closes0, "_cols", None) or {}):
-        add(s)
+        if not fixed:
+            add(s)
     for mkt in markets:
         for s in list(mkt.stocks) + list(mkt.etfs):
             add(s)
@@ -122,7 +132,7 @@ def build(markets: list) -> "ogj_engine.EngineData":
                         fields.append(c)
     if len(fields) > 64:
         raise ValueError(f"demasiados campos para a máscara: {len(fields)}")
-    sector_ix: dict[str, int] = {}
+    sector_ix: dict[str, int] = {x: i for i, x in enumerate(sectors or [])}
     nullable: set[str] = set()
     stocks = _rows(markets, "stocks", sym_ix, fields, field_ix, sector_ix, nullable)
     etfs = _rows(markets, "etfs", sym_ix, fields, field_ix, sector_ix, nullable)
@@ -132,8 +142,10 @@ def build(markets: list) -> "ogj_engine.EngineData":
         c = mkt.closes
         if c is not None and hasattr(c, "_cols"):
             cols = c._cols
-            idx = np.array([sym_ix[s] for s in cols], dtype=np.int64)
-            closes[k, idx] = c._v
+            pairs = [(j, sym_ix[s]) for s, j in cols.items() if s in sym_ix]
+            src = np.array([j for j, _ in pairs], dtype=np.int64)
+            dst = np.array([i for _, i in pairs], dtype=np.int64)
+            closes[k, dst] = np.asarray(c._v)[src]
         else:
             for s in symbols:
                 v = agents.last_close(mkt, s)
@@ -220,6 +232,25 @@ def build(markets: list) -> "ogj_engine.EngineData":
     for prefix, rows in (("stock", stocks), ("etf", etfs)):
         for k, v in rows.items():
             data[f"{prefix}_{k}"] = v
+    exchanges = sorted({agents.exchange_of(s) for s in symbols})
+    data["sym_ex"] = np.array([exchanges.index(agents.exchange_of(s)) for s in symbols], dtype=np.uint16)
+    data["n_ex"] = len(exchanges)
+    if slots:
+        data["partial"] = np.array(slots["partial"], dtype=np.uint8)
+        data["part_open"] = np.asarray(slots["part_open"], dtype=float).ravel()
+        data["part_low"] = np.asarray(slots["part_low"], dtype=float).ravel()
+        ex_open = np.zeros((n_days, len(exchanges)), dtype=np.uint8)
+        ex_since, ex_to_close = np.zeros((n_days, len(exchanges))), np.zeros((n_days, len(exchanges)))
+        probe = {e: next(s for s in symbols if agents.exchange_of(s) == e) for e in exchanges}
+        for k, now in enumerate(slots["now"]):
+            if now is None:
+                continue
+            for j, e in enumerate(exchanges):
+                if e == "=X":
+                    continue
+                ex_open[k, j] = 1 if agents.market_open(probe[e], now) else 0
+                ex_since[k, j], ex_to_close[k, j] = agents.session_minutes(probe[e], now)
+        data["ex_open"], data["ex_since"], data["ex_to_close"] = ex_open.ravel(), ex_since.ravel(), ex_to_close.ravel()
     if markets[-1].earnings_dates is not None:
         dates = markets[-1].earnings_dates
         off, days = [0], []

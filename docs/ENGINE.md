@@ -39,8 +39,10 @@ scripts/pretrain.py ──► scripts/engine.py ──► ogj_engine (Rust: engi
    - **What stays in Python:** collecting data (prices, news, SEC, FRED, Claude), the agents' lifecycle (twins,
      profiles, bankruptcies and children, monthly mutation), Discord, the portal and charts. The live state stays the
      JSON in the private repo; the engine reads the fields it trades with and Python writes them back.
-   - **4a — intraday lab on the engine:** the lab's 30-minute checkpoints (each a market with the day so far) run
-     `react` in Rust. Parity with Python on the lab's synthetic days, then the reactivity training takes minutes.
+   - **4a — intraday lab on the engine (done):** the lab's 30-minute checkpoints (each a market with the day so far)
+     run `react`, `live_exits` and the fills and stops of a session under way in Rust (`engine/src/live.rs`), many
+     agents at once through chunks of days (`ogj_engine.Batch`). Same results as Python (tests/test_intraday_lab.py);
+     12 runs over 250 days: 124 s in Python, 2.2 s in Rust.
    - **4b — shadow rounds:** every live round also runs the engine on the same state and market, without saving;
      any difference from Python is written to the private repo. A week without differences, on real rounds.
    - **4c — switch:** the rounds trade with the engine; the Python copy of the engine is deleted.
