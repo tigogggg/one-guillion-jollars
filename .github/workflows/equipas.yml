@@ -20,6 +20,10 @@ on:
         description: "Semente da procura (outra semente: ver se a escolha se mantém)"
         required: false
         default: "0"
+      mesas:
+        description: "Parâmetros das mesas: treinadas (os dos agentes) ou padrao (os originais, sem otimismo do treino)"
+        required: false
+        default: "treinadas"
 
 permissions:
   contents: read
@@ -80,6 +84,7 @@ jobs:
           PRETRAIN_PERFIL: ${{ matrix.perfil }}
           EQUIPAS_PROCURA: ${{ inputs.procura || '80' }}
           EQUIPAS_SEMENTE: ${{ inputs.semente || '0' }}
+          EQUIPAS_MESAS: ${{ inputs.mesas || 'treinadas' }}
         run: uv run python scripts/teams.py --perfil "${{ matrix.perfil }}" --contexto ctx/context.csv
       - name: Guardar no repositório privado
         working-directory: agents

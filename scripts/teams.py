@@ -87,11 +87,18 @@ MAX_DESK = 0.4
 OUT_DIR = agents.REPO_AGENTS / "lab"
 
 
+DESKS = os.environ.get("EQUIPAS_MESAS") or "treinadas"  # "padrao": the strategies' original parameters (never fitted)
+
+
 def desk_params(strategy: str, profile: str) -> dict:
-    """The parameters this profile's agent of the strategy trades with (as the pre-training simulates them)."""
+    """The parameters this profile's agent of the strategy trades with (as the pre-training simulates them); with
+    EQUIPAS_MESAS=padrao the original ones: the trained ones were chosen on these same years, so a team built on them
+    inherits that optimism (the walk-forward of the team cannot see it)."""
     import pretrain
 
     params = {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES[strategy][2]}
+    if DESKS == "padrao":
+        return params
     try:
         report = json.loads(agents.pretrain_path(profile).read_text())
         params.update(report["strategies"][strategy].get("chosen") or {})
@@ -279,7 +286,7 @@ def run_team(p: dict, members: list[str], desks: dict, weights: dict, markets: l
     cash = capital
     realized: dict[int, float] = {}
     paid: set[int] = set()
-    target = None
+    target, picks = None, None
     curve, exposure = np.zeros(hi - lo), np.zeros(hi - lo)
     trades, turnover, peak = 0, 0.0, capital
     for i in range(lo, hi):
@@ -337,13 +344,13 @@ def run_team(p: dict, members: list[str], desks: dict, weights: dict, markets: l
         now = curve[i - lo] = cash + value.sum()
         exposure[i - lo] = value.sum() / now if now > 0 else 0.0
         peak = max(peak, now)
-        if (i - lo) % p["cada"]:
-            continue
-        # the decision at today's close, for tomorrow's open
-        a = manager(p["gestor"], equities, i)
-        if p["corte_mesa"]:
-            a = pod_cut(a, equities, peaks, desk_vol, i)
-        w = target_weights(p, members, weights, a, i)
+        # the picks (manager and desks) every `cada` sessions; the risk manager every day (as LEAN's ManageRisk)
+        if (i - lo) % p["cada"] == 0 or picks is None:
+            a = manager(p["gestor"], equities, i)
+            if p["corte_mesa"]:
+                a = pod_cut(a, equities, peaks, desk_vol, i)
+            picks = target_weights(p, members, weights, a, i)
+        w = picks.copy()
         invested = float(w.sum())
         refuge_w = 0.0
         if p["tendencia"] and bench is not None and i >= TREND_DAYS:  # the risk manager: the index's trend...
@@ -549,14 +556,14 @@ def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, s
 def save(result: dict) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     profile = result["profile"]
-    seed = f"-s{result['seed']}" if result.get("seed") else ""
+    seed = (f"-s{result['seed']}" if result.get("seed") else "") + ("-padrao" if result.get("desks") == "padrao" else "")
     (OUT_DIR / f"equipas-{profile}-{date.today().isoformat()}{seed}.json").write_text(json.dumps(result, ensure_ascii=False, indent=1) + "\n")
     hist_path = OUT_DIR / f"equipas_historico-{profile}.json"
     try:
         history = json.loads(hist_path.read_text())
     except (OSError, ValueError):
         history = []
-    summary = {k: result.get(k) for k in ("at", "profile", "broker", "days", "exam", "seed")}
+    summary = {k: result.get(k) for k in ("at", "profile", "broker", "days", "exam", "seed", "desks")}
     summary["index"] = {k: result["index"][k] for k in ("return", "return_after_tax", "max_drawdown")}
     summary["teams"] = {k: {x: t[x] for x in ("overall", "exam", "years_beating_index", "return_after_tax", "max_drawdown", "exposure")}
                         for k, t in result["teams"].items()}
@@ -579,6 +586,7 @@ def main() -> int:
     seed = int(os.environ.get("EQUIPAS_SEMENTE") or 0)
     result = analyse(markets, a.perfil, agents.real_capital(), seed=seed)
     result["seed"] = seed
+    result["desks"] = DESKS
     save(result)
     print("Equipas: resultados guardados no repositório privado.", flush=True)
     return 0
