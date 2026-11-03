@@ -35,10 +35,12 @@ import re
 import statistics
 import sys
 import unicodedata
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 
+import numpy as np
 import pandas as pd
 
 import discord_bot
@@ -770,6 +772,29 @@ def fx_series(mkt: Market, currency: str) -> pd.Series | None:
     return mkt.fx if currency == "USD" else mkt.fx_rates.get(currency)
 
 
+# numpy copies of price and rate series, kept per object (the backtest asks the same ones millions of times; pandas
+# label lookups were most of its time). Weak references: a series that is gone frees its copy.
+_NP: dict[tuple, tuple] = {}
+
+
+def _np_of(obj, build):
+    key = (id(obj), build)
+    hit = _NP.get(key)
+    if hit is not None and hit[0]() is obj:
+        return hit[1]
+    if len(_NP) > 20000:
+        for k in [k for k, v in _NP.items() if v[0]() is None]:
+            del _NP[k]
+    value = build(obj)
+    _NP[key] = (weakref.ref(obj), value)
+    return value
+
+
+def _rate_arrays(series: pd.Series) -> tuple[np.ndarray, np.ndarray]:
+    clean = series.dropna()
+    return clean.index.values.astype("datetime64[ns]").astype(np.int64), clean.to_numpy(dtype=float)
+
+
 def to_eur(mkt: Market, symbol: str, price: float, on: date) -> float:
     ccy = currency_of(symbol)
     if ccy == "EUR":
@@ -777,8 +802,10 @@ def to_eur(mkt: Market, symbol: str, price: float, on: date) -> float:
     series = fx_series(mkt, ccy)
     if series is None or not len(series):
         raise KeyError(f"sem câmbio para {ccy} ({symbol})")
-    rate = series.asof(pd.Timestamp(on))
-    eur = price / float(series.iloc[0] if pd.isna(rate) else rate)
+    when, rates = _np_of(series, _rate_arrays)  # = series.asof(on), the first rate before any
+    i = np.searchsorted(when, np.datetime64(on, "ns").astype(np.int64), side="right") - 1
+    rate = rates[i] if i >= 0 and len(rates) else float(series.iloc[0])
+    eur = price / float(rate)
     return eur / 100 if ccy == "GBp" else eur
 
 
@@ -800,6 +827,25 @@ def fix_pence(df: pd.DataFrame) -> pd.DataFrame:
 def bars_between(df: pd.DataFrame, after: date, until: date) -> pd.DataFrame:
     """Rows dated after `after` up to and including `until` (index sorted by date)."""
     return df.loc[pd.Timestamp(after) + pd.Timedelta(days=1): pd.Timestamp(until) + pd.Timedelta(hours=23)]
+
+
+def _bar_arrays(df: pd.DataFrame) -> tuple:
+    days = df.index.values.astype("datetime64[D]")
+    cols = tuple(df[c].to_numpy(dtype=float) for c in ("Open", "High", "Low", "Close"))
+    return (days, *cols)
+
+
+def _close_arrays(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    return _rate_arrays(df["Close"])
+
+
+def bars_after(df: pd.DataFrame, after: date, until: date):
+    """(day, open, high, low, close) of the rows dated after `after` up to `until`, as bars_between, without pandas."""
+    days, o, h, l, c = _np_of(df, _bar_arrays)
+    i0 = np.searchsorted(days, np.datetime64(after, "D"), side="right")
+    i1 = np.searchsorted(days, np.datetime64(until, "D"), side="right")
+    for i in range(i0, i1):
+        yield days[i].astype(date), o[i], h[i], l[i], c[i]
 
 
 def last_close(mkt: Market, symbol: str) -> float | None:
@@ -942,12 +988,11 @@ def fill_pending(port: dict, mkt: Market, partial_day: date | None = None) -> li
     # sells first, so their cash is available to the buys
     for order in sorted(port["pending"], key=lambda o: o["side"] != "sell"):
         df = mkt.hist.get(order["symbol"])
-        after = None if df is None else bars_between(df, date.fromisoformat(order["created"]), mkt.as_of)
+        after = () if df is None else bars_after(df, date.fromisoformat(order["created"]), mkt.as_of)
         on, price = None, None
-        for idx, bar in (after.iterrows() if after is not None else ()):  # the first session with a valid price
-            day = idx.date()
-            cols = ("Open",) if day == partial_day else ("Open", "Close")  # broken bars: the close, on complete days
-            price = next((float(bar[c]) for c in cols if pd.notna(bar[c]) and float(bar[c]) > 0), None)
+        for day, b_open, _, _, b_close in after:  # the first session with a valid price
+            values = (b_open,) if day == partial_day else (b_open, b_close)  # broken bars: the close, on complete days
+            price = next((float(v) for v in values if pd.notna(v) and float(v) > 0), None)
             if price is not None:
                 on = day
                 break
@@ -987,16 +1032,14 @@ def check_exits(port: dict, mkt: Market, open_day: date | None = None) -> list[d
         df = mkt.hist.get(symbol)
         if df is None:
             continue
-        bars = bars_between(df, date.fromisoformat(pos["checked"]), mkt.as_of)
-        for idx, bar in bars.iterrows():
-            on = idx.date()
-            if pos.get("stop") and bar["Low"] <= pos["stop"]:
-                done.append(sell(port, mkt, symbol, min(float(bar["Open"]), pos["stop"]), on, "stop",
-                                 ctx={"stop": round(pos["stop"], 4), "entry": round(pos["entry"], 4), "low": round(float(bar["Low"]), 4)}))
+        for on, b_open, b_high, b_low, _ in bars_after(df, date.fromisoformat(pos["checked"]), mkt.as_of):
+            if pos.get("stop") and b_low <= pos["stop"]:
+                done.append(sell(port, mkt, symbol, min(float(b_open), pos["stop"]), on, "stop",
+                                 ctx={"stop": round(pos["stop"], 4), "entry": round(pos["entry"], 4), "low": round(float(b_low), 4)}))
                 break
-            if pos.get("tp") and bar["High"] >= pos["tp"] and on != open_day:
-                done.append(sell(port, mkt, symbol, max(float(bar["Open"]), pos["tp"]), on, "alvo",
-                                 ctx={"tp": round(pos["tp"], 4), "entry": round(pos["entry"], 4), "high": round(float(bar["High"]), 4)}))
+            if pos.get("tp") and b_high >= pos["tp"] and on != open_day:
+                done.append(sell(port, mkt, symbol, max(float(b_open), pos["tp"]), on, "alvo",
+                                 ctx={"tp": round(pos["tp"], 4), "entry": round(pos["entry"], 4), "high": round(float(b_high), 4)}))
                 break
             if on != open_day:
                 pos["checked"] = on.isoformat()
@@ -1025,9 +1068,11 @@ def benchmark_return(mkt: Market, since: date, until: date) -> float:
     df = mkt.hist.get(BENCHMARK)
     if df is None:
         return 0.0
-    close = df["Close"]
-    a = close.asof(pd.Timestamp(since) + pd.Timedelta(hours=23))
-    b = close.asof(pd.Timestamp(until) + pd.Timedelta(hours=23))
+    when, closes = _np_of(df, _close_arrays)
+    def at(d: date):  # = close.asof(the end of that day)
+        i = np.searchsorted(when, (np.datetime64(d, "ns") + np.timedelta64(23, "h")).astype(np.int64), side="right") - 1
+        return closes[i] if i >= 0 else np.nan
+    a, b = at(since), at(until)
     return 0.0 if pd.isna(a) or pd.isna(b) or not a else float(b / a - 1)
 
 
@@ -1133,7 +1178,9 @@ def train(cfg: dict, port: dict, mkt: Market) -> str | None:
 def sessions_since(mkt: Market, since: str | None) -> int:
     if not since:
         return 10**6
-    return sum(1 for d in mkt.sessions if d > date.fromisoformat(since))
+    from bisect import bisect_right
+
+    return len(mkt.sessions) - bisect_right(mkt.sessions, date.fromisoformat(since))  # sessions are sorted
 
 
 def due(port: dict, mkt: Market, every: int) -> bool:
