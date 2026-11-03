@@ -64,7 +64,8 @@ export function mergeProfiles(main, others) {
     for (const a of data.agents || []) {
       const name = rename(a.name);
       if (out.agents.some((b) => b.name === name)) continue;
-      out.agents.push({ ...a, name, perfil: profile });
+      const id = profile === "equilibrado" || !a.id || a.id === "indexador" || a.id.endsWith("-" + profile) ? a.id : a.id + "-" + profile;
+      out.agents.push({ ...a, name, id, perfil: profile });
     }
   };
   add(main, "equilibrado");
@@ -738,6 +739,22 @@ function agentPicker(listId, items, ret, pick, groupOf) {
 const agentGroup = (a) => a.modo === "diario" || / · diário$/.test(a.name) ? "📅 Diários (decidem às 07:30)"
   : a.perfil === "conservador" ? "🛡️ Perfil conservador" : a.perfil === "arrojado" ? "🔥 Perfil arrojado" : "⚡ Reativos · perfil equilibrado";
 const markAgent = agentPicker("chips", agents, headline, (i) => show(i, true), agentGroup);
+
+// A pre-training run as "45ª · 03/11" (💻 on the PC; 🛡️/🔥 the conservative or aggressive profile's run).
+const fmtRun = (r, i) => (i + 1) + "ª · " + new Date(r.at).toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" }) +
+  (r.source === "local" ? " 💻" : "") + ({ conservador: " 🛡️", arrojado: " 🔥" }[r.perfil] || "");
+// One agent's changes between its pre-training runs (EVOLUTION.changes), newest first, as a chapter of its sheet.
+function changesHtml(a) {
+  const E = typeof EVOLUTION === "undefined" ? null : EVOLUTION;
+  if (!E || !a.id) return "";
+  const base = a.id.replace(/-(conservador|arrojado)$/, ""), profile = a.perfil || "equilibrado";
+  const key = profile === "equilibrado" || base === "indexador" ? base : base + "-" + profile;
+  const list = ((E.changes || {})[key] || []).slice().reverse();
+  const code = (ks) => ks.map((k) => '<code>' + esc(k) + '</code>').join(" ") || "—";
+  return '<h3>🔧 Histórico de mudanças (' + list.length + ')</h3>' + (list.length
+    ? table(["Execução", "Ligou", "Desligou", "Ajustou"], list.map((c) => [esc(fmtRun(E.runs[c.run], c.run)), code(c.on), code(c.off), code(c.moved)]))
+    : '<p class="muted">Sem mudanças registadas entre execuções.</p>');
+}
 
 // The sheet in expandable chapters (each <h3> and what follows it). The open ones are remembered as the person opens
 // and closes them, for every agent and the next visits.
@@ -1516,7 +1533,7 @@ if (PRETRAIN && $("pt-race")) {
   let markPt = () => {};
   const showPt = (a, scroll) => {
     markPt(ptAgents.indexOf(a));
-    $("pt-detail").innerHTML = '<div class="panel"><h2>' + esc(a.emoji + " " + a.name) + '</h2>' + (a.backtest ? backtestHtml(a) : "") + strategyHtml(a.strategy) + '</div>';
+    $("pt-detail").innerHTML = '<div class="panel"><h2>' + esc(a.emoji + " " + a.name) + '</h2>' + (a.backtest ? backtestHtml(a) : "") + changesHtml(a) + strategyHtml(a.strategy) + '</div>';
     chapters($("pt-detail").firstElementChild);
     if (scroll) $("pt-detail").scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -1541,14 +1558,16 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
   ((PRETRAIN && PRETRAIN.agents) || []).concat(agents || []).forEach((a) => { if (a && a.id) people[a.id] = a; });
   const label = (s) => people[s] ? people[s].emoji + " " + people[s].name : s;
   const metrics = [["exam", "Pontos no exame (último ano, fora do treino)"], ["ret", "Rentabilidade em 20 anos (%)"], ["dd", "Queda máxima em 20 anos (%)"], ["sharpe", "Sharpe em 20 anos"]];
-  const fmtRun = (r, i) => (i + 1) + "ª · " + new Date(r.at).toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" }) + (r.source === "local" ? " 💻" : "");
-  box.innerHTML = '<p class="muted small">Cada ponto é uma execução do pré-treino (💻 = no PC). Uma execução só troca os parâmetros de um agente quando encontra melhores no treino e no exame em conjunto.</p>' +
-    '<div class="filters"><select id="evo-m">' + metrics.map(([k, l]) => '<option value="' + k + '">' + esc(l) + '</option>').join("") + '</select></div>' +
-    '<div id="evo-chart" class="chart" style="height:420px"></div><h3>🔧 O que mudou em cada agente</h3><div id="evo-changes"></div>';
+  const profiles = [["", "Todos os perfis"], ["equilibrado", "⚖️ Equilibrado"], ["conservador", "🛡️ Conservador"], ["arrojado", "🔥 Arrojado"]];
+  const profileOf = (s) => (/-(conservador|arrojado)$/.exec(s) || [, "equilibrado"])[1];
+  box.innerHTML = '<p class="muted small">Cada ponto é uma execução do pré-treino de um perfil (💻 = no PC; 🛡️ conservador, 🔥 arrojado). Cada perfil é um agente próprio. Uma execução só troca os parâmetros de um agente quando encontra melhores no treino e no exame em conjunto; o que mudou está na ficha de cada agente, em baixo.</p>' +
+    '<div class="filters"><select id="evo-m">' + metrics.map(([k, l]) => '<option value="' + k + '">' + esc(l) + '</option>').join("") + '</select>' +
+    '<select id="evo-p">' + profiles.map(([k, l]) => '<option value="' + k + '">' + esc(l) + '</option>').join("") + '</select></div>' +
+    '<div id="evo-chart" class="chart" style="height:420px"></div>';
   const x = E.runs.map(fmtRun);
   const draw = () => {
-    const m = $("evo-m").value;
-    const traces = Object.entries(E.series).filter(([s]) => s !== "indexador" || m !== "exam").map(([s, rows]) => ({
+    const m = $("evo-m").value, p = $("evo-p").value;
+    const traces = Object.entries(E.series).filter(([s]) => (s !== "indexador" || m !== "exam") && (!p || s === "indexador" || profileOf(s) === p)).map(([s, rows]) => ({
       x, y: rows.map((r) => r ? r[m] : null), name: label(s), type: "scatter", mode: "lines+markers", connectgaps: true,
       hovertemplate: "%{y}<extra>" + esc(label(s)) + "</extra>" }));
     if (!window.Plotly) { $("evo-chart").innerHTML = '<p class="muted">Gráfico indisponível.</p>'; return; }
@@ -1557,13 +1576,8 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
       legend: window.innerWidth < 640 ? { orientation: "h", y: -0.35 } : { bgcolor: "rgba(0,0,0,0)" } }, { responsive: true, displaylogo: false });
   };
   $("evo-m").addEventListener("input", draw);
+  $("evo-p").addEventListener("input", draw);
   draw();
-  const rows = Object.entries(E.changes || {}).flatMap(([s, list]) => list.slice(-3).map((c) => [c.run, s, c]))
-    .sort((a, b) => b[0] - a[0]).slice(0, 40);
-  $("evo-changes").innerHTML = rows.length ? table(["Execução", "Agente", "Ligou", "Desligou", "Ajustou"], rows.map(([run, s, c]) => [
-    esc(fmtRun(E.runs[run], run)), esc(label(s)), c.on.map((k) => '<code>' + esc(k) + '</code>').join(" ") || "—",
-    c.off.map((k) => '<code>' + esc(k) + '</code>').join(" ") || "—", c.moved.map((k) => '<code>' + esc(k) + '</code>').join(" ") || "—"])) :
-    '<p class="muted">Ainda sem mudanças registadas.</p>';
 })();
 
 // ---- the member's portfolio inside the portal (same site, so the frame grows to fit) ----

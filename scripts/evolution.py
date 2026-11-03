@@ -70,22 +70,29 @@ def append(report: dict, seed: str = "") -> None:
 
 
 def compact(history: list[dict]) -> dict:
-    """For the portal: per run its date and source; per strategy its series and what changed between runs.
-    Only the balanced profile's runs (the others train for other investors and are not one series). The exam points
-    of runs scored with another objective than the latest (pretrain.OBJECTIVE) are on another scale: left out."""
-    history = [h for h in history if h.get("perfil", "equilibrado") == "equilibrado"]
+    """For the portal: per run its date, source and profile; per agent its series and what changed between its runs.
+    Every investor profile: each profile's copy of a strategy is an agent of its own (key "<strategy>" for the balanced
+    profile, "<strategy>-<profile>" for the others, as the agents' ids). The exam points of runs scored on another
+    scale than the profile's latest (objective, broker) are left out."""
     scale = lambda h: (h.get("objetivo"), h.get("corretora", "xtb"))  # noqa: E731 - another broker is another scale
-    latest = scale(history[-1]) if history else None
-    runs = [{"at": h["at"], "source": h.get("source", "")} for h in history]
+    latest = {}
+    for h in history:
+        latest[h.get("perfil", "equilibrado")] = scale(h)
+    runs = [{"at": h["at"], "source": h.get("source", ""), "perfil": h.get("perfil", "equilibrado")} for h in history]
     series: dict[str, list] = {}
     changes: dict[str, list] = {}
     for i, h in enumerate(history):
-        for s, r in h["strategies"].items():
+        profile = h.get("perfil", "equilibrado")
+        for strategy, r in h["strategies"].items():
+            s = strategy if profile == "equilibrado" or strategy == "indexador" else f"{strategy}-{profile}"
+            if strategy == "indexador" and profile != "equilibrado":
+                continue  # the same buy-and-hold in every profile: once
             row = {k: r.get(k) for k in ("ret", "dd", "sharpe", "exam", "exam0", "adopted", "kept")}
-            if scale(h) != latest:
+            if scale(h) != latest[profile]:
                 row["exam"] = row["exam0"] = None
             series.setdefault(s, [None] * len(history))[i] = row
-            prev = next((history[j]["strategies"].get(s) for j in range(i - 1, -1, -1) if s in history[j]["strategies"]), None)
+            prev = next((history[j]["strategies"].get(strategy) for j in range(i - 1, -1, -1)
+                         if strategy in history[j]["strategies"] and history[j].get("perfil", "equilibrado") == profile), None)
             if prev is None:
                 continue
             on, off = sorted(set(r["on"]) - set(prev["on"])), sorted(set(prev["on"]) - set(r["on"]))
