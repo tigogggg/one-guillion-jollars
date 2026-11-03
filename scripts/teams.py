@@ -549,13 +549,14 @@ def analyse(markets: list, profile: str, capital: float, search: int = SEARCH, s
 def save(result: dict) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     profile = result["profile"]
-    (OUT_DIR / f"equipas-{profile}-{date.today().isoformat()}.json").write_text(json.dumps(result, ensure_ascii=False, indent=1) + "\n")
+    seed = f"-s{result['seed']}" if result.get("seed") else ""
+    (OUT_DIR / f"equipas-{profile}-{date.today().isoformat()}{seed}.json").write_text(json.dumps(result, ensure_ascii=False, indent=1) + "\n")
     hist_path = OUT_DIR / f"equipas_historico-{profile}.json"
     try:
         history = json.loads(hist_path.read_text())
     except (OSError, ValueError):
         history = []
-    summary = {k: result[k] for k in ("at", "profile", "broker", "days", "exam")}
+    summary = {k: result.get(k) for k in ("at", "profile", "broker", "days", "exam", "seed")}
     summary["index"] = {k: result["index"][k] for k in ("return", "return_after_tax", "max_drawdown")}
     summary["teams"] = {k: {x: t[x] for x in ("overall", "exam", "years_beating_index", "return_after_tax", "max_drawdown", "exposure")}
                         for k, t in result["teams"].items()}
@@ -575,7 +576,9 @@ def main() -> int:
 
     markets = pretrain.build_markets(a.anos, a.contexto)
     pretrain._MARKETS[:] = markets  # the engine's data registry
-    result = analyse(markets, a.perfil, agents.real_capital())
+    seed = int(os.environ.get("EQUIPAS_SEMENTE") or 0)
+    result = analyse(markets, a.perfil, agents.real_capital(), seed=seed)
+    result["seed"] = seed
     save(result)
     print("Equipas: resultados guardados no repositório privado.", flush=True)
     return 0

@@ -16,6 +16,10 @@ on:
         description: "Configurações aleatórias por equipa"
         required: false
         default: "80"
+      semente:
+        description: "Semente da procura (outra semente: ver se a escolha se mantém)"
+        required: false
+        default: "0"
 
 permissions:
   contents: read
@@ -75,6 +79,7 @@ jobs:
           PRICE_CACHE_DIR: precos
           PRETRAIN_PERFIL: ${{ matrix.perfil }}
           EQUIPAS_PROCURA: ${{ inputs.procura || '80' }}
+          EQUIPAS_SEMENTE: ${{ inputs.semente || '0' }}
         run: uv run python scripts/teams.py --perfil "${{ matrix.perfil }}" --contexto ctx/context.csv
       - name: Guardar no repositório privado
         working-directory: agents
