@@ -424,6 +424,8 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .tile .k { color:var(--muted); font-size:.8rem; } .tile .v { font-size:1.15rem; font-weight:600; font-variant-numeric:tabular-nums; }
 .tile .s { color:var(--muted); font-size:.78rem; }
 .chart { width:100%; height:62vh; min-height:340px; background:var(--card); border:2px solid var(--line); border-radius:8px; }
+.range-custom { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 6px; font-size:12px; color:var(--muted, #b5bac1); }
+.range-custom input { background:#1e1f22; color:inherit; border:1px solid var(--line); border-radius:4px; padding:2px 6px; font:inherit; color-scheme:dark; }
 .chips { display:flex; flex-wrap:wrap; gap:6px; }
 .chip { background:var(--card); border:1px solid var(--line); color:var(--fg); border-radius:999px; padding:6px 10px; cursor:pointer; font:inherit; font-size:.88rem; }
 .chip.on { border-color:var(--accent); background:#3a0f45; box-shadow:0 0 8px rgba(255,46,136,.5); }
@@ -497,19 +499,49 @@ const traces = (DATA.series || []).map((s) => {
 const xs = traces.flatMap((t) => [t.x[0], t.x[t.x.length - 1]]).filter(Boolean).sort();
 const spanYears = xs.length ? (Date.parse(xs[xs.length - 1]) - Date.parse(xs[0])) / 3.15e10 : 0;
 const narrow = window.innerWidth < 640;
+// the periods shorter than the chart's history (each counted back from its last day), then Tudo and Custom
+const periods = [[1, "1D", "day", 1], [7, "1W", "day", 7], [1, "1M", "month", 30], [3, "3M", "month", 91], [6, "6M", "month", 182],
+  [1, "1A", "year", 365], [5, "5A", "year", 1826], [10, "10A", "year", 3652]]
+  .filter((p) => p[3] < spanYears * 365.25).map(([count, label, step]) => ({ count, label, step, stepmode: "backward" }));
 if (!window.Plotly) $(elId).innerHTML = '<p class="muted" style="padding:16px">Não consegui carregar o gráfico (Plotly). As fichas dos agentes estão em baixo.</p>';
 else Plotly.newPlot(elId, traces, {
   paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 12 },
   margin: { l: 52, r: 12, t: 12, b: narrow ? 10 : 40 }, hovermode: "x unified",
   hoverlabel: { bgcolor: "#0b0820", bordercolor: "#2e2763" },
   xaxis: { gridcolor: "#2e2763", hoverformat: "%d/%m/%Y", tickformat: spanYears > 2 ? "%Y" : spanYears > 0.4 ? "%m/%y" : "%d/%m",
-    dtick: spanYears < 0.05 ? 86400000 : undefined, rangeselector: spanYears > 2 ? { bgcolor: "#1e1f22", activecolor: "#5865f2", buttons: [
-    { count: 1, label: "1A", step: "year", stepmode: "backward" }, { count: 5, label: "5A", step: "year", stepmode: "backward" },
-    { count: 10, label: "10A", step: "year", stepmode: "backward" }, { step: "all", label: "Tudo" }] } : undefined },
+    dtick: spanYears < 0.05 ? 86400000 : undefined, rangeselector: periods.length ? { bgcolor: "#1e1f22", activecolor: "#5865f2",
+    buttons: periods.concat([{ step: "all", label: "Tudo" }]) } : undefined },
   yaxis: { gridcolor: "#2e2763", zerolinecolor: "#80848e", ticksuffix: "%" },
   legend: narrow ? { orientation: "h", y: -0.12, font: { size: 11 } } : { bgcolor: "rgba(0,0,0,0)" },
 }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] });
 if (window.Plotly) intervalLegend(elId, traces);
+if (window.Plotly && periods.length) customRange(elId, xs[0], xs[xs.length - 1]);
+}
+
+// Custom: any interval, from one date to another (the same as zooming: the legend and the lines follow it).
+function customRange(elId, first, last) {
+  const el = $(elId);
+  const day = (v) => String(v).slice(0, 10);
+  const bar = document.createElement("div");
+  bar.className = "range-custom";
+  bar.innerHTML = '<span>Custom</span><input type="date" aria-label="De"> <span>→</span> <input type="date" aria-label="Até">';
+  el.parentNode.insertBefore(bar, el);
+  const [a, b] = bar.querySelectorAll("input");
+  for (const inp of [a, b]) { inp.min = day(first); inp.max = day(last); }
+  a.value = day(first); b.value = day(last);
+  const go = () => {
+    if (!a.value || !b.value) return;
+    const [from, to] = a.value <= b.value ? [a.value, b.value] : [b.value, a.value];
+    Plotly.relayout(el, { "xaxis.range": [from, to + " 23:59"] });
+  };
+  a.addEventListener("change", go);
+  b.addEventListener("change", go);
+  el.on("plotly_relayout", (ev) => {  // the dates show the interval in view, however it was chosen
+    if (!ev) return;
+    if (ev["xaxis.autorange"]) { a.value = day(first); b.value = day(last); return; }
+    const r = ev["xaxis.range"] || (ev["xaxis.range[0]"] !== undefined ? [ev["xaxis.range[0]"], ev["xaxis.range[1]"]] : null);
+    if (r) { a.value = day(r[0]) < day(first) ? day(first) : day(r[0]); b.value = day(r[1]) > day(last) ? day(last) : day(r[1]); }
+  });
 }
 
 // Legend in the order of the lines (best result on top) with each one's result over the visible interval:
@@ -537,7 +569,7 @@ function intervalLegend(elId, traces) {
       const i0 = bounds[k][0];
       if (!(from || to) || i0 < 0) return y;
       const base = 1 + y[i0] / 100;
-      return y.map((v) => (v == null ? null : ((1 + v / 100) / base - 1) * 100));
+      return y.map((v) => (v == null ? null : Math.round(((1 + v / 100) / base - 1) * 10000) / 100));
     });
     const res = bounds.map(([i0, i1], k) =>
       (i0 < 0 || i1 <= i0 ? null : ((1 + orig[k][i1] / 100) / (1 + orig[k][i0] / 100) - 1) * 100));
