@@ -307,7 +307,7 @@ ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pret
   <ol id="pt-board" class="board"></ol>
   <h2>📈 Gráfico</h2>
   <div id="pt-chart" class="chart"></div>
-  <h2>📊 Desempenho por período</h2>
+  <h2>📊 Desempenho</h2>
   <div id="pt-perf"></div>
   <h2>📈 Evolução entre execuções do treino</h2>
   <div id="evo"></div>
@@ -315,10 +315,8 @@ ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pret
   <div class="agent-pick"><nav id="pt-chips" class="agent-list"></nav><div id="pt-detail"></div></div>
 </section>` : ""}
 <section id="agents-section" data-tab="agentes" hidden>
-  <h2>📊 Desempenho por período</h2>
+  <h2>📊 Desempenho</h2>
   <div id="perf"></div>
-  <h2>🧾 Todos os agentes</h2>
-  <div id="overview"></div>
   <details class="panel" id="compare-box"><summary><b>⚖️ Comparar dois agentes</b></summary><div class="filters"><select id="cmp-a"></select><select id="cmp-b"></select></div><div id="cmp"></div></details>
   <h2>🔎 Ficha do agente</h2>
   <div class="agent-pick"><nav id="chips" class="agent-list"></nav><div id="detail"></div></div>
@@ -864,7 +862,9 @@ function show(i, scroll) {
   if (!a) return;
   SHOWN = a.name;
   markAgent(i);
+  const rank = agents.slice().sort((x, y) => (headline(y) ?? -1e9) - (headline(x) ?? -1e9)).indexOf(a) + 1;
   $("detail").innerHTML = '<div class="panel"><h2>' + esc(a.emoji + " " + a.name) + '</h2>' +
+    '<p class="muted">🏅 ' + rank + '.º de ' + agents.length + ' na liga · ' + esc(a.strategy.label) + '</p>' +
     (a.backtest ? backtestHtml(a) : liveHtml(a)) + strategyHtml(a.strategy) + '</div>';
   chapters($("detail").firstElementChild);
   if (scroll) { openTab("agentes"); $("detail").scrollIntoView({ behavior: "smooth", block: "start" }); }
@@ -1019,7 +1019,7 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
 
 // ---- performance by period ----
 const PERIODS = [["1D", 1], ["1S", 7], ["1M", 30], ["3M", 91], ["6M", 182], ["1A", 365]];
-function perfTable(boxId, data, people) {
+function perfTable(boxId, data, people, pick) {
   const box = $(boxId);
   if (!box) return;
   const series = (data.series || []).filter((s) => s.x.length);
@@ -1044,31 +1044,42 @@ function perfTable(boxId, data, people) {
   const tail = series[0].x.slice(-21);
   const gaps = tail.slice(1).map((d, i) => (Date.parse(d) - Date.parse(tail[i])) / 864e5).sort((a, b) => a - b);
   const step = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 1;
-  let sortCol = "all";
+  let sortCol = "all", showAll = false;
+  const LIMIT = 20;  // the first 20 by the chosen column; a button shows the rest
   function draw() {
     const cols = PERIODS.filter(([, d]) => d >= step).map(([k, d]) => ({ key: k, label: k, from: shift(last, d), to: last }))
       .concat([{ key: "custom", label: "Personalizado", from: custom.from, to: custom.to }, { key: "all", label: "Desde o início", from: "0000-01-01", to: last }]);
     const rows = series.map((s) => ({ s, a: byName[s.name], cells: Object.fromEntries(cols.map((c) => [c.key, between(s, c.from, c.to, c.key === "all")])) }));
     const best = Object.fromEntries(cols.map((c) => [c.key, Math.max(...rows.map((r) => r.cells[c.key].v ?? -Infinity))]));
     rows.sort((x, y) => (y.cells[sortCol].v ?? -Infinity) - (x.cells[sortCol].v ?? -Infinity));
+    const total = rows.length;
+    if (!showAll) rows.splice(LIMIT);
     box.innerHTML = '<div class="filters"><label class="small">Personalizado: de <input type="date" class="pf-from" value="' + custom.from + '" min="' + first + '" max="' + last + '"></label>' +
       '<label class="small">a <input type="date" class="pf-to" value="' + custom.to + '" min="' + first + '" max="' + last + '"></label>' +
       '<span class="muted small">Toca no título de uma coluna para ordenar. Dados até ' + esc(last) + '.</span></div>' +
       '<div class="scroll"><table><tr><th>Agente</th>' + cols.map((c) => '<th class="num"><a href="#" class="pf-sort" data-k="' + c.key + '">' + esc(c.label) + (sortCol === c.key ? " ▼" : "") + '</a></th>').join("") + '</tr>' +
-      rows.map((r) => '<tr><td>' + esc((r.a ? r.a.emoji + " " : "") + r.s.name) + '</td>' + cols.map((c) => {
+      rows.map((r) => '<tr><td>' + (r.a && pick ? '<a href="#" class="pf-agent" data-n="' + esc(r.s.name) + '" title="Abrir a ficha do agente">' : "") +
+        esc((r.a ? r.a.emoji + " " : "") + r.s.name) + (r.a && pick ? "</a>" : "") + '</td>' + cols.map((c) => {
         const x = r.cells[c.key];
         if (x.v == null) return '<td class="num muted">—</td>';
         return '<td class="num"><span class="' + cls(x.v) + '">' + (x.v === best[c.key] && rows.length > 1 ? "🏆 " : "") + fmtPct(x.v) + (x.late ? "*" : "") + '</span></td>';
       }).join("") + '</tr>').join("") + '</table></div>' +
-      '<p class="muted small">Rentabilidade em cada período, com custos e impostos. * o agente começou depois do início do período: conta desde o primeiro dia dele.</p>';
+      (total > LIMIT ? '<p><button class="chip pf-more">' + (showAll ? "Mostrar só os " + LIMIT + " primeiros" : "Mostrar todos (" + total + ")") + '</button></p>' : "") +
+      '<p class="muted small">Rentabilidade em cada período, com custos e impostos. Toca no nome de um agente para abrir a ficha. * o agente começou depois do início do período: conta desde o primeiro dia dele.</p>';
+    const more = box.querySelector(".pf-more");
+    if (more) more.addEventListener("click", () => { showAll = !showAll; draw(); });
     box.querySelectorAll(".pf-sort").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); sortCol = a.dataset.k; draw(); }));
+    box.querySelectorAll(".pf-agent").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); if (byName[a.dataset.n]) pick(byName[a.dataset.n]); }));
     box.querySelector(".pf-from").addEventListener("change", (e) => { custom.from = e.target.value || custom.from; sortCol = "custom"; draw(); });
     box.querySelector(".pf-to").addEventListener("change", (e) => { custom.to = e.target.value || custom.to; sortCol = "custom"; draw(); });
   }
   draw();
 }
-perfTable("perf", DATA, agents);
-if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
+perfTable("perf", DATA, agents, (a) => show(agents.indexOf(a), true));
+if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  // through its button in the list
+  const b = [...document.querySelectorAll("#pt-chips .agent-item")].find((x) => (PRETRAIN.agents || [])[+x.dataset.i] === a);
+  if (b) b.click();
+});
 
 // ---- compare two agents ----
 (function compare() {
@@ -1158,24 +1169,6 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || []);
   }).catch(() => {});
 })();
 
-
-// ---- overview of all agents ----
-(function overview() {
-  if (!agents.length) return;
-  const live = !agents[0].backtest;
-  const rows = agents.slice().sort((a, b) => headline(b) - headline(a));
-  $("overview").innerHTML = live
-    ? table(["#", "Agente", "Património", "Rentab.", "Hoje", "Pontos", "Queda máx.", "Sharpe", "Posições", "Investido", "Compras/vendas", "Estratégia"],
-        rows.map((a, k) => [k + 1, '<a href="#" data-i="' + agents.indexOf(a) + '">' + esc(a.emoji + " " + a.name) + '</a>', fmtEur(a.equity),
-          '<span class="' + cls(a.return_pct) + '">' + fmtPct(a.return_pct) + '</span>', '<span class="' + cls(a.day_pct) + '">' + fmtPct(a.day_pct) + '</span>',
-          fmtNum(a.points, 0), fmtPct(-a.max_dd_pct), fmtNum(a.sharpe), a.positions.length, fmtNum(a.invested_pct, 0) + "%", a.buys + "/" + a.sells,
-          esc(a.strategy.label)]), [2, 3, 4, 5, 6, 7, 8, 9])
-    : table(["#", "Agente", "Rentab. no período", "Queda máx.", "Sharpe", "Operações", "Parâmetros", "Estratégia"],
-        rows.map((a, k) => [k + 1, '<a href="#" data-i="' + agents.indexOf(a) + '">' + esc(a.emoji + " " + a.name) + '</a>',
-          '<span class="' + cls(a.backtest.return_pct) + '">' + fmtPct(a.backtest.return_pct, 0) + '</span>', fmtPct(-a.backtest.max_dd_pct, 0),
-          fmtNum(a.backtest.sharpe), a.backtest.trades ?? "—", a.backtest.adopted ? "novos" : "mantidos", esc(a.strategy.label)]), [2, 3, 4, 5]);
-  $("overview").addEventListener("click", (e) => { const l = e.target.closest("a[data-i]"); if (l) { e.preventDefault(); show(+l.dataset.i, true); } });
-})();
 
 // ---- news ----
 (function news() {
