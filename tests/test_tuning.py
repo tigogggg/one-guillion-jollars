@@ -148,7 +148,7 @@ def test_a_broken_bar_does_not_fill_the_order():
 def test_final_phase_keeps_only_rules_that_help_train_exam_and_crises(monkeypatch):
     train, valid = ["train"], ["valid"]
 
-    def fake_sim(strategy, p, markets):
+    def fake_sim(strategy, p, markets, detail=True):
         points = 1000
         if markets[0] == "train":  # the training years, one block at a time
             points += 300 if p.get("credito_max") else 0      # helps training…
@@ -186,7 +186,7 @@ def test_a_candidate_stops_once_it_cannot_beat_the_original_in_enough_years(monk
     monkeypatch.setitem(pretrain._SEGMENTS, "blocks", blocks)
     calls = []
 
-    def fake(strategy, params, markets):
+    def fake(strategy, params, markets, detail=True):
         calls.append(markets[0])
         return {"points": params["v"], "trades": 1}
 

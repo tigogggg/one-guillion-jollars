@@ -264,10 +264,19 @@ def zone_params(strategy: str, params: dict) -> list[str]:
             for z in agents.ZONES]
 
 
-def run(strategy: str, params: dict, markets: list, capital: float = 1000.0) -> dict:
-    """The raw result of the Rust day loop for these markets."""
+_ZONE_PARAMS: dict = {}
+
+
+def run(strategy: str, params: dict, markets: list, capital: float = 1000.0, detail: bool = True) -> dict:
+    """The raw result of the Rust day loop for these markets (detail=False: without the trades and daily history)."""
     data, start = data_for(markets)
-    return ogj_engine.simulate(data, strategy, zone_params(strategy, params), start, start + len(markets), capital)
+    key = (strategy, json.dumps(params, sort_keys=True, default=str))
+    zp = _ZONE_PARAMS.get(key)
+    if zp is None:
+        if len(_ZONE_PARAMS) > 5000:
+            _ZONE_PARAMS.clear()
+        zp = _ZONE_PARAMS[key] = zone_params(strategy, params)
+    return ogj_engine.simulate(data, strategy, zp, start, start + len(markets), capital, detail)
 
 
 def from_day(n: int) -> date:

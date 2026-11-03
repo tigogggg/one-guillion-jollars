@@ -500,13 +500,23 @@ def index_score(markets: list[Market], years: float) -> float:
     return _INDEX_SCORES[key]
 
 
-def simulate(strategy: str, params: dict, markets: list[Market], capital: float = 1000.0, keep_port: bool = False) -> dict:
+def simulate(strategy: str, params: dict, markets: list[Market], capital: float = 1000.0, keep_port: bool = False,
+             detail: bool = True) -> dict:
     """Replay one strategy with the live rules (agents.decide), taxes and bankruptcy, from `capital` euros. The day
-    loop runs in the Rust engine for the strategies it supports (engine.enabled), in Python otherwise."""
+    loop runs in the Rust engine for the strategies it supports (engine.enabled), in Python otherwise. detail=False:
+    only the grade (points, return, deepest fall, trades), for the thousands of runs of the search."""
     import engine
 
     if engine.enabled(strategy) and not keep_port:
-        r = engine.run(strategy, params, markets, capital)
+        r = engine.run(strategy, params, markets, capital, detail=detail)
+        if not detail:
+            years = len(markets) / SESSIONS_PER_YEAR
+            net = r["final"] - r["tax_owed"]
+            own = agents.profile_score(net / capital - 1, years, r["max_dd"], PROFILE)
+            return {"points": agents.relative_points(own, index_score(markets, years)), "profile_score": own,
+                    "league_points": r["points"], "return": r["final"] / capital - 1, "return_after_tax": net / capital - 1,
+                    "max_drawdown": r["max_dd"], "trades": r["n_trades"],
+                    "bankrupt": engine.from_day(r["bankrupt"]).isoformat() if r["bankrupt"] is not None else None}
         sells = [{"ret": t[8], "held": t[9]} for t in r["trades"] if t[1] == 1]
         history = [{"date": engine.from_day(d).isoformat(), "equity": e} for d, e in r["history"]]
         zone_stats = {agents.ZONES[i]: (total, n) for i, (total, n) in enumerate(r["zone_stats"]) if n}
@@ -779,7 +789,7 @@ _POOL = None
 def _years(job: tuple[str, dict]) -> tuple[list[int], int]:
     """Points in each training year (fresh 1000 EUR each) and the trades over all of them."""
     strategy, params = job
-    runs = [simulate(strategy, params, b) for b in _SEGMENTS["blocks"]]
+    runs = [simulate(strategy, params, b, detail=False) for b in _SEGMENTS["blocks"]]
     return [r["points"] for r in runs], sum(r["trades"] for r in runs)
 
 
@@ -791,7 +801,7 @@ def _years_vs(job: tuple[str, dict, list]) -> tuple[list[float], int]:
     allowed = len(blocks) - math.ceil(CONSISTENCY * len(blocks))  # years it may fail and still pass
     years, trades, lost = [], 0, 0
     for b, ref in zip(blocks, base):
-        r = simulate(strategy, params, b)
+        r = simulate(strategy, params, b, detail=False)
         years.append(r["points"])
         trades += r["trades"]
         lost += r["points"] <= ref
@@ -805,7 +815,7 @@ def _points(job: tuple[str, dict, str]) -> float:
     strategy, params, segment = job
     if segment == "train":
         return weighted(_years((strategy, params))[0])
-    return simulate(strategy, params, _SEGMENTS[segment])["points"]
+    return simulate(strategy, params, _SEGMENTS[segment], detail=False)["points"]
 
 
 def train_score(strategy: str, params: dict, train_mk: list[Market]) -> float:
@@ -813,7 +823,7 @@ def train_score(strategy: str, params: dict, train_mk: list[Market]) -> float:
     rank candidates. One run over all the years would be graded mostly by its single deepest fall (2008)."""
     if _SEGMENTS.get("train") is train_mk and _SEGMENTS.get("blocks"):
         return weighted(_years((strategy, params))[0])
-    return weighted([simulate(strategy, params, b)["points"] for b in yearly_blocks(train_mk)])
+    return weighted([simulate(strategy, params, b, detail=False)["points"] for b in yearly_blocks(train_mk)])
 
 
 def _map(fn, jobs: list) -> list:
@@ -859,7 +869,7 @@ def crisis_windows(markets: list[Market]) -> dict[str, list[Market]]:
 
 
 def crash_test(strategy: str, params: dict, windows: dict[str, list[Market]]) -> dict[str, dict]:
-    return {name: {k: v for k, v in strip(simulate(strategy, params, w)).items() if k in ("return", "max_drawdown", "bankrupt")}
+    return {name: {k: v for k, v in strip(simulate(strategy, params, w, detail=False)).items() if k in ("return", "max_drawdown", "bankrupt")}
             for name, w in windows.items()}
 
 
@@ -1146,7 +1156,7 @@ def parameter_importance(strategy: str, chosen: dict, train_mk: list[Market], va
     if _SEGMENTS.get("train") is train_mk and _SEGMENTS.get("valid") is valid:  # on the worker processes
         points = _map(_points, [(strategy, alt, seg) for _, _, alt, _ in alts for seg in ("train", "valid")])
     else:
-        points = [train_score(strategy, alt, train_mk) if m is train_mk else simulate(strategy, alt, m)["points"]
+        points = [train_score(strategy, alt, train_mk) if m is train_mk else simulate(strategy, alt, m, detail=False)["points"]
                   for _, _, alt, _ in alts for m in (train_mk, valid)]
     out = {}
     for (k, value, alt, used), t, e in zip(alts, points[0::2], points[1::2]):

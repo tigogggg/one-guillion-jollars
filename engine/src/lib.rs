@@ -156,9 +156,9 @@ fn parse_params(zones: Vec<String>) -> PyResult<Vec<P>> {
 /// The day loop of pretrain.simulate over days [start, end) of the data: returns what the Python wrapper needs to
 /// grade the run (trades, the equity history, points, deepest fall, tax owed if sold at the end, ...).
 #[pyfunction]
-#[pyo3(signature = (data, strategy, zone_params, start, end, capital=1000.0))]
+#[pyo3(signature = (data, strategy, zone_params, start, end, capital=1000.0, detail=true))]
 fn simulate<'py>(py: Python<'py>, data: &EngineData, strategy: &str, zone_params: Vec<String>, start: usize, end: usize,
-                 capital: f64) -> PyResult<Bound<'py, PyDict>> {
+                 capital: f64, detail: bool) -> PyResult<Bound<'py, PyDict>> {
     if !strategies::SUPPORTED.contains(&strategy) {
         return Err(PyValueError::new_err(format!("estratégia não portada: {strategy}")));
     }
@@ -170,14 +170,16 @@ fn simulate<'py>(py: Python<'py>, data: &EngineData, strategy: &str, zone_params
     let f = d.f();
     let r = py.detach(|| run(d, &f, strategy, &params, start, end, capital));
     let out = PyDict::new(py);
-    let trades = PyList::empty(py);
-    for t in &r.port.trades {
-        let sym = t.sym.map(|s| d.symbols[s].name.clone());
-        trades.append((t.day, t.side, sym, t.qty, t.price, t.eur, t.pnl, t.reason.clone(), t.ret, t.held))?;
+    if detail {
+        let trades = PyList::empty(py);
+        for t in &r.port.trades {
+            let sym = t.sym.map(|s| d.symbols[s].name.clone());
+            trades.append((t.day, t.side, sym, t.qty, t.price, t.eur, t.pnl, t.reason.clone(), t.ret, t.held))?;
+        }
+        out.set_item("trades", trades)?;
+        out.set_item("history", r.port.hist.iter().map(|&(a, b)| (a, b)).collect::<Vec<_>>())?;
     }
-    out.set_item("trades", trades)?;
     out.set_item("n_trades", r.n_trades)?;
-    out.set_item("history", r.port.hist.iter().map(|&(a, b)| (a, b)).collect::<Vec<_>>())?;
     out.set_item("points", r.port.points)?;
     out.set_item("max_dd", r.port.max_dd)?;
     out.set_item("final", r.final_equity)?;
