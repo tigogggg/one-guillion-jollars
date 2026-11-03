@@ -43,9 +43,17 @@ Run on this PC (free, uses all cores the memory allows):
 It repeats runs until no strategy improves for 2 runs (max 12), merges, applies and pushes `agents/`.
 `--perfil conservador|equilibrado|arrojado|todos` picks the investor profile (default equilibrado). Each profile has
 its own agents (`<id>-conservador`, `<id>-arrojado`) and report (`pretrain.json`, `pretrain-<perfil>.json`). Points are
-the profile's grade (`agents.profile_score`) minus the S&P 500's over the same days (10 points ≈ 1%/year).
-A run only replaces a strategy's parameters if the exam (last year, out of sample) does not get worse and
-training + exam together improve by at least 5% and 5 points (`CHANGE_MARGIN`, `CHANGE_MIN`; weekly runs on Sundays must not swap for noise); the last 3 choices always stay candidates.
+the profile's grade (`agents.profile_score`) minus the S&P 500's over the same days (10 points ≈ 1%/year), counted
+double below the index (`agents.relative_points`); a run's verdict (`overall`) weighs every year alike, the exam as the
+latest. A strategy still at or below 0 after 10 runs of a profile (`pretrain.OBJECTIVE`) leaves the league for that
+profile (`pretrain.bench`, config `banco`) and comes back when above 0. In a series each strategy stops training once
+2 runs leave it unchanged (`scripts/series.py`). Every report also says whether the many agents add anything
+(`scripts/ensemble.py`: all together, last year's leaders, correlation).
+Intraday reactivity (`reatividade` 0/1/2, `espera_min`, `esticado_max`) is trained by the Alpaca lab
+(`intraday_lab.py --reatividade`, workflow `intraday-lab.yml` modo=reatividade), dispatched when the last profile's
+series ends; results and history in `agents/lab/reatividade*.json`.
+A run only replaces a strategy's parameters if the exam (last year, out of sample) does not get worse by more than
+10 points (`EXAM_SLACK`) and training + exam together improve by at least 5% and 5 points (`CHANGE_MARGIN`, `CHANGE_MIN`; weekly runs on Sundays must not swap for noise); the last 3 choices always stay candidates.
 In Actions the profiles run one after another (input `seguintes`, default: conservador and arrojado after equilibrado). If a merge failed:
 `--retomar out/local/<run folder>`. Logs: `out/local/<run>/<strategy>.log`.
 

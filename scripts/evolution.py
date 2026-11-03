@@ -40,7 +40,7 @@ def entry(report: dict, at: str, source: str, seed: str = "") -> dict | None:
         y, v = r["year"], r.get("valid") or {}
         rows[s] = {
             "ret": round(y.get("return", 0) * 100, 1), "dd": round(y.get("max_drawdown", 0) * 100, 1),
-            "sharpe": round(y.get("sharpe") or 0, 2), "exam": (v.get("best") or {}).get("points"),
+            "sharpe": round(y.get("sharpe") or 0, 2), "exam": (v.get("best") or {}).get("points"), "overall": r.get("overall"),
             "exam0": (v.get("default") or {}).get("points"), "adopted": bool(r.get("adopted")),
             "kept": bool(r.get("kept_previous")), "on": rules_on(r.get("chosen") or {}),
             "params": {k: val for k, val in (r.get("chosen") or {}).items() if k != "por_zona"},
@@ -62,6 +62,8 @@ def append(report: dict, seed: str = "") -> None:
     if not e:
         return
     e["perfil"] = report.get("perfil", "equilibrado")
+    e["objetivo"] = report.get("objetivo")
+    e["trained"] = report.get("trained") or sorted(e["strategies"])  # what this run trained (a series trains fewer)
     history = load() + [e]
     HISTORY_PATH.write_text(json.dumps(history[-KEEP:], ensure_ascii=False, indent=1) + "\n")
 
@@ -69,15 +71,16 @@ def append(report: dict, seed: str = "") -> None:
 def compact(history: list[dict]) -> dict:
     """For the portal: per run its date and source; per strategy its series and what changed between runs.
     Only the balanced profile's runs (the others train for other investors and are not one series). The exam points
-    of runs before the investor profiles (no "perfil") were league points, another scale: left out of the exam series."""
+    of runs scored with another objective than the latest (pretrain.OBJECTIVE) are on another scale: left out."""
     history = [h for h in history if h.get("perfil", "equilibrado") == "equilibrado"]
+    latest = history[-1].get("objetivo") if history else None
     runs = [{"at": h["at"], "source": h.get("source", "")} for h in history]
     series: dict[str, list] = {}
     changes: dict[str, list] = {}
     for i, h in enumerate(history):
         for s, r in h["strategies"].items():
             row = {k: r.get(k) for k in ("ret", "dd", "sharpe", "exam", "exam0", "adopted", "kept")}
-            if "perfil" not in h:
+            if h.get("objetivo") != latest:
                 row["exam"] = row["exam0"] = None
             series.setdefault(s, [None] * len(history))[i] = row
             prev = next((history[j]["strategies"].get(s) for j in range(i - 1, -1, -1) if s in history[j]["strategies"]), None)

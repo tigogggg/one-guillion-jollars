@@ -86,6 +86,14 @@ BRAKE_DAYS = 14  # …for this many calendar days; the brake then re-arms from t
 NO_BUYS_AFTER_OPEN = 15  # minutes: the first prices of a session swing the most
 NO_BUYS_BEFORE_CLOSE = 30  # minutes: a buy this late has no time left to work today
 DAY_LOSS_STOP = 0.03  # an agent down this much since the last close makes no new buys until tomorrow
+# How much a reactive agent buys during the session (exits are always watched in every round). Trained per strategy
+# and profile by the intraday lab (scripts/intraday_lab.py --reatividade), not by the 20-year daily pre-training:
+#   0 planeado: buys only at the next open (the round's buy orders wait as pending orders, with the gap rule);
+#   1 com confirmação: buys during the session only espera_min minutes after the open and while the price is at most
+#     esticado_max above the last close (0 = no limit), so it does not chase a morning spike;
+#   2 total: buys in every round (after NO_BUYS_AFTER_OPEN minutes).
+REACTIVITY = {0: "planeado (compras só à abertura)", 1: "com confirmação", 2: "total"}
+INTRADAY_DEFAULTS = {"reatividade": 2, "espera_min": NO_BUYS_AFTER_OPEN, "esticado_max": 0}
 EXPOSURE = {"Alta": 1.0, "Neutra": 0.7, "Cautelosa": 0.4, "Queda": 0.1}
 ZONE_ICON = {"Alta": "🟢", "Neutra": "🟡", "Cautelosa": "🟠", "Queda": "🔴"}
 MUTATION = 0.2
@@ -125,6 +133,17 @@ def profile_score(ret: float, years: float, max_dd: float, profile: str = DEFAUL
         growth *= p["loss"]
     growth -= p["dd_cost"] * max(0.0, max_dd - p["dd_cap"])
     return round(growth * 1000, 1)
+
+
+# The S&P 500 is the first base: a period's points are the profile's grade minus the index's; above the index there
+# is no ceiling, below it every point counts BELOW_INDEX times (beating the index every year is worth more than one
+# great year).
+BELOW_INDEX = 2.0
+
+
+def relative_points(own: float, index: float) -> float:
+    excess = own - index
+    return round(excess if excess >= 0 else BELOW_INDEX * excess, 1)
 
 
 # Where a strategy buys stocks (a trained parameter, regiao): 0 both, 1 only the US, 2 only Europe. The strategies
@@ -2362,6 +2381,13 @@ def common_rules(params: dict, strategy: str) -> str:
                      + f"; veto de notícias a -{p.get('peso_noticias', NEWS_VETO)}")
         if uses_param(strategy, "regiao"):
             rules.append(f"🌍 compra ações: {REGIONS.get(int(p.get('regiao') or 0), REGIONS[0])}")
+        level = int(params.get("reatividade", 2))
+        how = REACTIVITY.get(level, REACTIVITY[2])
+        if level == 1:
+            how += f" (espera {int(params.get('espera_min') or NO_BUYS_AFTER_OPEN)} min após a abertura" + (
+                f", não compra mais de {float(params['esticado_max']):.1%} acima do fecho anterior)"
+                if params.get("esticado_max") else ")")
+        rules.append(f"⚡ reatividade durante o dia: {how}; stops e alvos vigiados em todas as rondas")
         if params.get("por_zona"):
             rules.append("🧭 parâmetros próprios por zona de mercado: " + "; ".join(
                 f"{z}: " + ", ".join(f"{k} {v}" for k, v in d.items()) for z, d in params["por_zona"].items()))
@@ -2739,6 +2765,17 @@ def session_minutes(symbol: str, now: datetime) -> tuple[float, float]:
     return (local - start).total_seconds() / 60, (end - local).total_seconds() / 60
 
 
+def move_today(mkt: "Market", symbol: str) -> float | None:
+    """The price now against the last complete session's close (today's bar is the last one while the session runs)."""
+    df = mkt.hist.get(symbol)
+    price = last_close(mkt, symbol)
+    if df is None or price is None or len(df) < 2:
+        return None
+    today = df.index[-1].date() == mkt.as_of
+    prev = float(df["Close"].iloc[-2] if today else df["Close"].iloc[-1])
+    return price / prev - 1 if prev > 0 else None
+
+
 def round_buy_block(port: dict, mkt: Market, params: dict) -> str | None:
     """Why this reactive agent makes no new buys in this round at all (the day's loss stop), or None."""
     if params.get("ignora_risco") or not port.get("history"):
@@ -2750,13 +2787,21 @@ def round_buy_block(port: dict, mkt: Market, params: dict) -> str | None:
     return None
 
 
-def buy_window(symbol: str, now: datetime, params: dict) -> str | None:
-    """Why a reactive buy of this symbol waits (too close to its exchange's open or close), or None."""
-    if params.get("ignora_risco"):
+def buy_window(symbol: str, now: datetime, params: dict, mkt: "Market | None" = None) -> str | None:
+    """Why a reactive buy of this symbol waits (too close to its exchange's open or close, or, with reatividade 1,
+    before espera_min or with the price stretched more than esticado_max above the last close), or None."""
+    level = int(params.get("reatividade", 2))
+    if params.get("ignora_risco") and level == 2:
         return None
     since_open, to_close = session_minutes(symbol, now)
-    if since_open < NO_BUYS_AFTER_OPEN:
-        return f"{symbol} (só compra {NO_BUYS_AFTER_OPEN} min depois da abertura)"
+    wait = NO_BUYS_AFTER_OPEN if level == 2 else max(NO_BUYS_AFTER_OPEN, int(params.get("espera_min") or NO_BUYS_AFTER_OPEN))
+    if since_open < wait:
+        return f"{symbol} (só compra {wait} min depois da abertura)"
+    stretch = float(params.get("esticado_max") or 0) if level == 1 else 0.0
+    if stretch and mkt is not None:
+        move = move_today(mkt, symbol)
+        if move is not None and move > stretch:
+            return f"{symbol} (sobe {move:.1%} hoje: só compra até {stretch:.1%} acima do fecho anterior)"
     if to_close < NO_BUYS_BEFORE_CLOSE:
         return f"{symbol} (não compra nos últimos {NO_BUYS_BEFORE_CLOSE} min da sessão)"
     return None
@@ -2767,7 +2812,8 @@ def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime, live:
     traded now, at the current price; the others join the plan of pending orders for the next open (at the open
     price, with the gap rule). The money of pending buys stays reserved, a symbol already pending is left to its
     order, and a stock sold today is not bought back the same day. Buys in open markets also wait out the first
-    and last minutes of the session (buy_window), and stop for the day after a DAY_LOSS_STOP loss (round_buy_block)."""
+    and last minutes of the session (buy_window), and stop for the day after a DAY_LOSS_STOP loss (round_buy_block).
+    With reatividade 0 the buys always join the plan for the next open; with 1 they also wait for confirmation."""
     today = mkt.as_of.isoformat()
     if not port["positions"] and not port["pending"]:
         # all in cash: a reactive agent looks for entries in every round, not only every "cada" sessions
@@ -2791,9 +2837,10 @@ def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime, live:
             continue
         if o["side"] == "buy" and day_block:
             continue
-        if trading_now(mkt, sym, now):
+        planned = o["side"] == "buy" and int(params.get("reatividade", 2)) == 0
+        if trading_now(mkt, sym, now) and not planned:
             if o["side"] == "buy":
-                wait = buy_window(sym, now, params)
+                wait = buy_window(sym, now, params, mkt)
                 if wait:
                     notes = notes + [wait]
                     continue
@@ -2812,6 +2859,7 @@ def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime, live:
             df = mkt.hist.get(sym)
             if df is not None and len(df):  # fills at the first open after its last bar (later today or tomorrow)
                 port["pending"].append({**o, "created": df.index[-1].date().isoformat()})
+                pending.add(sym)
     return done, notes
 
 

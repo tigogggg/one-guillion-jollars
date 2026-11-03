@@ -524,10 +524,11 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
     sharpe = float(daily.mean() / daily.std() * SESSIONS_PER_YEAR ** 0.5) if len(daily) > 20 and daily.std() > 0 else 0.0
     # "points", what every choice of the training compares, is the profile's grade of this run against buying the
     # index over the same days (agents.profile_score of each: growth of the capital, losses and deep falls penalised
-    # alike), so a choice is good when it beats the index the way this kind of investor cares about.
+    # alike), so a choice is good when it beats the index the way this kind of investor cares about. Falling short
+    # of the index counts double (agents.relative_points): the S&P 500 is the first base, every year.
     own = agents.profile_score(final / capital - 1, years, port.get("max_dd", 0.0), PROFILE)
     return {
-        "points": round(own - index_score(markets, years), 1),
+        "points": agents.relative_points(own, index_score(markets, years)),
         "profile_score": own,
         "league_points": port["points"],
         "return": final / capital - 1,
@@ -587,6 +588,7 @@ REVIEW_PATH = agents.REPO_AGENTS / "claude_review.json"
 HISTORY_KEEP = 3  # earlier choices kept per strategy, each one a candidate in the next pre-training
 CHANGE_MARGIN = 0.05  # a new choice replaces the one the agent trades with only if it is this much better overall…
 CHANGE_MIN = 5.0  # …and by at least this many points (0.5% a year): scores relative to the index can be close to 0
+EXAM_SLACK = 10.0  # a new choice may score this much less on the exam year (1% of it) if it is better overall
 
 
 def previous_choices(strategy: str) -> list[dict]:
@@ -726,8 +728,9 @@ def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: lis
 
 
 def overall(years: list[float], exam: float) -> float:
-    """What a run tries to raise: the recency-weighted training years and the exam year, equally."""
-    return 0.5 * weighted(years) + 0.5 * exam
+    """What a run tries to raise: every year judged alike, the exam year as the latest one (recency-weighted). The
+    exam used to weigh as much as all the training years: a series of runs then learnt that one year by heart."""
+    return weighted(list(years) + [exam])
 
 
 def weighted(years: list[float]) -> float:
@@ -1016,8 +1019,9 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
             prev_obj = overall(run_years(previous)[0], prev_exam["points"])
             if j == 0:
                 live = (previous, prev_exam, prev_obj)
-            # the new choice must not be worse on the exam, nor overall (training and exam together)
-            if prev_exam["points"] > chosen_valid["points"] or prev_obj > new_obj:
+            # the new choice must not be clearly worse on the exam (EXAM_SLACK: one year is noisy, and a strict veto
+            # run after run selects on the exam year), nor worse overall (every year, the exam the latest)
+            if prev_exam["points"] > chosen_valid["points"] + EXAM_SLACK or prev_obj > new_obj:
                 keep(previous, prev_exam, prev_obj)
     # Changing what the agent trades with must be clearly worth it (CHANGE_MARGIN of the overall score), so the weekly
     # re-training does not swap parameters for noise.
@@ -1025,6 +1029,8 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
         keep(*live)
         kept_previous["margin"] = CHANGE_MARGIN
 
+    final_years = run_years(chosen)[0] if strategy != "indexador" else base
+    final_obj = new_obj if new_obj is not None else overall(final_years, chosen_valid["points"])
     importance = parameter_importance(strategy, chosen, train_mk, valid, chosen_valid["points"])
     claude_log = []
     for j, c in enumerate(claude):
@@ -1051,6 +1057,10 @@ def _train_strategy(strategy: str) -> tuple[str, dict]:
         "crises": crashes.get("kept_previous") or crashes.get(best_i if adopt else 0, crashes[0]),
         "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried, "importance": importance, "greedy": greedy_log,
         "claude": claude_log,
+        # the verdict against the S&P 500 (agents.relative_points, every year, the exam the latest): above 0 beats it
+        "overall": round(final_obj, 1),
+        "years_beating_index": sum(y > 0 for y in final_years) + (chosen_valid["points"] > 0),
+        "years_total": len(final_years) + 1,
         "history": history,
         "kept_previous": kept_previous,
         "incumbents": [{"score": round(weighted(scored[first_incumbent + j][0]), 1), "picked": best_i == first_incumbent + j,
@@ -1184,6 +1194,51 @@ def apply(results: dict, today: date) -> list[str]:
     return changed
 
 
+OBJECTIVE = 3  # 1: league points; 2: profile grade minus the index's; 3: below the index counts double, all years
+BENCH_AFTER = 10  # pre-trainings (of a profile, with this objective) a strategy gets to beat the S&P 500
+
+
+def bench(results: dict, today: date) -> list[str]:
+    """The league keeps only what beats the index. A strategy whose verdict for this profile ("overall", every year
+    against the S&P 500) is still at or below 0 after BENCH_AFTER pre-trainings leaves the league (its agents of this
+    profile are set aside, "banco"); it keeps training on Sundays and comes back, with fresh capital, once above 0."""
+    import evolution
+
+    runs: dict[str, int] = {}
+    for e in evolution.load():
+        if e.get("perfil", agents.DEFAULT_PROFILE) == PROFILE and e.get("objetivo") == OBJECTIVE:
+            for s in e.get("trained") or e.get("strategies", {}):
+                runs[s] = runs.get(s, 0) + 1
+    config, state = agents.load_config(), agents.load_state()
+    notes = []
+    for cfg in config["agents"]:
+        r = results["strategies"].get(cfg["strategy"]) or {}
+        if "overall" not in r or agents.profile_of(cfg) != PROFILE or cfg["strategy"] == "indexador":
+            continue
+        n = runs.get(cfg["strategy"], 0)
+        if cfg.get("active", True) and n >= BENCH_AFTER and r["overall"] <= 0:
+            cfg["active"] = False
+            cfg["banco"] = {"since": today.isoformat(), "overall": r["overall"], "runs": n}
+            notes.append(f"🪑 {cfg['emoji']} {cfg['name']} sai da liga: não bate o S&P 500 ao fim de {n} pré-treinos")
+        elif cfg.get("banco") and r["overall"] > 0:
+            cfg["active"] = True
+            cfg.pop("banco")
+            old = state["agents"].get(cfg["id"]) or {}
+            port = new_portfolio(cfg["capital"], today)
+            port["params"] = old.get("params", cfg["params"])
+            port["evolution"] = (old.get("evolution", []) + [{"date": today.isoformat(),
+                                                               "note": "volta à liga: já bate o S&P 500"}])[-24:]
+            state["agents"][cfg["id"]] = port
+            notes.append(f"🔙 {cfg['emoji']} {cfg['name']} volta à liga com capital novo: já bate o S&P 500")
+    agents.save(config, state)
+    return notes
+
+
+def benched(profile: str) -> set[str]:
+    """Strategies whose agents of this profile are out of the league."""
+    return {c["strategy"] for c in agents.load_config()["agents"] if c.get("banco") and agents.profile_of(c) == profile}
+
+
 def pct(x: float) -> str:
     return f"{x * 100:+.1f}%"
 
@@ -1205,16 +1260,24 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
         lines.append(
             f"{cfg['emoji']} **{cfg['name']}** · período* {pct(y['return'])} · queda máx. {pct(-y['max_drawdown'])}"
             f" · Sharpe {y.get('sharpe', 0):.1f}" + (f" · 💀 faliu {y['bankrupt']}" if y.get("bankrupt") else "") +
-            f" · exame: {v['best']['points']:+g} vs {v['default']['points']:+g} · {verdict}"
+            f" · exame: {v['best']['points']:+g} vs {v['default']['points']:+g}"
+            + (f" · vs S&P 500: **{r['overall']:+g}** ({r['years_beating_index']}/{r['years_total']} anos acima)"
+               if "overall" in r else "") + f" · {verdict}"
         )
     fields = [("🧪 Como foi feito",
                f"Treino {results['train'][0]} a {results['train'][1]} · exame {results['valid'][0]} a {results['valid'][1]}.\n"
                "Variações por estratégia; só passam as que batem os parâmetros originais em 65% dos anos de treino, "
-               "não caem mais do que eles nas crises (2008, 2011, 2020, 2022) e passam o exame. Pontos: a nota do perfil menos a do S&P 500 (10 pontos ≈ 1% ao ano acima do índice). Composição "
+               "não caem mais do que eles nas crises (2008, 2011, 2020, 2022) e passam o exame. Pontos de cada ano: a nota do perfil menos a do S&P 500 "
+               "(10 pontos ≈ 1% ao ano acima do índice; abaixo do índice contam a dobrar). Composição "
                "histórica do S&P 500, ordens à abertura seguinte, custos, câmbio e 28% de imposto, sem ver o futuro.\n"
                "*O período inclui os anos em que os parâmetros foram escolhidos, por isso é otimista; "
-               "o que conta é o exame: a nota do perfil contra o índice no último ano (crescimento do capital com as perdas e "
-               "as quedas pesadas à maneira do perfil, menos a do S&P 500), com os parâmetros escolhidos vs os originais.")]
+               "o veredicto é \"vs S&P 500\": todos os anos de treino e o exame (o ano mais recente, fora do treino), os "
+               "recentes a pesar mais. Acima de 0 bate o índice; quem não o bate ao fim de 10 pré-treinos sai da liga.")]
+    import ensemble
+
+    together = ensemble.summary_lines(ensemble.analyse(results))
+    if together:
+        fields.append(("🧩 Vale a pena ter tantos agentes? (ano a ano, 20 anos)", "\n".join(together)[:1024]))
     crash_lines, mc_lines = [], []
     for strategy, r in results["strategies"].items():
         cfg = by_strategy.get(strategy, {"emoji": "🤖", "name": strategy})
@@ -1347,15 +1410,18 @@ def post_report(results: dict, applied: list[str] | None, dry_run: bool, channel
 
 def finish(results: dict, today: date, apply_params: bool, dry_run: bool, partial: bool) -> int:
     """Save the results (keeping other strategies on a partial run), apply them and post the report."""
+    trained = sorted(results["strategies"])
     if partial and REPORT_PATH.exists():
-        previous = json.loads(REPORT_PATH.read_text())
-        results = {**results, "strategies": {**previous.get("strategies", {}), **results["strategies"]}}
-    results["perfil"] = PROFILE
+        previous = json.loads(REPORT_PATH.read_text()).get("strategies", {})
+        if json.loads(REPORT_PATH.read_text()).get("objetivo") != OBJECTIVE:  # scored another way: not comparable
+            previous = {s: r for s, r in previous.items() if "skipped" in r}
+        results = {**results, "strategies": {**previous, **results["strategies"]}}
+    results["perfil"], results["objetivo"], results["trained"] = PROFILE, OBJECTIVE, trained
     REPORT_PATH.write_text(json.dumps(results, indent=1, default=str) + "\n")
     import evolution
 
     evolution.append(json.loads(REPORT_PATH.read_text()), SEED.lstrip("-"))
-    applied = apply(results, today) if apply_params else None
+    applied = (apply(results, today) + bench(results, today)) if apply_params else None
     return post_report(results, applied, dry_run, "agentes")
 
 

@@ -1,8 +1,13 @@
 name: Laboratório intradiário (Alpaca)
 
 # Is reacting during the day worth it? The agents' stock strategies replayed over the last years on US stocks with
-# Alpaca's 30-minute bars, once with decisions every 30 minutes (the reactive rounds) and once a day (the
-# pre-training's engine), same parameters and prices. Run by hand.
+# Alpaca's 30-minute bars.
+# - comparar: decisions every 30 minutes (the reactive rounds) against once a day (the pre-training's engine), same
+#   parameters and prices.
+# - reatividade: trains how much each agent buys during the session (agents.INTRADAY_DEFAULTS), every strategy and
+#   profile on its own machine, and applies the choice. Dispatched by pretrain.yml when the last profile's series
+#   ends (so on Sundays too), or by hand.
+# - barras: only the download.
 # Two jobs, each with its own time limit: the download (hours the first time; the bars stay in the Actions cache even
 # when it stops at its limit, so the next run carries on) and the lab itself, which saves after each strategy.
 # This repo is public: the results go to the private repo one-guillion-jollars-dados (agents/lab/, deploy key
@@ -10,10 +15,15 @@ name: Laboratório intradiário (Alpaca)
 on:
   workflow_dispatch:
     inputs:
+      modo:
+        description: "O que fazer"
+        type: choice
+        options: [comparar, reatividade, barras]
+        default: comparar
       anos:
         description: "Anos a reproduzir (o Alpaca tem dados desde 2016)"
         required: false
-        default: "5"
+        default: "8"
       estrategias:
         description: "Só estas estratégias, separadas por vírgulas (vazio = todas as de ações)"
         required: false
@@ -55,7 +65,7 @@ jobs:
         env:
           ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
-        run: uv run python scripts/intraday_lab.py --anos "${{ inputs.anos }}" --so-barras
+        run: uv run python scripts/intraday_lab.py --anos "${{ inputs.anos || '8' }}" --so-barras
       - name: Guardar as barras (também as de uma descarga a meio)
         if: ${{ always() }}
         uses: actions/cache/save@v4
@@ -70,6 +80,7 @@ jobs:
 
   lab:
     needs: bars
+    if: ${{ inputs.modo == 'comparar' }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
@@ -99,7 +110,7 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_TESTES: ${{ inputs.testes && '1' || '' }}
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
-        run: uv run python scripts/intraday_lab.py --anos "${{ inputs.anos }}" --estrategias "${{ inputs.estrategias }}"
+        run: uv run python scripts/intraday_lab.py --anos "${{ inputs.anos || '8' }}" --estrategias "${{ inputs.estrategias }}"
       - name: Guardar os resultados (repositório privado), também os de uma execução a meio
         if: ${{ always() }}
         working-directory: agents
@@ -111,3 +122,116 @@ jobs:
           git commit -m "Laboratório intradiário $(date -u +%F)"
           for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; git rebase --abort 2>/dev/null; sleep 10; done
           exit 1
+
+  # One machine per profile: every strategy at every reactivity level, scored year by year against the S&P 500.
+  # The results travel to the merge job encrypted with BACKUP_KEY (artifacts are public).
+  reactivity:
+    needs: bars
+    if: ${{ inputs.modo == 'reatividade' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        perfil: [equilibrado, conservador, arrojado]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          persist-credentials: false
+          path: agents
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Barras de 30 minutos
+        uses: actions/cache/restore@v4
+        with:
+          path: out/lab/bars
+          key: alpaca-bars-${{ github.run_id }}
+          fail-on-cache-miss: true
+      - name: Treinar a reatividade (${{ matrix.perfil }})
+        env:
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          PERFIL: ${{ matrix.perfil }}
+        run: uv run python scripts/intraday_lab.py --anos "${{ inputs.anos || '8' }}" --reatividade "$PERFIL" --saida "out/reat/reatividade-$PERFIL.json"
+      - name: Cifrar os resultados
+        env:
+          BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
+          PERFIL: ${{ matrix.perfil }}
+        run: |
+          mkdir enc
+          tar czf - out/reat | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:BACKUP_KEY -out "enc/$PERFIL.tgz.enc"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reatividade-${{ matrix.perfil }}
+          path: enc/
+          retention-days: 3
+          if-no-files-found: error
+
+  reactivity-merge:
+    needs: reactivity
+    if: ${{ !cancelled() && inputs.modo == 'reatividade' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: agents-state  # writes the agents' state, like the daily run and the pre-training's merge
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reatividade-*
+          path: res
+      - name: Decifrar os resultados
+        env:
+          BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
+        run: |
+          shopt -s nullglob
+          for f in res/*/*.tgz.enc; do
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_KEY -in "$f" | tar xzf - -C "$(dirname "$f")"
+            rm "$f"
+          done
+      # The rounds push the agents' state every 10 minutes: on a race the choice is applied again to the latest state.
+      - name: Aplicar e guardar no repositório privado
+        run: |
+          git -C agents config user.name "github-actions[bot]"
+          git -C agents config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for i in 1 2 3 4 5 6; do
+            git -C agents fetch -q origin main && git -C agents reset -q --hard origin/main
+            uv run python scripts/intraday_lab.py --aplicar-reatividade res --dry-run
+            git -C agents add -A
+            git -C agents diff --cached --quiet && exit 0
+            git -C agents commit -qm "Agentes: reatividade $(date -u +%F)"
+            git -C agents push -q origin HEAD:main && exit 0
+            sleep 15
+          done
+          exit 1
+      - name: Publicar no Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_TESTES: ${{ inputs.testes && '1' || '' }}
+        run: |
+          uv run python - <<'EOF'
+          import json, sys
+          sys.path.insert(0, "scripts")
+          from discord_post import route, send
+          card = json.load(open("out/lab/reatividade-embed.json"))
+          sys.exit(send([card], {}, **(route("agentes") or {})))
+          EOF

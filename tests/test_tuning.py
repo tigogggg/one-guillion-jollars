@@ -171,7 +171,8 @@ def test_points_are_the_profile_grade_over_the_index(monkeypatch):
     markets = pretrain._MARKETS
     r = pretrain.simulate("indexador", dict(agents.STRATEGIES["indexador"][2]), markets)
     years = len(markets) / pretrain.SESSIONS_PER_YEAR
-    assert r["points"] == pytest.approx(r["profile_score"] - pretrain.index_score(markets, years), abs=0.11)
+    assert r["points"] == pytest.approx(agents.relative_points(r["profile_score"], pretrain.index_score(markets, years)), abs=0.11)
+    assert agents.relative_points(10, 4) == 6 and agents.relative_points(4, 10) == -12  # below the index counts double
     assert abs(r["points"]) < 15  # buying the index scores about what the index does (costs aside)
     # the training years' score: each year on its own, recency-weighted
     blocks = pretrain.yearly_blocks(markets)

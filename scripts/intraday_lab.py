@@ -501,6 +501,181 @@ def build_lab(years: int) -> Lab:
     return Lab(intraday, sector_of, member, years * 252, fx, ctx, fundamentals.load())
 
 
+# --------------------------------------------------------------------------
+# Training the reactivity (agents.INTRADAY_DEFAULTS) per strategy and profile
+# --------------------------------------------------------------------------
+
+# How much each agent buys during the session: every strategy and profile is replayed with each of these, on top of
+# the parameters its agent trades with (the 20-year pre-training's choice).
+GRID = ([{"reatividade": 2}, {"reatividade": 0}]
+        + [{"reatividade": 1, "espera_min": w, "esticado_max": e} for w in (30, 90) for e in (0.015, 0.03)])
+REACT_KEYS = ("reatividade", "espera_min", "esticado_max")
+
+
+def reactivity_of(params: dict) -> dict:
+    """The reactivity part of an agent's parameters, as in GRID (the defaults when it has none)."""
+    level = int(params.get("reatividade", agents.INTRADAY_DEFAULTS["reatividade"]))
+    if level != 1:
+        return {"reatividade": level}
+    return {"reatividade": 1, "espera_min": int(params.get("espera_min") or agents.NO_BUYS_AFTER_OPEN),
+            "esticado_max": float(params.get("esticado_max") or 0)}
+
+
+def agent_params(strategy: str, profile: str) -> tuple[str | None, dict]:
+    """(agent id, parameters) of the reactive agent of this strategy and profile, from the live state."""
+    config, state = agents.load_config(), agents.load_state()
+    cfg = next((c for c in config["agents"] if c["strategy"] == strategy and agents.profile_of(c) == profile
+                and agents.mode_of(c) == agents.REACTIVE and not c.get("lineage")), None)
+    if not cfg:
+        return None, {}
+    return cfg["id"], dict((state["agents"].get(cfg["id"]) or {}).get("params", cfg["params"]))
+
+
+def year_blocks(n: int) -> list[tuple[int, int]]:
+    """[start, end) of each year of n sessions, counted back from the last day (the last one is the exam year); a
+    remainder shorter than half a year joins the first year."""
+    out, end = [], n
+    while end > 0:
+        out.append((max(0, end - 252), end))
+        end -= 252
+    out.reverse()
+    if len(out) > 1 and out[0][1] - out[0][0] < 126:
+        out[1] = (out[0][0], out[1][1])
+        out.pop(0)
+    return out
+
+
+def yearly_points(equity: list[float], index: list[float], profile: str) -> list[float]:
+    """Each year's points against the index, as in the pre-training (agents.relative_points of the profile grades)."""
+    pts = []
+    for a, b in year_blocks(len(equity)):
+        years = (b - a) / 252
+        grades = []
+        for curve in (equity, index):
+            seg = np.asarray(curve[max(a - 1, 0): b], dtype=float)
+            peak = np.maximum.accumulate(seg)
+            grades.append(agents.profile_score(float(seg[-1] / seg[0] - 1), years, float((1 - seg / peak).max()), profile))
+        pts.append(agents.relative_points(*grades))
+    return pts
+
+
+def _react_job(job: tuple[str, str, int, dict]) -> tuple[str, str, int, dict]:
+    strategy, profile, k, base = job
+    params = {key: v for key, v in base.items() if key not in REACT_KEYS} | GRID_OR_LIVE[k]
+    r = run_reactive(strategy, params, LAB)
+    equity = [1 + pct / 100 for _, pct in r["curve"]]
+    index = LAB.full[agents.BENCHMARK]["Close"].reindex(pd.to_datetime([d for d, _ in r["curve"]])).ffill().bfill()
+    scores = yearly_points(equity, index.tolist(), profile)
+    return strategy, profile, k, {"config": GRID_OR_LIVE[k], "years": scores, "overall": round(pretrain.weighted(scores), 1),
+                                  "return": r["return"], "max_drawdown": r["max_drawdown"], "trades": r["trades"],
+                                  "bankrupt": r["bankrupt"]}
+
+
+GRID_OR_LIVE: list[dict] = []  # GRID plus each agent's current reactivity when it is not in GRID (set before forking)
+
+
+def choose(runs: list[dict], live: dict) -> tuple[dict, str]:
+    """The reactivity to trade with: the best overall (every year, the exam the latest) if it beats what the agent
+    uses now by pretrain.CHANGE_MIN and is not clearly worse on the exam year (pretrain.EXAM_SLACK)."""
+    now = next(r for r in runs if r["config"] == live)
+    ok = [r for r in runs if r["years"][-1] >= now["years"][-1] - pretrain.EXAM_SLACK]
+    best = max(ok, key=lambda r: r["overall"])
+    if best["config"] != live and best["overall"] >= now["overall"] + pretrain.CHANGE_MIN:
+        return best["config"], "melhor"
+    return live, "mantém"
+
+
+def train_reactivity(profile: str, strategies: dict[str, dict], workers: int) -> dict:
+    """Every strategy x GRID for one profile: the yearly points of each, and the choice."""
+    global GRID_OR_LIVE
+    agents_of = {s: agent_params(s, profile) for s in strategies}
+    lives = {s: reactivity_of(p) for s, (_, p) in agents_of.items() if p}
+    GRID_OR_LIVE = list(GRID) + [c for c in {json.dumps(v, sort_keys=True) for v in lives.values()}
+                                 for c in [json.loads(c)] if c not in GRID]
+    jobs = []
+    for s, (agent_id, p) in agents_of.items():
+        if not agent_id:
+            continue
+        base = dict(p)
+        if int(base.get("regiao") or 0) == 2:  # Europe only: the lab has US stocks only, so it is replayed on them
+            base["regiao"] = 0
+        jobs += [(s, profile, k, base) for k in range(len(GRID_OR_LIVE))
+                 if k < len(GRID) or GRID_OR_LIVE[k] == lives[s]]
+    out: dict = {}
+    with multiprocessing.get_context("fork").Pool(workers) as pool:
+        for s, prof, k, r in pool.imap_unordered(_react_job, jobs):
+            out.setdefault(s, {"runs": []})["runs"].append(r)
+            print(f"Reatividade {profile}: {sum(len(v['runs']) for v in out.values())}/{len(jobs)}", flush=True)
+    for s, v in out.items():
+        agent_id, p = agents_of[s]
+        v["runs"].sort(key=lambda r: GRID_OR_LIVE.index(r["config"]))
+        v["agent"], v["live"], v["europe_only"] = agent_id, lives[s], int(p.get("regiao") or 0) == 2
+        v["chosen"], v["verdict"] = choose(v["runs"], lives[s])
+    return out
+
+
+def apply_reactivity(results: dict[str, dict], today: date) -> list[str]:
+    """Give each agent its chosen reactivity (results: {profile: {strategy: ...}})."""
+    config, state = agents.load_config(), agents.load_state()
+    notes = []
+    for profile, by_strategy in results.items():
+        for s, v in by_strategy.items():
+            for cfg in config["agents"]:
+                if (cfg["strategy"] != s or agents.profile_of(cfg) != profile or agents.mode_of(cfg) != agents.REACTIVE):
+                    continue
+                port = state["agents"].get(cfg["id"])
+                if not port:
+                    continue
+                old = port.get("params", cfg["params"])
+                if reactivity_of(old) == v["chosen"]:
+                    continue
+                port["params"] = {**{k: val for k, val in old.items() if k not in REACT_KEYS}, **v["chosen"]}
+                note = f"reatividade: {agents.REACTIVITY[v['chosen']['reatividade']]}" + (
+                    f" (espera {v['chosen']['espera_min']} min, até {v['chosen']['esticado_max']:.1%} acima do fecho)"
+                    if v["chosen"]["reatividade"] == 1 else "")
+                port["evolution"] = (port.get("evolution", []) + [{"date": today.isoformat(), "note": note}])[-24:]
+                notes.append(f"{cfg['emoji']} {cfg['name']}: {note}")
+    agents.save(None, state)
+    return notes
+
+
+def save_reactivity(results: dict, years: int, days: tuple[str, str]) -> None:
+    """agents/lab/reatividade-<date>.json (everything) and reatividade_historico.json (one entry per training, kept)."""
+    LAB_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).isoformat(timespec="minutes")
+    payload = {"updated": stamp, "years": years, "days": list(days), "grid": GRID, "profiles": results}
+    (LAB_DIR / f"reatividade-{date.today().isoformat()}.json").write_text(json.dumps(payload, ensure_ascii=False))
+    hist_path = LAB_DIR / "reatividade_historico.json"
+    try:
+        hist = json.loads(hist_path.read_text())
+    except (OSError, ValueError):
+        hist = []
+    hist.append({"at": stamp, "years": years, "days": list(days), "profiles": {
+        p: {s: {"chosen": v["chosen"], "live": v["live"], "verdict": v["verdict"],
+                "overall": {json.dumps(r["config"], sort_keys=True): r["overall"] for r in v["runs"]}}
+            for s, v in by.items()} for p, by in results.items()}})
+    hist_path.write_text(json.dumps(hist, ensure_ascii=False, indent=1) + "\n")
+
+
+def reactivity_embed(results: dict, notes: list[str], years: int) -> dict:
+    from discord_post import BLUE, embed
+
+    lines = []
+    for profile, by in results.items():
+        info = agents.PROFILES[profile]
+        cells = []
+        for s, v in sorted(by.items()):
+            level = v["chosen"]["reatividade"]
+            cells.append(f"{s} {['🗓️', '⏳', '⚡'][level]}" + (" ✏️" if v["chosen"] != v["live"] else ""))
+        lines.append(f"{info['emoji']} **{info['label']}**: " + " · ".join(cells))
+    text = (f"Laboratório intradiário, {years} anos de ações dos EUA em barras de 30 minutos: para cada estratégia e "
+            "perfil, as compras durante o dia foram testadas em vários níveis e ganha o que melhor bate o S&P 500 ano a "
+            "ano (o último ano é o exame). 🗓️ só compra à abertura · ⏳ compra com confirmação · ⚡ compra em todas "
+            "as rondas · ✏️ mudou. Stops e alvos são vigiados em todas as rondas, em qualquer nível.\n\n" + "\n".join(lines))
+    fields = [("Mudanças", "\n".join(notes)[:1024])] if notes else None
+    return embed("⚡ Reatividade dos agentes (treino intradiário)", text[:4000], color=BLUE, fields=fields)
+
+
 def report_embed(results: dict, years: int) -> dict:
     from discord_post import BLUE, embed
 
@@ -535,9 +710,48 @@ def main() -> int:
     parser.add_argument("--estrategias", default="")
     parser.add_argument("--dry-run", action="store_true",
                         help="Save the report to out/lab/report.json instead of posting it (never printed: public logs)")
+    parser.add_argument("--reatividade", metavar="PERFIL", help="Train the reactivity of every strategy for this profile")
+    parser.add_argument("--saida", help="With --reatividade: where to write the results (an artifact, not the log)")
+    parser.add_argument("--aplicar-reatividade", metavar="PASTA",
+                        help="Apply, save and post the reactivity results in this folder (reatividade-*.json)")
     parser.add_argument("--so-barras", action="store_true",
                         help="Only download the 30-minute bars into the cache (a job of its own: the download takes hours)")
     a = parser.parse_args()
+    if a.aplicar_reatividade:
+        found = sorted(Path(a.aplicar_reatividade).rglob("reatividade-*.json"))
+        results, meta = {}, {}
+        for f in found:
+            d = json.loads(f.read_text())
+            results[d["profile"]] = d["strategies"]
+            meta = d
+        if not results:
+            print("Sem resultados de reatividade.", file=sys.stderr)
+            return 1
+        notes = apply_reactivity(results, date.today())
+        save_reactivity(results, meta["years"], tuple(meta["days"]))
+        card = reactivity_embed(results, notes, meta["years"])
+        (CACHE.parent / "reatividade-embed.json").parent.mkdir(parents=True, exist_ok=True)
+        (CACHE.parent / "reatividade-embed.json").write_text(json.dumps(card, ensure_ascii=False))  # posted after the push
+        print(f"Reatividade aplicada ({len(notes)} mudanças); resultados no repositório privado (agents/lab)", flush=True)
+        if a.dry_run:
+            return 0
+        from discord_post import route, send
+
+        return send([card], {}, **(route("agentes") or {}))
+    if a.reatividade:
+        if a.reatividade not in agents.PROFILES:
+            print(f"Perfil desconhecido: {a.reatividade}", file=sys.stderr)
+            return 1
+        strategies = {s: p for s, p in lab_strategies(None).items() if s not in agents.INTRADAY_ONLY}
+        LAB = build_lab(a.anos)
+        res = train_reactivity(a.reatividade, strategies, min(os.cpu_count() or 1, 3))
+        out = Path(a.saida or CACHE.parent / f"reatividade-{a.reatividade}.json")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"profile": a.reatividade, "years": a.anos,
+                                   "days": [LAB.days[0].isoformat(), LAB.days[-1].isoformat()], "strategies": res},
+                                  ensure_ascii=False))
+        print(f"Reatividade {a.reatividade}: {len(res)} estratégias treinadas", flush=True)
+        return 0
     if a.so_barras:
         sector_of, _, start, end = universe(a.anos)
         fetch_bars(sorted(sector_of) + ["SPY"], start, end)

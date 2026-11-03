@@ -83,3 +83,37 @@ def test_reactive_and_daily_engines_run_on_the_same_days(monkeypatch):
     reactive = lab.run_reactive("foguetao", params, built)
     assert len(daily["curve"]) == len(reactive["curve"]) == 40
     assert reactive["trades"] >= 1 and daily["trades"] >= 1
+
+
+def test_reactivity_is_scored_year_by_year_against_the_index_and_kept_unless_clearly_better():
+    assert lab.year_blocks(600) == [(0, 96 + 252), (348, 600)] or lab.year_blocks(600) == [(0, 348), (348, 600)]
+    assert lab.year_blocks(504) == [(0, 252), (252, 504)]
+    flat = [1.0] * 504
+    up = [1.0 + i / 1000 for i in range(504)]
+    pts = lab.yearly_points(up, flat, "arrojado")
+    assert len(pts) == 2 and all(p > 0 for p in pts)
+    assert all(p < 0 for p in lab.yearly_points(flat, up, "arrojado"))
+    live = {"reatividade": 2}
+    runs = [{"config": live, "years": [10, 10], "overall": 10.0},
+            {"config": {"reatividade": 0}, "years": [12, 11], "overall": 11.5},          # better, but by too little
+            {"config": {"reatividade": 1, "espera_min": 30, "esticado_max": 0.015}, "years": [40, -30], "overall": 7.0}]
+    assert lab.choose(runs, live) == (live, "mantém")
+    runs[1]["years"], runs[1]["overall"] = [40, 15], 26.5
+    assert lab.choose(runs, live) == ({"reatividade": 0}, "melhor")
+    runs[1]["years"] = [80, -5]  # much better before, clearly worse on the exam year: not taken
+    assert lab.choose(runs, live) == (live, "mantém")
+    assert lab.reactivity_of({}) == {"reatividade": 2}
+    assert lab.reactivity_of({"reatividade": 1}) == {"reatividade": 1, "espera_min": 15, "esticado_max": 0.0}
+
+
+def test_reactivity_training_runs_every_level_for_each_strategy(monkeypatch):
+    intra = {"SPY": intraday(300, seed=1), "AAA": intraday(300, seed=2), "BBB": intraday(300, seed=4),
+             "CCC": intraday(300, seed=6)}
+    fx = pd.Series(1.1, index=pd.bdate_range("2023-12-01", periods=400))
+    built = lab.Lab(intra, {"AAA": "Industrials", "BBB": "Health Care", "CCC": "Energy"}, None, 40, fx, pd.DataFrame(), {})
+    monkeypatch.setattr(lab, "LAB", built)
+    monkeypatch.setattr(lab, "agent_params", lambda s, p: ("foguetao-arrojado", {"n": 3, "cada": 5, "stop_pct": 0.1, "regiao": 2}))
+    out = lab.train_reactivity("arrojado", {"foguetao": {}}, workers=1)
+    v = out["foguetao"]
+    assert len(v["runs"]) == len(lab.GRID) and v["live"] == {"reatividade": 2} and v["europe_only"]
+    assert v["chosen"] in lab.GRID and all(len(r["years"]) >= 1 for r in v["runs"])

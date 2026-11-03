@@ -59,3 +59,27 @@ def test_relampago_keeps_the_opening_range_then_buys_the_breakout_and_sells_befo
     port["positions"] = {"AAPL": {"entry_date": "2026-11-02"}}
     assert [o["side"] for o in agents.s_relampago({}, port, orb_market(ny(15, 50), 104, 98, 103), p)] == ["sell"]
     assert agents.s_relampago({}, port, SimpleNamespace(now=None), p) == []                # the daily run: nothing
+
+
+def test_reactivity_levels_change_when_a_reactive_agent_buys(monkeypatch):
+    import pandas as pd
+
+    idx = pd.to_datetime(["2026-10-30", "2026-11-02"])
+    df = pd.DataFrame({"Open": [100.0, 103.0], "High": [101.0, 104.0], "Low": [99.0, 102.0], "Close": [100.0, 103.0],
+                       "Volume": [1, 1]}, index=idx)
+    mkt = SimpleNamespace(hist={"AAPL": df}, closes=None, as_of=date(2026, 11, 2))
+    assert abs(agents.move_today(mkt, "AAPL") - 0.03) < 1e-9
+    total, patient = {"reatividade": 2}, {"reatividade": 1, "espera_min": 60, "esticado_max": 0.02}
+    assert agents.buy_window("AAPL", ny(10, 0), total, mkt) is None
+    assert "60 min" in agents.buy_window("AAPL", ny(10, 0), patient, mkt)
+    assert "sobe 3.0%" in agents.buy_window("AAPL", ny(11, 0), patient, mkt)  # too far above yesterday's close
+    assert agents.buy_window("AAPL", ny(11, 0), {**patient, "esticado_max": 0.05}, mkt) is None
+    # level 0: the buy waits for the next open as a pending order, even with the market open
+    port = agents.new_portfolio(1000, date(2026, 10, 1))
+    order = {"side": "buy", "symbol": "AAPL", "eur": 200.0, "reason": "teste"}
+    monkeypatch.setattr(agents, "decide", lambda cfg, port, mkt, params, live=True: ([order], []))
+    monkeypatch.setattr(agents, "trading_now", lambda mkt, s, now: True)
+    monkeypatch.setattr(agents, "round_buy_block", lambda port, mkt, params: None)
+    mkt.now = None
+    done, _ = agents.react({"id": "x", "strategy": "foguetao"}, port, mkt, {"reatividade": 0}, ny(11, 0), live=False)
+    assert done == [] and port["pending"][0]["symbol"] == "AAPL" and port["pending"][0]["created"] == "2026-11-02"
