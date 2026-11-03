@@ -44,6 +44,8 @@ jobs:
   bars:
     runs-on: ubuntu-latest
     timeout-minutes: 330
+    permissions:
+      contents: write  # the durable copy of the bars (release alpaca-barras)
     outputs:
       complete: ${{ steps.fetch.outcome == 'success' }}
     steps:
@@ -53,11 +55,25 @@ jobs:
           enable-cache: true
       - run: uv sync
       - name: Barras já descarregadas
+        id: restore
         uses: actions/cache/restore@v4
         with:
           path: out/lab/bars
           key: alpaca-bars-${{ github.run_id }}
           restore-keys: alpaca-bars-
+      # The Actions cache drops what is not used for 7 days: then the bars come back from their durable copy.
+      - name: Sem cache, repor a cópia duradoura
+        if: ${{ steps.restore.outputs.cache-matched-key == '' }}
+        continue-on-error: true
+        env:
+          BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download alpaca-barras -p 'barras.tar.enc.*' -D "$RUNNER_TEMP/copia"
+          mkdir -p out/lab
+          cat "$RUNNER_TEMP"/copia/barras.tar.enc.* | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:BACKUP_KEY | tar x -C out/lab
+          rm -r "$RUNNER_TEMP/copia"
+          echo "Barras repostas: $(ls out/lab/bars | wc -l) ficheiros"
       - name: Descarregar as barras de 30 minutos que faltam
         id: fetch
         timeout-minutes: 300
@@ -66,6 +82,29 @@ jobs:
           ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
         run: uv run python scripts/intraday_lab.py --anos "${{ inputs.anos || '8' }}" --so-barras
+      # Durable copy (encrypted: the repo is public) whenever a finished year or month was added. Release assets do
+      # not count in the repo's size; the current month is not worth a new copy each day.
+      - name: Cópia duradoura das barras
+        if: ${{ steps.fetch.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -n "$BACKUP_KEY" ] || { echo "Sem BACKUP_KEY: sem cópia."; exit 0; }
+          fechados=$(cd out/lab/bars && ls | grep -v -- '-[0-9]\{4\}-[0-9][0-9]-[0-9][0-9]\.pkl$' | grep '\.pkl$' | sort | sha256sum | cut -c1-16)
+          [ "$(cat out/lab/bars/.copia 2>/dev/null)" = "$fechados" ] && { echo "Cópia em dia."; exit 0; }
+          mkdir -p "$RUNNER_TEMP/copia"  # in parts below GitHub's 2 GB per file
+          tar cf - -C out/lab bars | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:BACKUP_KEY \
+            | split -b 1900m -d - "$RUNNER_TEMP/copia/barras.tar.enc."
+          ls -l "$RUNNER_TEMP/copia"
+          gh release view alpaca-barras >/dev/null 2>&1 || gh release create alpaca-barras --latest=false --title "Barras Alpaca (cifradas)" \
+            --notes "Barras de 30 minutos das ações dos EUA para o laboratório intradiário, cifradas com BACKUP_KEY. Repostas sozinhas quando a cache do Actions expira."
+          for old in $(gh release view alpaca-barras --json assets -q '.assets[].name'); do  # parts of the last copy
+            [ -e "$RUNNER_TEMP/copia/$old" ] || gh release delete-asset alpaca-barras "$old" -y
+          done
+          gh release upload alpaca-barras "$RUNNER_TEMP"/copia/barras.tar.enc.* --clobber
+          echo "$fechados" > out/lab/bars/.copia
       - name: Guardar as barras (também as de uma descarga a meio)
         if: ${{ always() }}
         uses: actions/cache/save@v4

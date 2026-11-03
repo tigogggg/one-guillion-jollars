@@ -143,3 +143,20 @@ def test_the_engine_replays_the_checkpoints_exactly_like_python(strategy, params
     for k in ("points", "return", "max_drawdown", "trades", "bankrupt", "trade_stats", "curve"):
         assert rs[k] == py[k], k
     assert py["trades"] > 0
+
+
+def test_finished_years_and_months_are_downloaded_once(tmp_path, monkeypatch):
+    from datetime import date
+
+    ps = lab.periods(date(2024, 6, 1), date(2026, 3, 10))
+    assert [p[2] for p in ps] == ["2024", "2025", "2026m01", "2026m02", "2026m03-2026-03-10"]
+    assert ps[0][0] == date(2024, 6, 1) and ps[-1][:2] == (date(2026, 3, 1), date(2026, 3, 10))
+    # the copies a period replaces go; the other periods' files stay
+    monkeypatch.setattr(lab, "CACHE", tmp_path)
+    for name in ("AAPL_2026-2026-03-09", "AAPL_2026m03-2026-03-09", "AAPL_2026m02", "AAPL_2025"):
+        (tmp_path / f"{name}.pkl").write_bytes(b"")
+    monkeypatch.setenv("ALPACA_KEY_ID", "x")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "y")
+    (tmp_path / "AAPL_2026m03-2026-03-10.pkl").write_bytes(lab.pickle.dumps(None))
+    lab._fetch_chunk(["AAPL"], date(2026, 3, 1), date(2026, 3, 10), "2026m03-2026-03-10", "sip", ps[-1][3])
+    assert sorted(f.stem for f in tmp_path.glob("*.pkl")) == ["AAPL_2025", "AAPL_2026m02", "AAPL_2026m03-2026-03-10"]

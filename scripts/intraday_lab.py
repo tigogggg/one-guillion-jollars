@@ -88,19 +88,37 @@ def alpaca_symbol(symbol: str) -> str:
     return symbol.replace("-", ".")  # Yahoo BRK-B is Alpaca BRK.B
 
 
-def fetch_bars(symbols: list[str], start: date, end: date, feed: str = "sip") -> dict[str, pd.DataFrame]:
-    """30-minute bars (split and dividend adjusted) per symbol, by calendar year, cached on disk (out/lab/bars, kept
-    by actions/cache): finished years are downloaded once, the current year again each day."""
-    parts: dict[str, list[pd.DataFrame]] = {}
+def periods(start: date, end: date) -> list[tuple[date, date, str, tuple[str, ...]]]:
+    """(first day, last day, cache tag, copies made stale by it) of each download: a finished year whole, this year
+    by month, only the current month again each day. Stale: this year's monthly files once the year is over, the
+    daily copies of a month, and the year-to-date copies of the earlier layout ("<year>-<day>")."""
+    out = []
     for year in range(start.year, end.year + 1):
         a, b = max(start, date(year, 1, 1)), min(end, date(year, 12, 31))
-        tag = str(year) if year < end.year else f"{year}-{end.isoformat()}"
-        for s, df in _fetch_chunk(symbols, a, b, tag, feed).items():
+        if year < end.year:
+            out.append((a, b, str(year), (f"{year}m*", f"{year}-*")))
+            continue
+        for month in range(a.month, end.month + 1):
+            first = max(a, date(year, month, 1))
+            last = min(end, (pd.Timestamp(year, month, 1) + pd.offsets.MonthEnd(0)).date())
+            tag = f"{year}m{month:02d}" + ("" if month < end.month else f"-{end.isoformat()}")
+            out.append((first, last, tag, (f"{year}m{month:02d}-*", f"{year}-*")))
+    return out
+
+
+def fetch_bars(symbols: list[str], start: date, end: date, feed: str = "sip") -> dict[str, pd.DataFrame]:
+    """30-minute bars (split and dividend adjusted) per symbol, cached on disk (out/lab/bars, kept by actions/cache
+    and, encrypted, in the release alpaca-barras): each finished year and month is downloaded once, only the current
+    month again each day (periods)."""
+    parts: dict[str, list[pd.DataFrame]] = {}
+    for a, b, tag, stale in periods(start, end):
+        for s, df in _fetch_chunk(symbols, a, b, tag, feed, stale).items():
             parts.setdefault(s, []).append(df)
     return {s: pd.concat(dfs).sort_index() for s, dfs in parts.items()}
 
 
-def _fetch_chunk(symbols: list[str], start: date, end: date, tag: str, feed: str) -> dict[str, pd.DataFrame]:
+def _fetch_chunk(symbols: list[str], start: date, end: date, tag: str, feed: str,
+                 stale: tuple[str, ...] = ()) -> dict[str, pd.DataFrame]:
     key, secret = os.environ.get("ALPACA_KEY_ID"), os.environ.get("ALPACA_SECRET_KEY")
     if not key or not secret:
         raise RuntimeError("Faltam os segredos ALPACA_KEY_ID e ALPACA_SECRET_KEY.")
@@ -114,9 +132,10 @@ def _fetch_chunk(symbols: list[str], start: date, end: date, tag: str, feed: str
                 out[s] = df
         else:
             missing.append(s)
-    for old in CACHE.glob(f"*_{tag.split('-')[0]}-*.pkl"):  # earlier days' copies of the current year
-        if not old.name.endswith(f"_{tag}.pkl"):
-            old.unlink()
+    for pattern in stale:  # copies this period replaces (see periods)
+        for old in CACHE.glob(f"*_{pattern}.pkl"):
+            if not old.name.endswith(f"_{tag}.pkl"):
+                old.unlink()
     headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
     end_ts = min(datetime.combine(end, datetime.min.time(), timezone.utc) + timedelta(days=1),
                  datetime.now(timezone.utc) - timedelta(minutes=20))  # the free plan has no data for the last 15 minutes
@@ -177,7 +196,7 @@ def _fetch_chunk(symbols: list[str], start: date, end: date, tag: str, feed: str
                 print(f"Alpaca {tag}: {done}/{len(missing)} ações", flush=True)
     except _NoSip:
         print("::notice title=Alpaca::sem acesso ao feed SIP; uso o IEX", flush=True)
-        return _fetch_chunk(symbols, start, end, tag, "iex")
+        return _fetch_chunk(symbols, start, end, tag, "iex", stale)
     return out
 
 
