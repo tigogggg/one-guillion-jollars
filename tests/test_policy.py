@@ -110,3 +110,9 @@ def test_the_uncertainty_categories_are_read_from_the_authors_files(monkeypatch)
     out = policy.epu_site()
     assert out["EPUGOVTSPEND"].tolist() == [80, 90] and out["EPUREG"].tolist() == [50, 55]
     assert out["EUEPUINDXM"].index[1] == pd.Timestamp("2020-02-29") and "EPUTRADE" not in out
+
+
+def test_naics_prefixes_are_two_four_or_six_digits():
+    out = policy.naics_filter(["23", "324", "3364", "5413"])
+    assert "23" in out and "3241" in out and "324" not in out and "3364" in out
+    assert all(len(c) in (2, 4, 6) for codes in policy.NAICS.values() for c in policy.naics_filter(codes))

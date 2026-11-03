@@ -96,14 +96,22 @@ def warn(message: str) -> None:
 _BODY = 0  # which request form the API accepted (kept for the next requests)
 
 
+def naics_filter(codes: list[str]) -> list[str]:
+    """The API takes NAICS prefixes of 2, 4 or 6 digits: a 3-digit industry group becomes its 4-digit industries."""
+    out = []
+    for c in codes:
+        out += [c + d for d in "123456789"] if len(c) in (3, 5) else [c]
+    return out
+
+
 def spending(key: str, codes: list[str], first: str, last: str, tries: int = 3) -> pd.Series | None:
     """Monthly contract obligations of these NAICS codes between two dates (calendar month ends)."""
     global _BODY
     filters = {"time_period": [{"start_date": first, "end_date": last}], "award_type_codes": ["A", "B", "C", "D"],
-               "naics_codes": {"require": codes}}
+               "naics_codes": {"require": naics_filter(codes)}}
     bodies = [{"group": "month", "filters": filters},  # the API's own defaults
               {"group": "month", "spending_level": "transactions", "filters": filters},
-              {"group": "month", "filters": {**filters, "naics_codes": codes}}]  # the legacy list form
+              {"group": "month", "filters": {**filters, "naics_codes": naics_filter(codes)}}]  # the legacy list form
     rows = None
     for attempt in range(tries):
         body = bodies[_BODY % len(bodies)]
@@ -275,8 +283,11 @@ def download_epu() -> pd.DataFrame | None:
     for series in [*EPU_CATEGORIES, EU_EPU]:
         if series in cols and len(cols[series]) > 200:
             continue
-        s = context.fred_in_pieces(series, 1985, years=10)  # one long request times out from the cloud
-        if s is not None and len(s):
+        s = context.fred(series, tries=2, timeout=60)  # FRED often times out from the cloud: one short try
+        if s is None:
+            warn("FRED sem resposta: as restantes séries ficam para a próxima vez")
+            break
+        if len(s):
             cols[series] = s
     return pd.DataFrame(cols) if cols else None
 
