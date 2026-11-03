@@ -30,7 +30,20 @@ scripts/pretrain.py ──► scripts/engine.py ──► ogj_engine (Rust: engi
    same choices; on GitHub a strategy's job went from 20-45 min to about 3 min (mostly loading the data).
 3. Use the speed for better training — started: 3x more candidates in Actions, and a walk-forward check of the
    search itself (the same search on the data up to each of the last 3 years, judged on that unseen year).
-4. The live rounds (`agents.react`, the live-only strategies), then the Python engine is removed.
+4. The live rounds, then the Python engine is removed. Plan:
+   - **What moves:** everything that decides and trades — `react` (reactivity levels, buy window, the day's loss
+     stop), `live_exits`, fills at a real open during a session (`fill_pending(partial_day)`), stops on the day so far
+     (`check_exits(open_day)`), the news veto, the daily mode (`run_day`) and the live-only strategies (Joalheiro,
+     Jornalista, Catalisador, Cético, Conselho, Maestro, Relâmpago), with their inputs (rankings, news signals, the
+     league's portfolios, the round's clock) added to the engine's data.
+   - **What stays in Python:** collecting data (prices, news, SEC, FRED, Claude), the agents' lifecycle (twins,
+     profiles, bankruptcies and children, monthly mutation), Discord, the portal and charts. The live state stays the
+     JSON in the private repo; the engine reads the fields it trades with and Python writes them back.
+   - **4a — intraday lab on the engine:** the lab's 30-minute checkpoints (each a market with the day so far) run
+     `react` in Rust. Parity with Python on the lab's synthetic days, then the reactivity training takes minutes.
+   - **4b — shadow rounds:** every live round also runs the engine on the same state and market, without saving;
+     any difference from Python is written to the private repo. A week without differences, on real rounds.
+   - **4c — switch:** the rounds trade with the engine; the Python copy of the engine is deleted.
 
 ## Build
 
