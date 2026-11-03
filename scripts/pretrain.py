@@ -627,14 +627,19 @@ CHANGE_MIN = 5.0  # …and by at least this many points (0.5% a year): scores re
 EXAM_SLACK = 10.0  # a new choice may score this much less on the exam year (1% of it) if it is better overall
 
 
+_SERIES_CHOICES: dict[str, list[dict]] = {}  # choices of the earlier runs of a series inside one job, newest first
+
+
 def previous_choices(strategy: str) -> list[dict]:
     """The parameters chosen in the last pre-trainings ({"chosen", "until"}), newest first."""
     try:
         report = json.loads(REPORT_PATH.read_text())
     except (OSError, ValueError):
-        return []
+        report = {}
     r = report.get("strategies", {}).get(strategy) or {}
-    out = ([{"chosen": r["chosen"], "until": (report.get("valid") or [None, None])[1]}] if r.get("chosen") else []) + list(r.get("history") or [])
+    out = (list(_SERIES_CHOICES.get(strategy, []))
+           + ([{"chosen": r["chosen"], "until": (report.get("valid") or [None, None])[1]}] if r.get("chosen") else [])
+           + list(r.get("history") or []))
     seen, kept = [], []
     for h in out:
         if h.get("chosen") and h["chosen"] not in seen:
@@ -903,7 +908,9 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
 
     if engine.enabled(strategy):  # the Rust engine's copy of the data, built before forking so the workers share it
         engine.data_for(_MARKETS)
-    wf = walk_forward(strategy) if WF_FOLDS and strategy != "indexador" else None
+    if WF_FOLDS and strategy != "indexador" and strategy not in _WF:  # once per job (a series reuses it)
+        _WF[strategy] = walk_forward(strategy)
+    wf = _WF.get(strategy)
     name, r = _search(strategy, _MARKETS, keep_live=bool(wf) and not wf["passed"])
     if wf:
         r["walk_forward"] = wf
@@ -911,6 +918,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
 
 
 WF_FOLDS = 3  # unseen years the search is checked on (0: off)
+_WF: dict[str, dict] = {}
 
 
 def walk_forward(strategy: str) -> dict:
@@ -1230,6 +1238,35 @@ def importance_summary(results: dict) -> list[dict]:
     return sorted(rows.values(), key=lambda r: (r["helps"] - r["hurts"], r["train"]), reverse=True)
 
 
+SERIES_STABLE = 2  # runs in a row without a change that end a series
+
+
+def series(markets: list[Market], only: set[str] | None, more: int) -> dict:
+    """A run, then up to `more` runs with new seeds, each with the earlier choices as candidates (as a series of
+    workflow runs does, without loading the data again): stops when no strategy's choice changed SERIES_STABLE runs
+    in a row. Returns the last run's results."""
+    global SEED
+    base = SEED
+    results = pretrain(markets, only)
+    quiet = 0
+    for i in range(1, more + 1):
+        before = {s: r.get("chosen") for s, r in results["strategies"].items()}
+        for s, c in before.items():
+            if c:
+                _SERIES_CHOICES[s] = ([{"chosen": c, "until": results["valid"][1]}] + _SERIES_CHOICES.get(s, []))[:HISTORY_KEEP]
+        SEED = f"{base}-r{i}"
+        os.environ["PRETRAIN_SEED"] = SEED
+        results = pretrain(markets, only)
+        changed = [s for s, r in results["strategies"].items() if r.get("chosen") != before.get(s)]
+        quiet = 0 if changed else quiet + 1
+        print(f"Série: execução {i + 1}, mudaram {len(changed)}", flush=True)
+        if quiet >= SERIES_STABLE:
+            break
+    results["series_runs"] = i + 1 if more else 1
+    SEED = base
+    return results
+
+
 def pretrain(markets: list[Market], only: set[str] | None = None, processes: int | None = None) -> dict:
     """Train every strategy (in parallel processes) and report training and exam results."""
     global _MARKETS, _INNER_POOL
@@ -1543,6 +1580,9 @@ def main() -> int:
     parser.add_argument("--contexto", help="CSV with the market context (context.py --guardar), shared by every strategy")
     parser.add_argument("--saida", help="Only train and write these strategies' results to this JSON file "
                                         "(one job of a parallel run)")
+    parser.add_argument("--repeticoes", type=int, default=0,
+                        help="With --saida: a series inside this job, up to this many more runs with new seeds, until "
+                             "each strategy's choice stays the same 2 runs in a row (the data is loaded once)")
     parser.add_argument("--juntar", help="Merge the JSON results in this folder, then save, apply and report")
     parser.add_argument("--republicar", action="store_true", help="Only post the report of the saved results again")
     parser.add_argument("--so-precos", action="store_true",
@@ -1574,7 +1614,7 @@ def main() -> int:
     only = {s.strip() for s in args.estrategias.split(",") if s.strip()} or None
     if args.saida:
         try:
-            results = pretrain(markets, only)
+            results = series(markets, only, args.repeticoes)
         except Exception as e:  # an annotation is readable on the run page even when the job log is not
             import traceback
 

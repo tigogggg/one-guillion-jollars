@@ -220,3 +220,20 @@ def test_walk_forward_checks_the_search_on_years_it_did_not_see(monkeypatch):
     wf = pretrain.walk_forward("foguetao")
     assert [n for n, _ in seen] == [1350, 1200, 1050] and all(f for _, f in seen)  # each fold stops before its test year
     assert wf["wins"] == 2 and wf["losses"] == 1 and wf["passed"]
+
+
+def test_a_series_inside_one_job_stops_when_the_choice_stays(monkeypatch):
+    chosen = iter([{"n": 3}, {"n": 4}, {"n": 4}, {"n": 4}, {"n": 9}])
+    seeds, histories = [], []
+
+    def fake_pretrain(markets, only=None, processes=None):
+        seeds.append(pretrain.SEED)
+        histories.append([h["chosen"] for h in pretrain.previous_choices("foguetao")])
+        return {"valid": ["2025-01-01", "2026-01-01"], "strategies": {"foguetao": {"chosen": next(chosen)}}}
+
+    monkeypatch.setattr(pretrain, "pretrain", fake_pretrain)
+    monkeypatch.setattr(pretrain, "REPORT_PATH", Path("/nonexistent/pretrain.json"))
+    monkeypatch.setattr(pretrain, "_SERIES_CHOICES", {})
+    r = pretrain.series([], {"foguetao"}, 10)
+    assert r["series_runs"] == 4 and r["strategies"]["foguetao"]["chosen"] == {"n": 4}  # 3 → 4 → 4 → 4: stable twice
+    assert len(set(seeds)) == 4 and histories[1] == [{"n": 3}] and histories[3][0] == {"n": 4}

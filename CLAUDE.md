@@ -46,8 +46,9 @@ its own agents (`<id>-conservador`, `<id>-arrojado`) and report (`pretrain.json`
 the profile's grade (`agents.profile_score`) minus the S&P 500's over the same days (10 points ≈ 1%/year), counted
 double below the index (`agents.relative_points`); a run's verdict (`overall`) weighs every year alike, the exam as the
 latest. A strategy still at or below 0 after 10 runs of a profile (`pretrain.OBJECTIVE`) leaves the league for that
-profile (`pretrain.bench`, config `banco`) and comes back when above 0. In a series each strategy stops training once
-2 runs leave it unchanged (`scripts/series.py`). Every report also says whether the many agents add anything
+profile (`pretrain.bench`, config `banco`) and comes back when above 0. A series (`repetir`, default 10) runs inside
+each strategy's machine (`pretrain.series`, data loaded once) until its choice stays the same 2 runs in a row; then
+the next profile starts. Every report also says whether the many agents add anything
 (`scripts/ensemble.py`: all together, last year's leaders, correlation).
 Intraday reactivity (`reatividade` 0/1/2, `espera_min`, `esticado_max`) is trained by the Alpaca lab
 (`intraday_lab.py --reatividade`, workflow `intraday-lab.yml` modo=reatividade), dispatched when the last profile's

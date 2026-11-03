@@ -50,15 +50,15 @@ on:
         type: boolean
         default: true
       repetir:
-        description: "Execuções a encadear depois desta, cada uma com nova semente; cada estratégia sai da série quando 2 seguidas não lhe mudam os parâmetros"
+        description: "Execuções extra com novas sementes, dentro de cada máquina (os dados carregam-se uma vez); para quando 2 seguidas não mudam a escolha"
         required: false
-        default: "0"
+        default: "10"
       sem_mudancas:
-        description: "(interno, antigo) execuções seguidas sem mudanças até aqui"
+        description: "(antigo, ignorado)"
         required: false
         default: "0"
       estado_serie:
-        description: "(interno) estado da série: execuções seguidas sem mudanças por estratégia"
+        description: "(antigo, ignorado)"
         required: false
         default: ""
       ensaio:
@@ -79,7 +79,7 @@ on:
         required: false
         default: "auto"
       serie:
-        description: "(interno) execuções pedidas por perfil na série"
+        description: "(antigo, ignorado)"
         required: false
         default: ""
 
@@ -219,7 +219,8 @@ jobs:
           SEMENTE: ${{ inputs.semente || github.run_id }}
           PRICE_CACHE_DIR: precos
           PRETRAIN_SCALE: ${{ inputs.escala }}
-        run: uv run python scripts/pretrain.py --estrategias "$STRATEGY" --anos "$ANOS" --contexto ctx/context.csv --saida "out/$STRATEGY.json" --semente "$SEMENTE"
+          REPETIR: ${{ inputs.repetir || '10' }}
+        run: uv run python scripts/pretrain.py --estrategias "$STRATEGY" --anos "$ANOS" --contexto ctx/context.csv --saida "out/$STRATEGY.json" --semente "$SEMENTE" --repeticoes "$REPETIR"
       - name: Cifrar os resultados
         env:
           BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
@@ -334,13 +335,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          REPETIR: ${{ inputs.repetir || '0' }}
-          SERIE: ${{ inputs.serie || inputs.repetir || '0' }}
+          REPETIR: ${{ inputs.repetir || '10' }}
           SEGUINTES: ${{ inputs.seguintes }}
           ACTOR: ${{ github.actor }}
-          SEM_MUDANCAS: ${{ inputs.sem_mudancas || '0' }}
           ESTADO: ${{ job.status }}
-          ESTADO_SERIE: ${{ inputs.estado_serie }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: |
@@ -373,8 +371,7 @@ jobs:
               return 0
             fi
             next="${SEGUINTES%%,*}"; rest="${SEGUINTES#"$next"}"; rest="${rest#,}"
-            gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f perfil="$next" -f seguintes="$rest" \
-              -f repetir="$SERIE" -f serie="$SERIE"
+            gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f perfil="$next" -f seguintes="$rest" -f repetir="$REPETIR"
             echo "Pedi o pré-treino do perfil seguinte ($next)."
           }
           if [ "$ESTADO" != success ]; then
@@ -385,14 +382,6 @@ jobs:
           changed=$(jq -rn --slurpfile a "$RUNNER_TEMP/antes.json" --slurpfile b "$RUNNER_TEMP/depois.json" \
             '[$b[0] | to_entries[] | select($a[0][.key] != .value) | .key] | join(", ")')
           echo "Estratégias com parâmetros novos: ${changed:-nenhuma}"
-          # each strategy trains until 2 runs in a row leave its parameters alone (scripts/series.py); the ones out
-          # of the league for this profile wait for the Sunday run
-          out=$(uv run python scripts/series.py --antes "$RUNNER_TEMP/antes.json" --depois "$RUNNER_TEMP/depois.json" \
-                --perfil "$PRETRAIN_PERFIL" --estado "$ESTADO_SERIE")
-          todo=$(echo "$out" | sed -n 1p); estado=$(echo "$out" | sed -n 2p)
-          echo "Ainda por estabilizar: ${todo:-nenhuma}"
-          if [ -z "$todo" ]; then proximo_perfil; avisar ok "convergiu, todas as estratégias estáveis 2 execuções seguidas" || true; exit 0; fi
-          if [ "$REPETIR" -le 0 ]; then proximo_perfil; avisar ok "fez todas as execuções pedidas" || true; exit 0; fi
-          gh workflow run pretrain.yml --ref "$GITHUB_REF_NAME" -f repetir=$((REPETIR - 1)) -f perfil="$PRETRAIN_PERFIL" \
-            -f seguintes="$SEGUINTES" -f serie="$SERIE" -f estrategias="$todo" -f estado_serie="$estado"
-          echo "Pedi a próxima execução, só com as estratégias por estabilizar (depois dela ainda faltam $((REPETIR - 1)))."
+          # the series ran inside each strategy's machine (--repeticoes): on to the next profile
+          proximo_perfil
+          avisar ok "série feita em cada estratégia até a escolha estabilizar" || true
