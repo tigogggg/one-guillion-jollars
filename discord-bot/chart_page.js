@@ -585,10 +585,10 @@ const traces = (DATA.series || []).map((s, i) => {
 const xs = traces.flatMap((t) => [t.x[0], t.x[t.x.length - 1]]).filter(Boolean).sort();
 const spanYears = xs.length ? (Date.parse(xs[xs.length - 1]) - Date.parse(xs[0])) / 3.15e10 : 0;
 const narrow = window.innerWidth < 640;
-// the periods shorter than the chart's history (each counted back from its last day), then Tudo and Custom
+// every period (each counted back from the last day; one longer than the history shows all of it), then Tudo and Custom
 const periods = [[1, "1D", "day", 1], [7, "1W", "day", 7], [1, "1M", "month", 30], [3, "3M", "month", 91], [6, "6M", "month", 182],
   [1, "1A", "year", 365], [2, "2A", "year", 730], [3, "3A", "year", 1095], [4, "4A", "year", 1461], [5, "5A", "year", 1826], [10, "10A", "year", 3652]]
-  .filter((p) => p[3] < spanYears * 365.25).map(([count, label, step]) => ({ count, label, step, stepmode: "backward" }));
+  .filter(() => spanYears > 0).map(([count, label, step]) => ({ count, label, step, stepmode: "backward" }));
 if (!window.Plotly) $(elId).innerHTML = '<p class="muted" style="padding:16px">Não consegui carregar o gráfico (Plotly). As fichas dos agentes estão em baixo.</p>';
 else Plotly.newPlot(elId, traces, {
   paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 12 },
@@ -1084,12 +1084,10 @@ function perfTable(boxId, data, people, pick) {
   const tail = series[0].x.slice(-21);
   const gaps = tail.slice(1).map((d, i) => (Date.parse(d) - Date.parse(tail[i])) / 864e5).sort((a, b) => a - b);
   const step = gaps.length >= 5 ? gaps[Math.floor(gaps.length / 2)] : gaps.length ? gaps[0] : 1;
-  // and periods longer than the history are the same as "Desde o início": left out too
-  const span = (Date.parse(last) - Date.parse(first)) / 864e5;
   let sortCol = "all", showAll = false;
   const LIMIT = 20;  // the first 20 by the chosen column; a button shows the rest
   function draw() {
-    const cols = PERIODS.filter(([, d]) => d >= step && d < span).map(([k, d]) => ({ key: k, label: k, from: shift(last, d), to: last }))
+    const cols = PERIODS.filter(([, d]) => d >= step).map(([k, d]) => ({ key: k, label: k, from: shift(last, d), to: last }))
       .concat([{ key: "custom", label: "Personalizado", from: custom.from, to: custom.to }, { key: "all", label: "Desde o início", from: "0000-01-01", to: last }]);
     const rows = series.map((s) => ({ s, a: byName[s.name], cells: Object.fromEntries(cols.map((c) => [c.key, between(s, c.from, c.to, c.key === "all")])) }));
     const best = Object.fromEntries(cols.map((c) => [c.key, Math.max(...rows.map((r) => r.cells[c.key].v ?? -Infinity))]));
