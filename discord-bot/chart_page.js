@@ -231,7 +231,7 @@ export function chartPage(data, upcoming, newer, extras = {}) {
   const tabs = (portal ? [["hoje", "🏠 Hoje"]] : []).concat([["corrida", "🏁 Corrida"]])
     .concat(portal && extras.pretrain ? [["pretreino", "⏪ Pré-treino"]] : []).concat([["agentes", "🧾 Agentes"]])
     .concat(portal ? [["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
-    .concat([["agenda", "⏱️ Agenda"]])
+    .concat(portal ? [] : [["agenda", "⏱️ Agenda"]])  // in the portal the schedule is part of 🩺 Estado
     .concat(portal ? [["carteira", "💼 Carteira"], ["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]] : []);
   const body = `
 ${banner}
@@ -304,14 +304,14 @@ ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pret
 ${portal ? `<section data-tab="propostas" hidden><div id="props"></div></section>
 <section data-tab="noticias" hidden><div id="news"></div></section>
 <section data-tab="oportunidades" hidden><div id="opps"></div></section>` : ""}
-<section data-tab="agenda" hidden>
+<section data-tab="${portal ? "estado" : "agenda"}" hidden>
+  ${portal ? '<div id="status"></div>' : ""}
   <h2>⏱️ Próximas atualizações</h2>
   <div id="countdowns" class="grid"></div>
   <p class="muted small">Horários de Lisboa, os mesmos do /horario no Discord. Cada tarefa demora alguns minutos a chegar.</p>
 </section>
 ${portal ? `<section data-tab="ajuda" hidden><div id="glossary"></div></section>` : ""}
-${portal ? `<section data-tab="pesquisa" hidden><div id="q-out"></div></section>
-<section data-tab="estado" hidden><div id="status"></div></section>` : ""}
+${portal ? `<section data-tab="pesquisa" hidden><div id="q-out"></div></section>` : ""}
 ${portal ? `<section data-tab="carteira" hidden>
   ${extras.user ? `<iframe id="wallet-frame" class="wallet-frame" title="A minha carteira" data-src="${esc(extras.user.wallet)}?embed=1" loading="lazy"></iframe>
   <p class="muted small">A tua carteira também abre sozinha em <a href="${esc(extras.user.wallet)}">${esc(extras.user.wallet.slice(0, 9))}…</a> (para guardar no ecrã principal do telemóvel).</p>`
@@ -473,25 +473,39 @@ function left(ms) {
   const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
   return (d ? d + " d " : "") + (d || h ? h + " h " : "") + m + " min " + String(sec).padStart(2, "0") + " s";
 }
+// A job's times of day: evenly spaced ones as "de 10 em 10 min, 08:05–20:55", a few as a list.
+function timesText(times) {
+  const mins = times.map((t) => +t.slice(0, 2) * 60 + +t.slice(3, 5));
+  const step = mins[1] - mins[0];
+  if (times.length > 4 && step > 0 && mins.every((m, i) => !i || m - mins[i - 1] === step))
+    return times.length + "× por dia útil, de " + (step % 60 ? step + " em " + step + " min" : step / 60 + " em " + step / 60 + " h") +
+      ": " + times[0] + "–" + times[times.length - 1];
+  return times.length + "× por dia útil: " + times.join(" · ");
+}
 function drawCountdowns() {
   const now = Date.now();
   $("countdowns").innerHTML = UPCOMING.map((j) =>
     '<div class="tile"><div class="k">' + esc(j.label) + '</div><div class="v">' + left(j.at - now) + '</div><div class="s">' +
     lisbon(j.at, { weekday: "long", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) +
-    (j.times.length > 1 ? " · " + j.times.length + "× por dia útil: " + esc(j.times.join(" · ")) : "") + '</div></div>').join("");
+    (j.times.length > 1 ? " · " + esc(timesText(j.times)) : "") + '</div></div>').join("");
 }
 drawCountdowns();
 setInterval(drawCountdowns, 1000);
 
 // ---- chart ----
 function lineChart(elId, DATA) {
-const palette = ["#4cc0a8", "#e2b84a", "#5865f2", "#ed4245", "#57f287", "#eb459e", "#f0b232", "#9b84ee", "#3ba5d8", "#dbdee1"];
+const palette = ["#4cc0a8", "#e2b84a", "#5865f2", "#ed4245", "#57f287", "#eb459e", "#f0b232", "#9b84ee", "#3ba5d8", "#dbdee1",
+  "#ff8c42", "#00e5ff", "#c3e88d", "#ff2e88", "#a7c7e7", "#d4a373"];
+// In colour: the leaders of the interval in view (DATA.highlight: the n best since the start plus the Indexador) —
+// each agent with its own colour, so a line keeps it when it enters or leaves the leaders.
 const highlight = new Set(DATA.highlight || []);
-let colour = 0;
-const traces = (DATA.series || []).map((s) => {
+const always = new Set([...highlight].filter((n) => n === "Indexador"));
+const own = (DATA.series || []).map((s, i) => (s.name === "Indexador" ? "#5865f2" : palette[i % palette.length]));
+const pick = highlight.size ? { n: highlight.size - always.size, always, own, agents: (DATA.series || []).length } : null;
+const traces = (DATA.series || []).map((s, i) => {
   const on = !highlight.size || highlight.has(s.name);
   return { x: s.x, y: s.y, name: s.name, meta: s.name, type: "scatter", mode: s.x.length < 3 ? "lines+markers" : "lines",
-    line: { width: on ? 2 : 1, color: on ? palette[colour++ % palette.length] : "#6d6f78" }, opacity: on ? 1 : 0.55,
+    line: { width: on ? 2 : 1, color: on ? own[i] : "#6d6f78" }, opacity: on ? 1 : 0.55,
     hovertemplate: "%{y:+.1f}%<extra>" + esc(s.name) + "</extra>" };
 }).concat((DATA.references || []).map((s, i) => ({ x: s.x, y: s.y, name: s.name, meta: s.name, type: "scatter", mode: "lines",
   line: { width: 1.2, dash: i ? "dot" : "dash", color: i ? "#b5bac1" : "#80848e" },
@@ -514,7 +528,7 @@ else Plotly.newPlot(elId, traces, {
   yaxis: { gridcolor: "#2e2763", zerolinecolor: "#80848e", ticksuffix: "%" },
   legend: narrow ? { orientation: "h", y: -0.12, font: { size: 11 } } : { bgcolor: "rgba(0,0,0,0)" },
 }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ["lasso2d", "select2d"] });
-if (window.Plotly) intervalLegend(elId, traces);
+if (window.Plotly) intervalLegend(elId, traces, pick);
 if (window.Plotly && periods.length) customRange(elId, xs[0], xs[xs.length - 1]);
 }
 
@@ -547,7 +561,7 @@ function customRange(elId, first, last) {
 // Legend in the order of the lines (best result on top) with each one's result over the visible interval:
 // updated when the interval changes (zoom, drag, 1A/5A/10A/Tudo). The lines (and their hover) then start at 0% on the
 // interval's first day, so the chart, the hover and the legend all tell the result since then.
-function intervalLegend(elId, traces) {
+function intervalLegend(elId, traces, pick) {
   const el = $(elId);
   const day = (v) => String(v).slice(0, 10);
   const fmtDay = (d) => d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(0, 4);
@@ -588,8 +602,16 @@ function intervalLegend(elId, traces) {
     } else {
       layout["yaxis.autorange"] = true;
     }
+    const style = { name: names, legendrank: rank, y: ys };
+    if (pick) {  // the leaders of this interval in colour, the rest in grey (the reference lines as they are)
+      const best = new Set(order.filter(([r, i]) => i < pick.agents && r > -Infinity).slice(0, pick.n).map(([, i]) => i));
+      const on = traces.map((t, i) => i < pick.agents && (best.has(i) || pick.always.has(t.meta)));
+      style["line.color"] = traces.map((t, i) => (i < pick.agents ? (on[i] ? pick.own[i] : "#6d6f78") : t.line.color));
+      style["line.width"] = traces.map((t, i) => (i < pick.agents ? (on[i] ? 2 : 1) : t.line.width));
+      style.opacity = traces.map((t, i) => (i < pick.agents ? (on[i] ? 1 : 0.55) : 1));
+    }
     busy = true;
-    Plotly.update(el, { name: names, legendrank: rank, y: ys }, layout)
+    Plotly.update(el, style, layout)
       .finally(() => { busy = false; });
   };
   apply(null, null);
@@ -870,8 +892,10 @@ function restoreView(v) {
   setInterval(check, 60000);
   document.addEventListener("visibilitychange", check);
 })();
-openTab(location.hash && document.querySelector('#tabs .tab[data-tab="' + location.hash.slice(1) + '"]') ? location.hash.slice(1)
-  : document.querySelector("#tabs .tab").dataset.tab);
+{
+  const asked = location.hash.slice(1) === "agenda" && $("status") ? "estado" : location.hash.slice(1);  // old #agenda links
+  openTab(asked && document.querySelector('#tabs .tab[data-tab="' + asked + '"]') ? asked : document.querySelector("#tabs .tab").dataset.tab);
+}
 document.addEventListener("click", (e) => {  // glossary terms: tap to read (phones have no hover)
   const g = e.target.closest("abbr.g"); if (!g) return;
   const box = $("gpop") || document.body.appendChild(Object.assign(document.createElement("div"), { id: "gpop" }));
@@ -1513,7 +1537,7 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
   ];
   const dot = (h, max) => h == null ? '<span class="dot bad"></span>sem dados' : h <= max ? '<span class="dot ok"></span>em dia' : h <= max * 2 ? '<span class="dot old"></span>atrasado' : '<span class="dot bad"></span>parado';
   const ago = (h) => h == null ? "—" : h < 1 ? Math.max(1, Math.round(h * 60)) + " min" : h < 48 ? Math.round(h) + " h" : Math.round(h / 24) + " dias";
-  $("status").innerHTML = '<h2>🩺 Estado do sistema</h2><p class="muted small">Quando cada parte do portal foi atualizada pela última vez. As próximas atualizações estão em ⏱️ Agenda.</p>' +
+  $("status").innerHTML = '<h2>🩺 Estado do sistema</h2><p class="muted small">Quando cada parte do portal foi atualizada pela última vez; as próximas atualizações estão em baixo.</p>' +
     table(["Parte", "Estado", "Última atualização", "Há", "Costuma atualizar"], rows.map(([k, iso, max, every]) => { const h = hours(iso);
       return [k, dot(h, max), iso ? esc(lisbon(Date.parse(iso.length === 10 ? iso + "T18:00:00Z" : iso), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) : "—", ago(h), esc(every)]; })) +
     '<p class="muted small">🟢 em dia · 🟡 atrasado (mais do que o normal) · 🔴 parado ou sem dados. Se algo ficar parado, avisa no Discord: o canal 🔧-estado mostra os erros.</p>';
