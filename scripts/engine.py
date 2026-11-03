@@ -25,6 +25,7 @@ except ImportError:  # not built: everything stays in Python
 
 EPOCH = date(1970, 1, 1).toordinal()
 CURRENCIES = ["USD", "GBP", "CHF", "SEK", "DKK", "NOK"]
+SEPARATE = ("sector", "name", "stage2", "trend_score")  # kept apart from the float32 metrics
 
 
 def enabled(strategy: str) -> bool:
@@ -60,6 +61,14 @@ def _rows(markets: list, attr: str, sym_ix: dict, fields: list, field_ix: dict, 
                 for kind_field, kind in m._kinds.items():
                     if kind == "nullable" and kind_field in field_ix:
                         nullable.add(kind_field)
+                for c, v in m._extra.items():  # values set on the row later (Row.update) win over the table's
+                    if c in field_ix and c not in SEPARATE:
+                        if v is None:
+                            nullable.add(c)
+                            row[field_ix[c]] = np.nan
+                        elif isinstance(v, (int, float)):
+                            row[field_ix[c]] = float(v)
+                        bits |= 1 << field_ix[c]
             else:  # a plain dict (live markets, tests)
                 bits = 0
                 for c, v in m.items():
@@ -107,8 +116,8 @@ def build(markets: list) -> "ogj_engine.EngineData":
     for mkt in markets[:1] + markets[len(markets) // 2: len(markets) // 2 + 1] + markets[-1:]:
         for table in (mkt.stocks, mkt.etfs):
             for m in list(table.values())[:50]:
-                for c in (getattr(m, "_cols", None) or m):
-                    if c not in field_ix and c not in ("sector", "name", "stage2", "trend_score"):
+                for c in list(getattr(m, "_cols", None) or m) + list(getattr(m, "_extra", {})):
+                    if c not in field_ix and c not in SEPARATE:
                         field_ix[c] = len(fields)
                         fields.append(c)
     if len(fields) > 64:
@@ -194,7 +203,8 @@ def build(markets: list) -> "ogj_engine.EngineData":
         "sym_buy_tax": np.array([agents.buy_tax(s) for s in symbols], dtype=float),
         "sym_is_us": np.array([1 if agents.is_us(s) else 0 for s in symbols], dtype=np.uint8),
         "sym_is_etf": np.array([1 if s in agents.ETF_SYMBOLS else 0 for s in symbols], dtype=np.uint8),
-        "sectors": sectors, "sector_unknown": sector_ix.get("Unknown", -1),
+        "sym_defensive": np.array([1 if s in agents.DEFENSIVE_ETFS else 0 for s in symbols], dtype=np.uint8),
+        "sectors": sectors, "sectors_pt": [agents.SECTORS_PT.get(x, x) for x in sectors], "sector_unknown": sector_ix.get("Unknown", -1),
         "sector_trend": np.array(trend_ix, dtype=np.int32), "sector_rs": np.array(rs_ix, dtype=np.int32),
         "days": np.array([day_num(m.as_of) for m in markets], dtype=np.int32),
         "zone": np.array([zones[m.zone] for m in markets], dtype=np.uint8),

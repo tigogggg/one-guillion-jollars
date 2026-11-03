@@ -17,6 +17,8 @@ pub struct Symbol {
     pub buy_tax: f64,
     pub is_us: bool,
     pub is_etf: bool,
+    /// agents.DEFENSIVE_ETFS (bonds, gold)
+    pub defensive: bool,
 }
 
 /// Daily bars of one symbol (its own trading days).
@@ -65,6 +67,9 @@ pub struct Data {
     pub nullable: Vec<bool>,
     pub symbols: Vec<Symbol>,
     pub sectors: Vec<String>,
+    /// agents.SECTORS_PT of each sector (for the trades' reasons)
+    pub sectors_pt: Vec<String>,
+    pub by_name: HashMap<String, usize>,
     pub sector_unknown: i32,
     /// Context columns of each sector's trend and relative strength (filtro_setor), -1 when unknown.
     pub sector_trend: Vec<i32>,

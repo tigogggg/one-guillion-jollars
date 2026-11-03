@@ -39,11 +39,23 @@ def markets():
     for s in names[-6:]:  # pence quotes
         hist[s] = hist[s] * 100
         hist[s]["Volume"] = hist[s]["Volume"] / 100
-    hist["SXR8.DE"] = prices(n, 999)
+    etf_names = ["SXR8.DE", "VWCE.DE", "EUNH.DE", "4GLD.DE", "EXS1.DE", "IUSN.DE"]
+    for i, e in enumerate(etf_names):
+        hist[e] = prices(n, 900 + i)
     sectors = ["Technology", "Health Care", "Energy", "Financials", "Industrials", "Unknown"]
     days = [d.date() for d in hist[names[0]].index][pretrain.WARMUP:]
-    stocks = pretrain.snapshots({s: hist[s] for s in names}, days, {s: {"sector": sectors[i % 6]} for i, s in enumerate(names)})
-    etfs = pretrain.snapshots({"SXR8.DE": hist["SXR8.DE"]}, days, {"SXR8.DE": {"name": "S&P 500"}})
+    frng = np.random.default_rng(3)
+    frames = {}
+    for i, s in enumerate(names[:36]):  # point-in-time fundamentals for most stocks, with gaps
+        idx = hist[s].index
+        q = pd.Series(np.clip(50 + np.cumsum(frng.normal(0, 2, len(idx))), 0, 100), index=idx)
+        v = pd.Series(np.clip(50 + np.cumsum(frng.normal(0, 2, len(idx))), 0, 100), index=idx)
+        if i % 5 == 0:
+            q[: len(idx) // 2] = np.nan
+        frames[s] = pd.DataFrame({"fund_q": q, "fund_v": v})
+    stocks = pretrain.snapshots({s: hist[s] for s in names}, days, {s: {"sector": sectors[i % 6]} for i, s in enumerate(names)},
+                                frames=frames)
+    etfs = pretrain.snapshots({e: hist[e] for e in etf_names}, days, {e: {"name": e} for e in etf_names})
     idx = hist[names[0]].index
     fx = pd.Series(1.1 + 0.05 * np.sin(np.arange(len(idx)) / 40), index=idx)
     gbp = pd.Series(0.86 + 0.02 * np.cos(np.arange(len(idx)) / 30), index=idx)
@@ -89,12 +101,10 @@ PARAMS = [
 ]
 
 
-@pytest.mark.parametrize("params", PARAMS)
-def test_foguetao_trades_exactly_like_python(markets, params, monkeypatch):
-    params = {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **params}
-    py, py_trades = python_run("foguetao", params, markets, monkeypatch)
-    rs, rs_trades = rust_run("foguetao", params, markets)
-    assert len(py_trades) > 20
+def compare(strategy, params, markets, monkeypatch, min_trades=20):
+    py, py_trades = python_run(strategy, params, markets, monkeypatch)
+    rs, rs_trades = rust_run(strategy, params, markets)
+    assert len(py_trades) >= min_trades
     for a, b in zip(py_trades, rs_trades):
         assert a == b
     assert len(py_trades) == len(rs_trades)
@@ -102,9 +112,37 @@ def test_foguetao_trades_exactly_like_python(markets, params, monkeypatch):
     assert [(h["date"], h["equity"]) for h in port["history"]] == [(engine.from_day(d).isoformat(), e) for d, e in rs["history"]]
     assert port["points"] == rs["points"] and port.get("max_dd", 0.0) == rs["max_dd"]
     assert py["trades"] == rs["n_trades"]
-    graded = pretrain.simulate("foguetao", params, markets)  # through the engine
+    graded = pretrain.simulate(strategy, params, markets)  # through the engine
     for k in ("points", "return", "return_after_tax", "max_drawdown", "trades", "trade_stats", "by_zone", "curve"):
         assert graded[k] == py[k], k
+
+
+SHARED = {"stop_atr": 2.0, "trail_atr": 3.0, "tempo_max": 30, "gap_max": 0.05, "vix_max": 32, "min_tecnico": 30,
+          "qualidade_fund_min": 30, "filtro_setor": 1, "max_ext": 0.25}
+
+
+@pytest.mark.parametrize("strategy", [s for s in ("indexador", "guardiao", "rotador", "analista", "quant", "monge", "abutre",
+                                                  "pendulo", "cacador", "sniper", "campeao", "pescador", "deriva", "kamikaze")])
+@pytest.mark.parametrize("variant", ["defaults", "shared rules", "europe"])
+def test_every_strategy_trades_exactly_like_python(markets, strategy, variant, monkeypatch):
+    params = dict(agents.STRATEGIES[strategy][2])
+    if strategy != "indexador":
+        params = {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **params}
+    if variant == "shared rules" and strategy != "indexador":
+        params.update(SHARED)
+    if variant == "europe":
+        params.update({"regiao": 2, "por_zona": {"Queda": {"stop_pct": 0.05}}} if strategy != "indexador" else {})
+    if strategy == "sniper":
+        params["aperto_pct"] = 0.15  # the synthetic prices are wilder than real ones
+    if strategy == "abutre":
+        params.update(queda_min=0.10, qualidade_min=40, valor_min=40)
+    compare(strategy, params, markets, monkeypatch, min_trades=0 if variant == "europe" else 1)
+
+
+@pytest.mark.parametrize("params", PARAMS)
+def test_foguetao_trades_exactly_like_python(markets, params, monkeypatch):
+    params = {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **params}
+    compare("foguetao", params, markets, monkeypatch)
 
 
 def test_a_slice_of_the_days_reuses_the_data_and_matches(markets, monkeypatch):

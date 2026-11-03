@@ -62,10 +62,13 @@ impl EngineData {
         let buy_tax = arr::<f64>(d, "sym_buy_tax")?;
         let is_us = arr::<u8>(d, "sym_is_us")?;
         let is_etf = arr::<u8>(d, "sym_is_etf")?;
+        let defensive = arr::<u8>(d, "sym_defensive")?;
         let symbols: Vec<Symbol> = (0..names.len()).map(|i| Symbol {
             name: names[i].clone(), ccy: if ccy[i] < 0 { None } else { Some(ccy[i] as usize) }, pence: pence[i] != 0,
             currency_usd: usd[i] != 0, fee: fee[i], buy_tax: buy_tax[i], is_us: is_us[i] != 0, is_etf: is_etf[i] != 0,
+            defensive: defensive[i] != 0,
         }).collect();
+        let by_name = names.iter().enumerate().map(|(i, n)| (n.clone(), i)).collect();
         let n_syms = symbols.len();
         let days = arr::<i32>(d, "days")?;
         let n_days = days.len();
@@ -96,6 +99,8 @@ impl EngineData {
             nullable: arr::<u8>(d, "nullable")?.into_iter().map(|x| x != 0).collect(),
             symbols,
             sectors: list(d, "sectors")?,
+            sectors_pt: list(d, "sectors_pt")?,
+            by_name,
             sector_unknown: d.get_item("sector_unknown")?.map(|x| x.extract()).transpose()?.unwrap_or(-1),
             sector_trend: arr::<i32>(d, "sector_trend")?,
             sector_rs: arr::<i32>(d, "sector_rs")?,

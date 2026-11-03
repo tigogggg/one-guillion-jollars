@@ -1400,7 +1400,8 @@ def s_sniper(cfg, port, mkt, p):
         s for s, m in mkt.stocks.items()
         if m["stage2"] and m["range10"] <= p["aperto_pct"] and m["price"] >= m["high20_prev"] * 0.97 and m["trend_score"] >= 80
     }
-    picks = [s for s in (mkt.vcp & set(mkt.stocks)) | own if s not in port["positions"]]
+    # in the stocks' order: a set's order changes with the process's hash seed, so ties were decided at random
+    picks = [s for s in mkt.stocks if (s in mkt.vcp or s in own) and s not in port["positions"]]
     for s in sorted(picks, key=lambda s: mkt.stocks[s]["trend_score"], reverse=True)[: max(free_slots(port, p["n"]), 0)]:
         stop = mkt.stocks[s]["low10_prev"]
         eur = risk_sized(port, mkt, s, stop, p["risco_pct"], p["max_pos"])
