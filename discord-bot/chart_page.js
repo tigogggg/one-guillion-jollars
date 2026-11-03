@@ -1562,13 +1562,18 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
   const profileOf = (s) => (/-(conservador|arrojado)$/.exec(s) || [, "equilibrado"])[1];
   box.innerHTML = '<p class="muted small">Cada ponto é uma execução do pré-treino de um perfil (💻 = no PC; 🛡️ conservador, 🔥 arrojado). Cada perfil é um agente próprio. Uma execução só troca os parâmetros de um agente quando encontra melhores no treino e no exame em conjunto; o que mudou está na ficha de cada agente, em baixo.</p>' +
     '<div class="filters"><select id="evo-m">' + metrics.map(([k, l]) => '<option value="' + k + '">' + esc(l) + '</option>').join("") + '</select>' +
-    '<select id="evo-p">' + profiles.map(([k, l]) => '<option value="' + k + '">' + esc(l) + '</option>').join("") + '</select></div>' +
+    '<select id="evo-p">' + profiles.map(([k, l]) => '<option value="' + k + '">' + esc(l) + '</option>').join("") + '</select>' +
+    '<select id="evo-n"><option value="30">Últimas 30 execuções</option><option value="60">Últimas 60 execuções</option><option value="0">Todas as execuções</option></select></div>' +
     '<div id="evo-chart" class="chart" style="height:420px"></div>';
-  const x = E.runs.map(fmtRun);
   const draw = () => {
-    const m = $("evo-m").value, p = $("evo-p").value;
-    const traces = Object.entries(E.series).filter(([s]) => (s !== "indexador" || m !== "exam") && (!p || s === "indexador" || profileOf(s) === p)).map(([s, rows]) => ({
-      x, y: rows.map((r) => r ? r[m] : null), name: label(s), type: "scatter", mode: "lines+markers", connectgaps: true,
+    const m = $("evo-m").value, p = $("evo-p").value, n = +$("evo-n").value;
+    // the runs on the axis: those of the chosen profile (all of them for "Todos"), the latest n
+    let idx = E.runs.map((r, i) => i).filter((i) => !p || (E.runs[i].perfil || "equilibrado") === p);
+    if (n) idx = idx.slice(-n);
+    const x = idx.map((i) => fmtRun(E.runs[i], i));
+    const traces = Object.entries(E.series).filter(([s]) => (s !== "indexador" || m !== "exam") && (!p || s === "indexador" || profileOf(s) === p))
+      .map(([s, rows]) => [s, idx.map((i) => (rows[i] ? rows[i][m] : null))]).filter(([, y]) => y.some((v) => v != null)).map(([s, y]) => ({
+      x, y, name: label(s), type: "scatter", mode: "lines+markers", connectgaps: true,
       hovertemplate: "%{y}<extra>" + esc(label(s)) + "</extra>" }));
     if (!window.Plotly) { $("evo-chart").innerHTML = '<p class="muted">Gráfico indisponível.</p>'; return; }
     Plotly.newPlot("evo-chart", traces, { paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 11 },
@@ -1577,6 +1582,7 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
   };
   $("evo-m").addEventListener("input", draw);
   $("evo-p").addEventListener("input", draw);
+  $("evo-n").addEventListener("input", draw);
   draw();
 })();
 
