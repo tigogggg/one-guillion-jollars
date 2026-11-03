@@ -1792,6 +1792,14 @@ def _configured_broker() -> str | None:
 set_broker(os.environ.get("OGJ_CORRETORA") or _configured_broker())
 
 
+def real_capital() -> float:
+    """The money of the real account that will follow the league (config capital_real; default an agent's 1000 EUR)."""
+    try:
+        return float(json.loads(CONFIG_PATH.read_text()).get("capital_real") or 1000.0)
+    except (OSError, ValueError, TypeError):
+        return 1000.0
+
+
 def load_state() -> dict:
     return json.loads(STATE_PATH.read_text()) if STATE_PATH.exists() else {"agents": {}}
 

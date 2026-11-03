@@ -769,14 +769,15 @@ def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: lis
 
 
 def broker_comparison(strategy: str, params: dict) -> dict[str, float]:
-    """The verdict ("overall") of these parameters with each broker's costs (the search used the active broker's):
-    to see which broker suits the league, and how much each one's costs take."""
-    active, out = agents.BROKER, {}
+    """The verdict ("overall") of these parameters with each broker's costs (the search used the active broker's),
+    with the capital of the real account (config capital_real: minimums per order weigh less on more money): to see
+    which broker suits the league, and how much each one's costs take."""
+    active, out, capital = agents.BROKER, {}, agents.real_capital()
     try:
         for b in agents.BROKERS:
             agents.set_broker(b)
-            years = [simulate(strategy, params, blk, detail=False)["points"] for blk in _SEGMENTS["blocks"]]
-            out[b] = round(overall(years, simulate(strategy, params, _SEGMENTS["valid"], detail=False)["points"]), 1)
+            years = [simulate(strategy, params, blk, capital, detail=False)["points"] for blk in _SEGMENTS["blocks"]]
+            out[b] = round(overall(years, simulate(strategy, params, _SEGMENTS["valid"], capital, detail=False)["points"]), 1)
     finally:
         agents.set_broker(active)
     return out
@@ -1455,7 +1456,8 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
                "recentes a pesar mais. Acima de 0 bate o índice; quem não o bate ao fim de 10 pré-treinos sai da liga.")]
     brokers = broker_lines(results, by_strategy)
     if brokers:
-        fields.append((f"💶 Com cada corretora (treino com {agents.broker_name()})", "\n".join(brokers)[:1024]))
+        fields.append((f"💶 Com cada corretora (treino com {agents.broker_name()}; conta de {agents.real_capital():.0f} €)",
+                       "\n".join(brokers)[:1024]))
     import ensemble
 
     together = ensemble.summary_lines(ensemble.analyse(results))
