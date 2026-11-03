@@ -923,9 +923,11 @@ function show(i, scroll) {
   if (!a) return;
   SHOWN = a.name;
   markAgent(i);
-  const rank = agents.slice().sort((x, y) => (headline(y) ?? -1e9) - (headline(x) ?? -1e9)).indexOf(a) + 1;
+  const byReturn = (list) => list.slice().sort((x, y) => (headline(y) ?? -1e9) - (headline(x) ?? -1e9));
+  const rank = byReturn(agents).indexOf(a) + 1, group = agents.filter((b) => agentGroup(b) === agentGroup(a));
   $("detail").innerHTML = '<div class="panel"><h2>' + esc(a.emoji + " " + a.name) + '</h2>' +
-    '<p class="muted">🏅 ' + rank + '.º de ' + agents.length + ' na liga · ' + esc(a.strategy.label) + '</p>' +
+    '<p class="muted">🏅 ' + rank + '.º de ' + agents.length + ' na liga toda · ' + (byReturn(group).indexOf(a) + 1) + '.º de ' + group.length +
+    ' em ' + esc(agentGroup(a).replace(/^\S+\s/, "")) + ' · ' + esc(a.strategy.label) + '</p>' +
     (a.backtest ? backtestHtml(a) : liveHtml(a)) + strategyHtml(a.strategy) + '</div>';
   chapters($("detail").firstElementChild);
   if (scroll) { openTab("agentes"); $("detail").scrollIntoView({ behavior: "smooth", block: "start" }); }
