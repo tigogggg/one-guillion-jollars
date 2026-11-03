@@ -50,3 +50,15 @@ def test_each_round_saves_the_markets_in_session(tmp_path, monkeypatch):
     assert market_archive.intraday(mkt, now) == 1
     table = pd.read_csv(tmp_path / "2026" / "10-30" / "1030.csv.gz")
     assert list(table["symbol"]) == ["SAP.DE"] and table["price"].item() == 2.5
+
+
+def test_a_month_of_rounds_becomes_one_file(tmp_path):
+    for day, hhmm, price in (("10-30", "1246", 10.0), ("10-31", "0805", 11.0), ("11-02", "1306", 12.0)):
+        d = tmp_path / "2026" / day
+        d.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame([{"symbol": "SAP.DE", "price": price}]).to_csv(d / f"{hhmm}.csv.gz", index=False)
+    out = tmp_path / "out" / "rondas.csv.gz"
+    assert market_archive.pack_rounds(tmp_path, "2026-10", out) == 2
+    df = pd.read_csv(out)
+    assert list(df["ronda"]) == ["2026-10-30 12:46", "2026-10-31 08:05"] and list(df["price"]) == [10.0, 11.0]
+    assert market_archive.pack_rounds(tmp_path, "2026-09", tmp_path / "none.csv.gz") == 0

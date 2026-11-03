@@ -123,12 +123,13 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet && exit 0
-          git commit -m "Ronda $(TZ=Europe/Lisbon date '+%F %H:%M')"
+          # only this round's new files, on top of the branch as it is now (the monthly job may have restarted it)
+          new=$(git ls-files --others --exclude-standard)
+          [ -z "$new" ] && exit 0
           for i in 1 2 3; do
-            git pull --rebase origin arquivo-intradiario || { sleep 5; continue; }
-            git push origin HEAD:arquivo-intradiario && exit 0
+            git fetch -q --depth 1 origin arquivo-intradiario && git reset -q --mixed FETCH_HEAD || { sleep 5; continue; }
+            git add -- $new && git commit -qm "Ronda $(TZ=Europe/Lisbon date '+%F %H:%M')" \
+              && git push origin HEAD:arquivo-intradiario && exit 0
             sleep 5
           done
           exit 1

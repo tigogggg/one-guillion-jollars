@@ -1,0 +1,97 @@
+name: Arquivo mensal
+run-name: "Arquivo mensal ${{ inputs.mes || 'do mês passado' }}"
+
+# Git is only the buffer of the intraday archive (branch arquivo-intradiario of the private repo). On the 1st, at
+# night (no rounds), the past month's rounds and Yahoo's 5-minute bars of the European universe (kept there for 60
+# days only) become one encrypted file, a release asset of this repo (assets do not count in a repo's size), and
+# the month leaves the branch, which starts over without history. The repo is public: the file is always encrypted
+# with BACKUP_KEY. Getting a month back: see scripts/market_archive.py.
+on:
+  schedule:
+    - cron: "23 2 1 * *"
+  workflow_dispatch:
+    inputs:
+      mes:
+        description: "Mês (AAAA-MM); vazio = o mês passado"
+        required: false
+        default: ""
+      limpar:
+        description: "Tirar o mês do ramo depois de guardado"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: arquivo-mensal
+  cancel-in-progress: false
+
+jobs:
+  arquivo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Exigir BACKUP_KEY
+        env:
+          BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
+        run: |
+          if [ -z "$BACKUP_KEY" ]; then echo "::error::Falta o secret BACKUP_KEY (o ficheiro nunca sai sem cifra)."; exit 1; fi
+      - name: Mês
+        id: mes
+        run: |
+          m="${{ inputs.mes }}"
+          [ -z "$m" ] && m=$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%Y-%m)
+          echo "mes=$m" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ref: arquivo-intradiario
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: arquivo-intradiario
+          fetch-depth: 1
+      - name: Já guardado?
+        id: existe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "arquivo-${{ steps.mes.outputs.mes }}" >/dev/null 2>&1; then
+            echo "Já existe o arquivo-${{ steps.mes.outputs.mes }}: não se substitui (o ramo já pode ter sido limpo)."
+            echo "sim=1" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: astral-sh/setup-uv@v6
+        if: ${{ !steps.existe.outputs.sim }}
+        with:
+          enable-cache: true
+      - if: ${{ !steps.existe.outputs.sim }}
+        run: uv sync
+      - name: Juntar o mês
+        if: ${{ !steps.existe.outputs.sim }}
+        run: uv run python scripts/market_archive.py mensal "${{ steps.mes.outputs.mes }}"
+      - name: Cifrar e guardar
+        if: ${{ !steps.existe.outputs.sim }}
+        env:
+          BACKUP_KEY: ${{ secrets.BACKUP_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          m="${{ steps.mes.outputs.mes }}"
+          tar cf - -C out/arquivo "arquivo-$m" | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:BACKUP_KEY -out "arquivo-$m.tar.enc"
+          ls -l "arquivo-$m.tar.enc"
+          gh release create "arquivo-$m" "arquivo-$m.tar.enc" --title "Arquivo $m" --latest=false \
+            --notes "Arquivo intradiário cifrado (rondas e barras de 5 min). Abrir: openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in arquivo-$m.tar.enc | tar x"
+          mkdir -p check && gh release download "arquivo-$m" -D check
+          cmp "check/arquivo-$m.tar.enc" "arquivo-$m.tar.enc" && echo "Guardado e conferido."
+      - name: Tirar o mês do ramo
+        if: ${{ !steps.existe.outputs.sim && (github.event_name == 'schedule' || inputs.limpar) }}
+        working-directory: arquivo-intradiario
+        run: |
+          m="${{ steps.mes.outputs.mes }}"
+          if [ "$m" \> "$(date -u +%Y-%m)" ] || [ "$m" = "$(date -u +%Y-%m)" ]; then echo "O mês ainda não acabou: fica no ramo."; exit 0; fi
+          old=$(git rev-parse HEAD)
+          rm -rf "${m%-*}/${m#*-}"-*
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q --orphan novo && git add -A
+          git commit -qm "Arquivo: $m guardado na release arquivo-$m; o ramo recomeça"
+          git push --force-with-lease=arquivo-intradiario:$old origin novo:arquivo-intradiario

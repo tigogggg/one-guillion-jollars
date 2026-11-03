@@ -14,6 +14,14 @@ And on the private repo's branch arquivo-intradiario (checked out at arquivo-int
 round's prices of every market in session: YYYY/MM-DD/HHMM.csv.gz, our own intraday history of Europe and the US.
 
     uv run python scripts/market_archive.py fundamentais     # the weekly European fundamentals
+    uv run python scripts/market_archive.py mensal 2026-10   # pack a month (rounds + 5-min bars) into out/arquivo/
+
+Git is only the buffer of the intraday archive: every month (arquivo-mensal.yml) packs the month's rounds into one
+file, adds Yahoo's 5-minute bars of the European universe (Yahoo keeps them for 60 days only; the US ones come
+from Alpaca for years), encrypts it with BACKUP_KEY and keeps it as a release asset of the public repo (not
+counted in the repo's size), then the branch starts over. Getting a month back:
+    gh release download arquivo-2026-10 -R tigogggg/one-guillion-jollars
+    openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in arquivo-2026-10.tar.enc | tar x
 """
 
 from __future__ import annotations
@@ -180,7 +188,70 @@ def european_fundamentals(symbols: list[str], today: date | None = None) -> int:
     return len(out)
 
 
+def pack_rounds(src: Path, month: str, out: Path) -> int:
+    """The month's round files (YYYY/MM-DD/HHMM.csv.gz) as one file with the round's Lisbon time per row."""
+    year, mm = month.split("-")
+    frames = []
+    for f in sorted((src / year).glob(f"{mm}-*/*.csv.gz")):
+        df = pd.read_csv(f)
+        df.insert(0, "ronda", f"{year}-{f.parent.name} {f.name[:2]}:{f.name[2:4]}")
+        frames.append(df)
+    if not frames:
+        return 0
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pd.concat(frames).to_csv(out, index=False, compression={"method": "gzip", "mtime": 0})
+    return len(frames)
+
+
+def bars_5m(symbols: list[str], month: str, out: Path, batch: int = 50) -> int:
+    """Yahoo's 5-minute bars of the month (only the last 60 days exist there), one row per symbol and bar."""
+    import yfinance as yf
+
+    start = pd.Timestamp(f"{month}-01")
+    end = start + pd.offsets.MonthBegin(1)
+    if start < pd.Timestamp.now().normalize() - pd.Timedelta(days=59):
+        start = pd.Timestamp.now().normalize() - pd.Timedelta(days=59)
+    rows = []
+    for i in range(0, len(symbols), batch):
+        part = symbols[i:i + batch]
+        try:
+            df = yf.download(part, start=start, end=end, interval="5m", group_by="ticker", progress=False,
+                             auto_adjust=False, threads=True)
+        except Exception as e:  # noqa: BLE001 - a failed batch never stops the rest
+            print(f"WARN: barras de 5 min ({part[0]}...): {e!r}", file=sys.stderr)
+            continue
+        if df is None or df.empty:
+            continue
+        for sym in part:
+            if sym not in df.columns.get_level_values(0):
+                continue
+            d = df[sym].dropna(subset=["Close"])
+            if d.empty:
+                continue
+            d = d[["Open", "High", "Low", "Close", "Volume"]].copy()
+            d.columns = ["open", "high", "low", "close", "volume"]
+            d.index = d.index.tz_convert("UTC") if d.index.tz is not None else d.index.tz_localize("UTC")
+            d.insert(0, "symbol", sym)
+            rows.append(d.rename_axis("time_utc").reset_index())
+    if not rows:
+        return 0
+    out.parent.mkdir(parents=True, exist_ok=True)
+    pd.concat(rows).to_csv(out, index=False, compression={"method": "gzip", "mtime": 0})
+    return sum(map(len, rows))
+
+
 def main() -> int:
+    if len(sys.argv) > 2 and sys.argv[1] == "mensal":
+        import agents
+
+        month = sys.argv[2]
+        dest = REPO / "out" / "arquivo" / f"arquivo-{month}"
+        n = pack_rounds(INTRADAY, month, dest / f"rondas-{month}.csv.gz")
+        symbols = [c["symbol"] for c in agents.load_europe()]
+        b = bars_5m(symbols, month, dest / f"barras5m-europa-{month}.csv.gz")
+        print(f"Arquivo de {month}: {n} rondas, {b} barras de 5 min")
+        return 0 if (n or b) else 1
+
     if len(sys.argv) > 1 and sys.argv[1] == "fundamentais":
         import agents
 
