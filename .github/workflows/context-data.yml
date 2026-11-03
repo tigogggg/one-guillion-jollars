@@ -14,6 +14,10 @@ on:
         description: "Só os fundamentos da SEC (sem o contexto do FRED, que é lento)"
         type: boolean
         default: false
+      so_politica:
+        description: "Só a agenda política por setor (USAspending, incerteza política por categoria, capex)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -29,19 +33,24 @@ jobs:
           enable-cache: true
       - run: uv sync
       - name: Contexto (FRED, risco geopolítico)
-        if: ${{ !inputs.so_fundamentos }}
+        if: ${{ !inputs.so_fundamentos && !inputs.so_politica }}
         continue-on-error: true
         run: uv run python scripts/context.py --atualizar-dados
       - name: Fundamentos (SEC EDGAR)
+        if: ${{ !inputs.so_politica }}
         continue-on-error: true
         env:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}  # the SEC asks for "Name email@example.com"
         run: uv run python scripts/fundamentals.py --atualizar
       - name: Datas de resultados passadas (SEC EDGAR, 8-K item 2.02)
+        if: ${{ !inputs.so_politica }}
         continue-on-error: true
         env:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
         run: uv run python scripts/earnings.py --atualizar
+      - name: Agenda política por setor (USAspending, FRED, capex da SEC)
+        continue-on-error: true
+        run: uv run python scripts/policy.py --atualizar
       - name: Guardar
         if: ${{ !cancelled() }}
         run: |

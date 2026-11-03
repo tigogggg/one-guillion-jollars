@@ -241,7 +241,13 @@ def download(period: str, spy: pd.DataFrame | None, fx: pd.Series | None) -> pd.
         raw["spy"] = spy["Close"]
     if fx is not None:
         raw["fx"] = fx
-    return features(raw)
+    frame = features(raw)
+    if len(frame):  # the political agenda by sector (public spending, policy uncertainty, investment): policy.py
+        import policy
+
+        extra = policy.fields(raw, frame.index)
+        frame = frame.join(extra[[c for c in extra.columns if c not in frame.columns]])
+    return frame
 
 
 def features(raw: dict[str, pd.Series]) -> pd.DataFrame:
