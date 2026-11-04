@@ -43,6 +43,8 @@ import discord_bot
 from discord_post import BLUE, embed, route, send
 from rankings import SECTORS_PT, download_history, load_constituents
 
+import claude_usage
+
 REPO = Path(__file__).resolve().parents[1]
 NEWS_DIR = REPO / "state" / "news"
 SIGNALS_PATH = NEWS_DIR / "signals.json"
@@ -250,6 +252,7 @@ def analyse_claude(items: list[dict]) -> list[dict] | None:
             env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token},
         )
         out = json.loads(proc.stdout or "{}")
+        claude_usage.record("noticias", CLAUDE_MODEL, out)
         if proc.returncode != 0 or out.get("is_error"):
             log(f"Claude falhou: {(out.get('result') or proc.stderr)[:300]}", "warning")
             return None
@@ -454,6 +457,7 @@ def geo_risk(now: datetime, force: bool = False) -> dict | None:
                               input=GEO_PROMPT + text, capture_output=True, text=True, timeout=600,
                               env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token})
         out = json.loads(proc.stdout or "{}")
+        claude_usage.record("geopolitica", "sonnet", out)
         match = re.search(r"\{.*\}", out.get("result", ""), re.DOTALL)
         result = json.loads(match.group(0)) if match else {}
     except (subprocess.TimeoutExpired, ValueError) as e:

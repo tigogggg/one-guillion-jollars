@@ -32,6 +32,8 @@ import requests
 from discord_post import GREEN, REPO, embed
 from health import DATA_SOURCES, ORANGE, data_line, last_data_date
 
+import claude_usage
+
 LISBON = ZoneInfo("Europe/Lisbon")
 API = "https://api.github.com"
 FMP_DAILY = 250  # FMP free tier
@@ -118,6 +120,7 @@ def claude_test() -> tuple[bool, str]:
                               input="Responde apenas: ok", capture_output=True, text=True, timeout=120,
                               env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token})
         out = json.loads(proc.stdout or "{}")
+        claude_usage.record("limites_teste", CLAUDE_MODEL, out)
     except (subprocess.TimeoutExpired, ValueError) as e:
         return False, f"❌ Claude: não respondeu ({str(e)[:120]})"
     if proc.returncode != 0 or out.get("is_error"):

@@ -55,3 +55,33 @@ def test_a_grave_event_asks_for_a_view_but_not_twice_a_day(monkeypatch, tmp_path
     (tmp_path / "geo.json").write_text(json.dumps({"at": now.isoformat(), "risk": 5}))
     (tmp_path / "visao.json").write_text(json.dumps({"at": (now - timedelta(hours=3)).isoformat()}))
     assert vision.shock(now) is None  # a view from 3 hours ago is recent enough
+
+
+def test_the_view_keeps_tilts_per_horizon_and_factor():
+    raw = {"resumo": "x", "cenarios": [{"nome": "base", "probabilidade": 100}], "setores": {"Energy": 1},
+           "fatores": {"valor": 2, "magia": 1}, "horizontes": {"3m": {"setores": {"Energy": -1}, "fatores": {"momento": 5}},
+                                                              "24m": {"setores": {"Energy": 2}}}}
+    v = vision.clean(raw)
+    assert v["fatores"] == {"valor": 2} and v["horizontes"] == {"3m": {"setores": {"Energy": -1}, "fatores": {"momento": 2}}}
+    assert "⏱️ Por horizonte" in str(vision.card(v))
+
+
+def test_past_views_are_scored_against_the_market_per_horizon():
+    from datetime import date
+
+    import pandas as pd
+
+    days = pd.bdate_range("2025-01-01", "2026-03-01")
+    up = pd.Series([100 * 1.001 ** i for i in range(len(days))], index=days)
+    flat = pd.Series(100.0, index=days)
+    down = pd.Series([100 * 0.999 ** i for i in range(len(days))], index=days)
+    closes = {agents.BENCHMARK: flat, "XLE": up, "XLK": down, "VLUE": up}
+    hist = [{"at": "2025-01-02T05:41+00:00", "horizontes": {
+        "3m": {"setores": {"Energy": 2, "Information Technology": -1}, "fatores": {"valor": -1}},
+        "18m": {"setores": {"Energy": 1}, "fatores": {}}}}]
+    out = vision.evaluate(hist, closes, date(2025, 6, 1))
+    rows = {(r["horizonte"], r["tipo"]): r for r in out["avaliacoes"]}
+    assert rows[("3m", "setores")]["maduro"] and rows[("3m", "setores")]["acertos"] == 1.0
+    assert rows[("3m", "setores")]["excesso"] > 0 and rows[("3m", "fatores")]["excesso"] < 0
+    assert not rows[("18m", "setores")]["maduro"]  # still running: kept apart
+    assert out["resumo"]["3m"]["setores"]["maduras"]["visoes"] == 1 and "em_curso" in out["resumo"]["18m"]["setores"]

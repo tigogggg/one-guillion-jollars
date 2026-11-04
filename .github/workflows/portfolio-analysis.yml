@@ -22,6 +22,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado: guarda o uso do Claude)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -35,3 +41,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: uv run python scripts/portfolio_analysis.py "$RID"
+      - name: Uso do Claude (repositório privado)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        working-directory: agents
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A lab/uso_claude 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -qm "Uso do Claude $(date -u +%F)"
+          for i in 1 2 3 4 5; do git pull -q --rebase origin main && git push -q origin HEAD:main && exit 0; git rebase --abort 2>/dev/null; sleep 5; done
+          exit 1

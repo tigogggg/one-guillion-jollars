@@ -14,7 +14,7 @@ Reply to him in **pt-PT**, short and clear; commit messages in English.
   exposure, investment growth; used by the Estratega), SEC fundamentals point-in-time (`fundamentals.py`), opportunities (`opportunities.py`),
   proposals (`proposals.py`), news + Claude geopolitics + SEC 8-Ks (`news.py`), US House members' disclosed trades
   (`congress.py`), Claude agent review (`agent_review.py`),
-  platform update notes (`updates.py`), evolution history (`evolution.py`), local training (`train_local.py`).
+  platform update notes (`updates.py`), Claude usage per call kept in `agents/lab/uso_claude` (`claude_usage.py`; local summary: `uv run python scripts/claude_usage.py`), evolution history (`evolution.py`), local training (`train_local.py`).
 - Tests: `uv run pytest -q tests` (must pass before pushing).
 - Data in git: `data/context/*.csv`, `data/fundamentals/fundamentals.csv.gz` (refreshed weekly by `context-data.yml`).
 - Agents state: `agents/config.json`, `agents/state.json`, `agents/pretrain.json` (latest pre-training),

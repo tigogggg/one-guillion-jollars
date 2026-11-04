@@ -58,6 +58,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 
+import claude_usage
 import agents
 
 JURORS = {"rendimento": 0.20, "risco": 0.20, "robustez": 0.25, "eficiencia": 0.10, "diversificacao": 0.15, "regimes": 0.10}
@@ -256,6 +257,7 @@ def claude_review(out: list[dict]) -> dict[str, dict[str, dict]]:
                               input=JUROR_PROMPT + json.dumps(data, ensure_ascii=False, default=str), capture_output=True,
                               text=True, timeout=900, env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token})
         reply = json.loads(proc.stdout or "{}")
+        claude_usage.record("juri", MODEL, reply)
         if proc.returncode != 0 or reply.get("is_error"):
             return {}
         match = re.search(r"\{.*\}", reply.get("result", ""), re.DOTALL)
@@ -498,6 +500,7 @@ def president(data: dict) -> str:
                               input=PROMPT + json.dumps(data, ensure_ascii=False, default=str), capture_output=True, text=True,
                               timeout=600, env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token})
         out = json.loads(proc.stdout or "{}")
+        claude_usage.record("juri_presidente", MODEL, out)
         if proc.returncode != 0 or out.get("is_error"):
             return ""
         return str(out.get("result") or "").strip()[:1500]

@@ -24,6 +24,7 @@ import subprocess
 import sys
 from datetime import date
 
+import claude_usage
 import agents
 import strategy_docs
 from discord_post import BLUE, embed, route, send
@@ -117,6 +118,7 @@ def ask(data: dict) -> tuple[dict | None, str]:
                               input=PROMPT + json.dumps(data, ensure_ascii=False, default=str), capture_output=True, text=True,
                               timeout=900, env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token})
         out = json.loads(proc.stdout or "{}")
+        claude_usage.record("agent_review", MODEL, out)
         if proc.returncode != 0 or out.get("is_error"):
             return None, f"O Claude falhou: {(out.get('result') or proc.stderr or '')[:300]}"
         match = re.search(r"\{.*\}", out.get("result", ""), re.DOTALL)

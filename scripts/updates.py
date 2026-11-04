@@ -24,6 +24,8 @@ import discord_bot
 import interactive
 from discord_post import embed, route, send
 
+import claude_usage
+
 MODEL = "sonnet"
 KV_KEY = "updates:last"
 GREEN = 0x39FF88
@@ -93,6 +95,7 @@ def ask(items: list[dict]) -> tuple[dict | None, str]:
                               input=PROMPT + text, capture_output=True, text=True, timeout=600,
                               env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token})
         out = json.loads(proc.stdout or "{}")
+        claude_usage.record("atualizacoes", MODEL, out)
         if proc.returncode != 0 or out.get("is_error"):
             return None, f"o Claude falhou: {(out.get('result') or proc.stderr or '')[:200]}"
         match = re.search(r"\{.*\}", out.get("result", ""), re.DOTALL)

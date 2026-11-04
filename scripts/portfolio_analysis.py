@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 
 import discord_bot
 
+import claude_usage
+
 MODEL = "sonnet"
 KEEP_DAYS = 90
 
@@ -91,6 +93,7 @@ def ask_claude(payload: dict) -> tuple[dict | None, str]:
                               input=PROMPT + json.dumps(payload, ensure_ascii=False, indent=1),
                               capture_output=True, text=True, timeout=600, env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token})
         out = json.loads(proc.stdout or "{}")
+        claude_usage.record("carteira", MODEL, out)
     except (subprocess.TimeoutExpired, ValueError) as e:
         return None, f"O Claude não respondeu: {e}"
     if proc.returncode != 0 or out.get("is_error"):
