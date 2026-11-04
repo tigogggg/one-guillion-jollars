@@ -67,7 +67,7 @@ def tunables(strategy: str) -> dict[str, tuple]:
 
     own = [k for k in agents.STRATEGIES[strategy][2] if k in agents.PARAM_BOUNDS]
     shared = SHARED_IN_BACKTEST if strategy != "indexador" else []
-    return {k: agents.PARAM_BOUNDS[k] for k in own + shared}
+    return {k: agents.bounds_of(strategy, k) for k in own + shared}
 
 
 def payload() -> dict:

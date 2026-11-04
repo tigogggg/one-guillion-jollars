@@ -613,7 +613,7 @@ def variants(strategy: str, n: int) -> list[dict]:
             if k in agents.OFFABLE and rng.random() < OFF_SHARE:
                 p[k] = 0
                 continue
-            lo, hi, kind = PARAM_BOUNDS[k]
+            lo, hi, kind = agents.bounds_of(strategy, k)
             v = rng.uniform(lo, hi)
             p[k] = int(round(v)) if kind is int else round(v, 4)
         out.append(p)
@@ -707,12 +707,12 @@ def claude_candidates(strategy: str, base: dict) -> list[dict]:
     return out
 
 
-def nudge(params: dict, rng: random.Random, size: float = 0.10) -> dict:
+def nudge(params: dict, rng: random.Random, size: float = 0.10, strategy: str | None = None) -> dict:
     """A neighbour: every numeric parameter that is on moves by up to +/-size, within its bounds."""
     p = dict(params)
     for k, v in params.items():
         if k in PARAM_BOUNDS and v:
-            lo, hi, kind = PARAM_BOUNDS[k]
+            lo, hi, kind = agents.bounds_of(strategy, k)
             new = min(hi, max(lo, v * rng.uniform(1 - size, 1 + size)))
             p[k] = int(round(new)) if kind is int else round(new, 4)
     return p
@@ -763,7 +763,7 @@ def greedy_rules(strategy: str, chosen: dict, train_mk: list[Market], valid: lis
     tries = []
     rules = []
     for k in [k for k in SHARED_IN_BACKTEST if k in agents.OFFABLE and not chosen.get(k) and agents.uses_param(strategy, k)]:
-        lo, hi, kind = PARAM_BOUNDS[k]
+        lo, hi, kind = agents.bounds_of(strategy, k)
         rules.append((k, sorted({int(round(lo + f * (hi - lo))) if kind is int else round(lo + f * (hi - lo), 4) for f in GREEDY_LEVELS})))
     jobs = [(strategy, {**chosen, k: v}, "train") for k, levels in rules for v in levels]
     if _SEGMENTS.get("train") is train_mk:  # on the worker processes
@@ -1126,7 +1126,7 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
         if i == 0:
             break
         mine = weighted(scored[i][0])
-        near = [weighted(y) for y, _ in _map(_years, [(strategy, nudge(pool[i], rng)) for _ in range(NEIGHBOURS)])]
+        near = [weighted(y) for y, _ in _map(_years, [(strategy, nudge(pool[i], rng, strategy=strategy)) for _ in range(NEIGHBOURS)])]
         plateau[i] = near
         # nearby values must keep PLATEAU of the gain over the original (scores relative to the index can be negative)
         w0 = weighted(base)
@@ -1292,7 +1292,7 @@ def parameter_importance(strategy: str, chosen: dict, train_mk: list[Market], va
         if value and value != defaults.get(k):
             alts.append((k, value, {**chosen, k: defaults.get(k, 0)}, True))
         elif not value and k in agents.OFFABLE:
-            lo, hi, kind = PARAM_BOUNDS[k]
+            lo, hi, kind = agents.bounds_of(strategy, k)
             mid = int(round((lo + hi) / 2)) if kind is int else round((lo + hi) / 2, 4)
             alts.append((k, value, {**chosen, k: mid}, False))
     if _SEGMENTS.get("train") is train_mk and _SEGMENTS.get("valid") is valid:  # on the worker processes

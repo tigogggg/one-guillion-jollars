@@ -306,6 +306,15 @@ PARAM_BOUNDS = {
     # Pêndulo: minimum momentum of the best equity ETF to stay in equities
     "limiar_mom": (0.0, 0.08, float),
 }
+# A strategy's own bounds where they differ (the Estratega rebalances by the month or the quarter: a slow rotation pays
+# less tax, see agents/lab/agenda-*.json).
+STRATEGY_BOUNDS = {"estratega": {"cada": (21, 126, int)}}
+
+
+def bounds_of(strategy: str | None, key: str) -> tuple:
+    return STRATEGY_BOUNDS.get(strategy or "", {}).get(key) or PARAM_BOUNDS[key]
+
+
 # Variables every strategy (but the Indexador) has, on top of its own. The defaults keep the original
 # behaviour; the training (pre-training, monthly mutation and the shadow copies) switches them on and tunes them.
 # gap_max is on from the start (8%): a buy is cancelled when the stock opens that far from the close it was decided on.
@@ -1202,7 +1211,7 @@ def mutate(params: dict, rng: random.Random, strategy: str | None = None) -> lis
             if uses_param(strategy, k):
                 params.setdefault(k, v)
     for k in [k for k in params if k in PARAM_BOUNDS and uses_param(strategy, k)]:
-        lo, hi, kind = PARAM_BOUNDS[k]
+        lo, hi, kind = bounds_of(strategy, k)
         if k in OFFABLE and not params[k]:
             if rng.random() < 0.25:
                 new = rng.uniform(lo, hi)
