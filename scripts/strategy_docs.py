@@ -69,7 +69,7 @@ PARAMS = {
 }
 
 PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext", "gap_max",
-              "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max", "queda_min", "limiar_mom", "nucleo", "banda", "limiar_conc", "limiar_credito", "limiar_ciclo"}
+              "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max", "queda_min", "limiar_mom", "nucleo", "banda", "limiar_conc", "limiar_credito", "limiar_ciclo", "esgotado_max"}
 
 # strategy: (idea, buys when, sells when, position size)
 DOCS = {
@@ -198,6 +198,12 @@ DOCS = {
         "A cada {cada} sessões copia a carteira combinada dos {lideres} agentes que mais batem o S&P 500 na zona atual do mercado (alta, neutra, cautelosa ou queda): pelo registo ao vivo nessa zona (15+ dias) ou, até lá, pelo pré-treino.",
         "Vende o que sai das carteiras dos líderes; fica em dinheiro se nenhum agente bater o S&P 500 nesta zona.",
         "Os pesos das posições dos líderes, até {n} ações.",
+    ),
+    "tematico": (
+        "Segue os temas do mercado (ideia do theme-detector das trading skills de tradermonty): semicondutores, software, defesa, biotecnologia, bancos, energia... ordenados pela força face ao S&P 500 a 1, 3, 6 e 12 meses.",
+        "A cada {cada} sessões escolhe os {temas} temas mais fortes (acima do S&P 500 e sem estarem esgotados: mais de {esgotado_max} acima da média de 200 dias) e compra as {por_tema} ações mais fortes de cada.",
+        "Vende as que saem da seleção; sem temas fortes, fica no S&P 500.",
+        "{nucleo} no S&P 500 (núcleo, folga de {folga}); o resto em partes iguais pelas ações escolhidas.",
     ),
     "navegador": (
         "Para onde vai o mercado: lê o regime macro (1-2 anos) em rácios entre ativos e escolhe os ETFs desse regime (ideia do macro-regime-detector das trading skills de tradermonty).",

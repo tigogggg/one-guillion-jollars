@@ -306,6 +306,10 @@ PARAM_BOUNDS = {
     "segue_zona": (0, 1, int),
     # Navegador: how far a six-month ratio must move to call a regime (context.regime_fields)
     "limiar_conc": (0.0, 0.06, float),
+    # Temático: how many themes and stocks per theme; an industry this far above its 200-day average is exhausting
+    "temas": (1, 5, int),
+    "por_tema": (1, 5, int),
+    "esgotado_max": (0.15, 0.60, float),
     "limiar_credito": (0.0, 0.08, float),
     "limiar_ciclo": (0.02, 0.20, float),
     "limiar_corr": (0.0, 0.6, float),
@@ -314,7 +318,7 @@ PARAM_BOUNDS = {
 }
 # A strategy's own bounds where they differ (the Estratega rebalances by the month or the quarter: a slow rotation pays
 # less tax, see agents/lab/agenda-*.json).
-STRATEGY_BOUNDS = {"estratega": {"cada": (21, 126, int)}}
+STRATEGY_BOUNDS = {"estratega": {"cada": (21, 126, int)}, "tematico": {"cada": (10, 126, int)}}
 
 
 def bounds_of(strategy: str | None, key: str) -> tuple:
@@ -678,6 +682,7 @@ def load_market(now: datetime | None = None, live: bool = False) -> Market:
     constituents = load_constituents()
     europe = load_europe()
     sector_of = {c["symbol"]: c["sector"] for c in constituents} | {c["symbol"]: c["sector"] for c in europe}
+    industry_of = {c["symbol"]: c.get("industry") for c in constituents}
     name_of = {c["symbol"]: c["name"] for c in constituents} | {c["symbol"]: c["name"] for c in europe}
     history = (lambda tickers: round_history(tickers, now)) if live else download_history
     raw = history(list(sector_of) + ["SPY"])
@@ -727,7 +732,7 @@ def load_market(now: datetime | None = None, live: bool = False) -> Market:
             continue
         m = trend_metrics(df)
         if m:
-            stocks[sym] = {**m, **extra_metrics(df), "sector": sector_of[sym], "name": name_of.get(sym, ""),
+            stocks[sym] = {**m, **extra_metrics(df), "sector": sector_of[sym], "industry": industry_of.get(sym), "name": name_of.get(sym, ""),
                             "stage2": is_stage2(m), "currency": currency_of(sym)}
             if not is_us(sym):  # trading volume in US dollars, like the US stocks (opportunities, safety score)
                 usd = float(probe.fx.iloc[-1]) if len(probe.fx) else 1.0
@@ -1855,6 +1860,47 @@ def s_maestro(cfg, port, mkt, p):
     return orders
 
 
+def s_tematico(cfg, port, mkt, p):
+    """The hottest themes (after tradermonty's theme-detector): industries ranked by their momentum against the S&P 500
+    over 1, 3, 6 and 12 months (context.INDUSTRY_ETFS), the best stocks of the top `temas`, a core in the S&P 500; an
+    industry stretched more than `esgotado_max` above its 200-day average is skipped as exhausting."""
+    import context
+
+    if not due(port, mkt, p["cada"]):
+        return []
+    by_theme: dict[str, list[str]] = {}
+    for s, m in mkt.stocks.items():
+        key = context.industry_key(m.get("industry"))
+        if key:
+            by_theme.setdefault(key, []).append(s)
+    heat = {}
+    for key, syms in by_theme.items():
+        mom = mkt.context.get(f"{key}_mom")
+        trend = mkt.context.get(f"{key}_trend")
+        if len(syms) < p.get("min_acoes_tema", 3) or mom is None:
+            continue
+        if p["esgotado_max"] and trend is not None and trend > p["esgotado_max"]:
+            continue
+        heat[key] = mom
+    top = [k for k in sorted(heat, key=heat.get, reverse=True) if heat[k] > 0][: p["temas"]]
+    targets = []
+    for key in top:
+        ranked = sorted(by_theme[key], key=lambda s: 1000 * mkt.stocks[s]["stage2"] + mkt.stocks[s]["trend_score"], reverse=True)
+        targets += ranked[: p["por_tema"]]
+    core = BENCHMARK
+    weight = (1 - p["nucleo"]) / max(len(targets), 1)
+    orders = rebalance(port, mkt, targets, weight, {core}, p.get("stop_pct"), "tema: " + ", ".join(k[4:] for k in top))
+    eq = equity(port, mkt)
+    pos = port["positions"].get(core)
+    current = position_value(mkt, core, pos) / eq if pos else 0.0
+    target = p["nucleo"] + (1 - p["nucleo"]) * (0.0 if targets else 1.0)
+    if current < target - p["folga"]:
+        orders.append(order_buy(core, (target - current) * eq, "núcleo S&P 500"))
+    elif pos and current > target + p["folga"]:
+        orders.append(order_sell(core, "núcleo S&P 500", fraction=(current - target) / current))
+    return orders
+
+
 # What the Navegador holds in each macro regime: (ETF, weight), in this order; an ETF without a price that day leaves its
 # weight to the S&P 500. Concentration: the mega caps lead (Nasdaq 100 and the cap-weighted S&P 500); broadening: small
 # caps and value join; contraction: bonds and gold beside the index; inflation (stocks and bonds falling together):
@@ -1967,6 +2013,8 @@ STRATEGIES = {
     "cetico": (s_cetico, "Más notícias que o mercado ignorou", {"n": 4, "limiar": 3, "stop_pct": 0.06, "alvo_pct": 0.08, "max_dias": 10}),
     "conselho": (s_conselho, "Compra o que vários agentes apoiam", {"n": 6, "min_votos": 2, "stop_pct": 0.10}),
     "maestro": (s_maestro, "Copia os agentes que melhor se portam no regime de mercado atual", {"n": 8, "lideres": 3, "janela": 20, "cada": 5}),
+    "tematico": (s_tematico, "Os temas mais quentes: as melhores ações das indústrias com mais força face ao S&P 500",
+                 {"temas": 3, "por_tema": 3, "cada": 21, "nucleo": 0.3, "folga": 0.05, "esgotado_max": 0.35}),
     "navegador": (s_navegador, "ETFs pelo regime macro: concentração, alargamento, contração, inflação ou transição",
                   {"cada": 5, "folga": 0.05, "limiar_conc": 0.02, "limiar_credito": 0.03, "limiar_ciclo": 0.08,
                    "limiar_corr": 0.3}),

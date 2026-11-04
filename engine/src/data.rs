@@ -94,6 +94,11 @@ pub struct Data {
     pub sector_eu_epub: Vec<i32>,
     pub sector_eu_capex: Vec<i32>,
     pub sector_eu_has_key: Vec<u8>,
+    /// Each symbol's industry (theme), -1 when none; each industry's display key and context columns (or -1).
+    pub sym_industry: Vec<i32>,
+    pub industry_names: Vec<String>,
+    pub industry_mom: Vec<i32>,
+    pub industry_trend: Vec<i32>,
     pub days: Vec<i32>,
     pub zone: Vec<u8>,
     pub sessions: Vec<i32>,

@@ -50,6 +50,48 @@ YAHOO_SERIES = {"vix": "^VIX", "tnx": "^TNX", "oil_y": "BZ=F", "oil_y2": "CL=F",
 # six months. Equal-weight vs cap-weight S&P 500 (concentration), small vs large caps, high yield vs investment grade
 # (credit), consumer discretionary vs staples (cycle), the stock-bond correlation (inflation), the yield curve.
 REGIME_ETFS = ["RSP", "IWM", "HYG", "LQD", "TLT"]
+# Industries (themes) finer than the 11 sectors: a US industry ETF with a long history -> the GICS sub-industries it
+# stands for (after the theme-detector of tradermonty/claude-trading-skills: industries ranked by momentum over several
+# horizons). An S&P 500 stock whose sub-industry is not here has no theme signal.
+INDUSTRY_ETFS = {
+    "SMH": ["Semiconductors", "Semiconductor Materials & Equipment"],
+    "IGV": ["Application Software", "Systems Software"],
+    "FDN": ["Interactive Media & Services", "Internet Services & Infrastructure", "Broadline Retail"],
+    "SKYY": ["Technology Hardware, Storage & Peripherals", "Communications Equipment", "Electronic Components",
+             "Electronic Equipment & Instruments", "Electronic Manufacturing Services", "Technology Distributors"],
+    "XBI": ["Biotechnology"],
+    "IHE": ["Pharmaceuticals"],
+    "IHI": ["Health Care Equipment", "Health Care Supplies"],
+    "IHF": ["Health Care Services", "Managed Health Care", "Health Care Facilities", "Health Care Distributors"],
+    "ITA": ["Aerospace & Defense"],
+    "KRE": ["Regional Banks"],
+    "KBE": ["Diversified Banks"],
+    "KIE": ["Property & Casualty Insurance", "Life & Health Insurance", "Multi-line Insurance", "Reinsurance", "Insurance Brokers"],
+    "IAI": ["Investment Banking & Brokerage", "Asset Management & Custody Banks", "Financial Exchanges & Data"],
+    "XOP": ["Oil & Gas Exploration & Production", "Integrated Oil & Gas", "Oil & Gas Refining & Marketing"],
+    "OIH": ["Oil & Gas Equipment & Services", "Oil & Gas Drilling"],
+    "XHB": ["Homebuilding", "Building Products", "Home Furnishings", "Home Improvement Retail"],
+    "XRT": ["Apparel Retail", "Other Specialty Retail", "Consumer Staples Merchandise Retail", "Automotive Retail",
+            "Computer & Electronics Retail", "Food Retail", "Drug Retail"],
+    "IYT": ["Rail Transportation", "Air Freight & Logistics", "Cargo Ground Transportation", "Passenger Airlines",
+            "Passenger Ground Transportation", "Marine Transportation"],
+    "XME": ["Steel", "Copper", "Diversified Metals & Mining", "Aluminum", "Gold"],
+    "IYZ": ["Integrated Telecommunication Services", "Wireless Telecommunication Services", "Alternative Carriers"],
+    "XLU": ["Electric Utilities", "Multi-Utilities", "Gas Utilities", "Water Utilities", "Independent Power Producers & Energy Traders",
+            "Renewable Electricity"],
+    "PBJ": ["Packaged Foods & Meats", "Soft Drinks & Non-alcoholic Beverages", "Distillers & Vintners", "Brewers",
+            "Agricultural Products & Services", "Food Distributors"],
+    "IYM": ["Specialty Chemicals", "Commodity Chemicals", "Diversified Chemicals", "Fertilizers & Agricultural Chemicals",
+            "Industrial Gases", "Paper & Plastic Packaging Products & Materials", "Metal, Glass & Plastic Containers"],
+}
+
+
+def industry_key(industry: str | None) -> str | None:
+    """The context prefix of a GICS sub-industry (its industry ETF), or None."""
+    for etf, subs in INDUSTRY_ETFS.items():
+        if industry in subs:
+            return f"ind_{etf}"
+    return None
 SESSIONS_6M = 126
 GPR_URLS = ["https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls",
             "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xlsx"]
@@ -250,7 +292,7 @@ def download(period: str, spy: pd.DataFrame | None, fx: pd.Series | None) -> pd.
             raw[name] = s
     step("ETFs de setor")
     sector_tickers = sorted({t for ts in [*SECTOR_ETFS.values(), *EU_SECTOR_ETFS.values()] for t in ts} | {EU_BENCHMARK}
-                            | set(REGIME_ETFS))
+                            | set(REGIME_ETFS) | set(INDUSTRY_ETFS))
     sectors = download_history(sector_tickers, period=period)
     for t, df in sectors.items():
         raw[f"etf:{t}"] = df["Close"]
@@ -327,6 +369,13 @@ def features(raw: dict[str, pd.Series]) -> pd.DataFrame:
         if stoxx is not None and not stoxx.empty:
             cols[f"{key}_rs"] = (px / px.shift(SESSIONS_3M) - 1) - (stoxx / stoxx.shift(SESSIONS_3M) - 1).reindex(px.index)
     cols.update(regime_fields(raw))
+    for etf in INDUSTRY_ETFS:  # each industry's momentum over 1, 3, 6 and 12 months against the S&P 500, and its trend
+        px = raw.get(f"etf:{etf}")
+        if px is None or px.empty or spy is None:
+            continue
+        rel = [(px / px.shift(n) - 1) - (spy / spy.shift(n) - 1).reindex(px.index) for n in (21, 63, 126, 252)]
+        cols[f"ind_{etf}_mom"] = sum(rel) / len(rel)
+        cols[f"ind_{etf}_trend"] = px / px.rolling(200).mean() - 1
     if not cols:
         return pd.DataFrame()
     frame = pd.DataFrame({k: v.groupby(v.index.normalize()).last() for k, v in cols.items()})

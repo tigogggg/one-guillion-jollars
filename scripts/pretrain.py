@@ -446,7 +446,9 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
     # the earnings rule: past release dates from the SEC (None without the file: the rule then stays live-only)
     report_dates = earnings.load_history() or None
     print(f"::notice title=Resultados::{len(report_dates or {})} ações com datas de resultados da SEC", flush=True)
-    stocks = snapshots(stock_hist, days, {s: {"sector": sector_of[s]} for s in stock_hist}, member, frames)
+    industry_of = {c["symbol"]: c.get("industry") for c in constituents}  # GICS sub-industry (today's members only)
+    stocks = snapshots(stock_hist, days, {s: {"sector": sector_of[s], "industry": industry_of.get(s)} for s in stock_hist},
+                       member, frames)
     left = [s for s in stock_hist if s not in {c["symbol"] for c in constituents}]
     print(f"{len(stock_hist)} ações com preços, {len(left)} já saíram do índice", file=sys.stderr)
     COVERAGE.clear()

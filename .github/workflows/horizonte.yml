@@ -14,7 +14,7 @@ on:
       estrategias:
         description: "Estratégias, separadas por vírgulas"
         required: false
-        default: "guardiao,rotador,foguetao,analista,quant,monge,abutre,pendulo,cacador,sniper,campeao,pescador,deriva,kamikaze,estratega,navegador"
+        default: "guardiao,rotador,foguetao,analista,quant,monge,abutre,pendulo,cacador,sniper,campeao,pescador,deriva,kamikaze,estratega,navegador,tematico"
 
 permissions:
   contents: read

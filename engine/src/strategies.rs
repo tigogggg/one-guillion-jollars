@@ -6,7 +6,7 @@ use crate::pyround::{py_max, py_min, round_to};
 
 pub const SUPPORTED: &[&str] = &[
     "indexador", "guardiao", "rotador", "foguetao", "analista", "quant", "monge", "abutre", "pendulo", "cacador", "sniper",
-    "campeao", "pescador", "deriva", "kamikaze", "estratega", "navegador",
+    "campeao", "pescador", "deriva", "kamikaze", "estratega", "navegador", "tematico",
 ];
 
 /// Strategies that trade only ETFs or other agents' portfolios (agents.NO_REGION).
@@ -92,6 +92,7 @@ pub fn run(strategy: &str, port: &mut Port, m: &Mkt, p: &P, region: i64) -> Vec<
         "campeao" => campeao(port, m, p, region),
         "estratega" => estratega(port, m, p, region),
         "navegador" => navegador(port, m, p),
+        "tematico" => tematico(port, m, p, region),
         "pescador" => pescador(port, m, p, region),
         "deriva" => deriva(port, m, p, region),
         "kamikaze" => kamikaze(port, m, p, region),
@@ -492,6 +493,74 @@ fn estratega(port: &mut Port, m: &Mkt, p: &P, region: i64) -> Vec<Order> {
         format!("{}{}", m.data.sectors_pt[sec as usize], if us { "" } else { " (Europa)" })
     }).collect();
     let mut orders = rebalance(port, m, &targets, weight, &[core], p.get("stop_pct"), &format!("agenda: {}", names.join(", ")));
+    let eq = equity(port, m);
+    let pos = port.positions.get(&core);
+    let current = match pos { Some(pos) => position_value(m, core, pos) / eq, None => 0.0 };
+    let target = nucleo + (1.0 - nucleo) * (if targets.is_empty() { 1.0 } else { 0.0 });
+    let folga = p.req("folga");
+    if current < target - folga {
+        orders.push(order_buy(core, (target - current) * eq, "núcleo S&P 500", None, None));
+    } else if pos.is_some() && current > target + folga {
+        let mut o = order_sell(core, "núcleo S&P 500");
+        o.fraction = (current - target) / current;
+        orders.push(o);
+    }
+    orders
+}
+
+fn tematico(port: &mut Port, m: &Mkt, p: &P, region: i64) -> Vec<Order> {
+    if !due(port, m, p.req("cada")) {
+        return Vec::new();
+    }
+    let d = m.data;
+    let v = View::new(port, m, region);
+    let mut themes: Vec<i32> = Vec::new();
+    let mut members: Vec<Vec<usize>> = Vec::new();
+    for &r in &v.list {
+        let k = d.sym_industry[v.sym(r)];
+        if k < 0 {
+            continue;
+        }
+        match themes.iter().position(|&x| x == k) {
+            Some(i) => members[i].push(r),
+            None => {
+                themes.push(k);
+                members.push(vec![r]);
+            }
+        }
+    }
+    let get = |ix: &Vec<i32>, k: i32| -> Option<f64> {
+        let i = ix[k as usize];
+        if i < 0 { return None; }
+        let x = d.ctx_val[m.d * d.n_ctx + i as usize];
+        if x.is_nan() { None } else { Some(x) }
+    };
+    let min_stocks = p.get("min_acoes_tema").unwrap_or(3.0);
+    let mut heat: Vec<(usize, f64)> = Vec::new();
+    for (i, &k) in themes.iter().enumerate() {
+        let Some(mom) = get(&d.industry_mom, k) else { continue };
+        if (members[i].len() as f64) < min_stocks {
+            continue;
+        }
+        if p.on("esgotado_max") && get(&d.industry_trend, k).is_some_and(|t| t > p.req("esgotado_max")) {
+            continue;
+        }
+        heat.push((i, mom));
+    }
+    let mut order: Vec<usize> = (0..heat.len()).collect();
+    sort_by_key(&mut order, |j| heat[j].1, true);
+    let top: Vec<usize> = order.into_iter().filter(|&j| heat[j].1 > 0.0).take(p.req("temas") as usize).map(|j| heat[j].0).collect();
+    let mut targets: Vec<usize> = Vec::new();
+    for &i in &top {
+        let mut ranked = members[i].clone();
+        sort_by_key(&mut ranked, |r| 1000.0 * (v.rows.stage2[r] as i32 as f64) + v.rows.trend[r], true);
+        targets.extend(ranked.into_iter().take(p.req("por_tema") as usize).map(|r| v.sym(r)));
+    }
+    let Some(&core) = d.by_name.get("SXR8.DE") else { return Vec::new() };
+    let nucleo = p.req("nucleo");
+    let weight = (1.0 - nucleo) / py_max(targets.len() as f64, 1.0);
+    let names: Vec<String> = top.iter().map(|&i| d.industry_names[themes[i] as usize][4..].to_string()).collect();
+    let mut orders = rebalance(port, m, &targets, weight, &[core], p.get("stop_pct"), &format!("tema: {}", names.join(", ")));
     let eq = equity(port, m);
     let pos = port.positions.get(&core);
     let current = match pos { Some(pos) => position_value(m, core, pos) / eq, None => 0.0 };

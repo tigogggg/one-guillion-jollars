@@ -110,7 +110,8 @@ def load_constituents() -> list[dict]:
     resp.raise_for_status()
     return [
         # Yahoo uses dash-style class shares (BRK-B); the dataset uses dots.
-        {"symbol": row["Symbol"].replace(".", "-"), "name": row["Security"], "sector": row["GICS Sector"]}
+        {"symbol": row["Symbol"].replace(".", "-"), "name": row["Security"], "sector": row["GICS Sector"],
+         "industry": row.get("GICS Sub-Industry") or None}
         for row in csv.DictReader(io.StringIO(resp.text))
     ]
 

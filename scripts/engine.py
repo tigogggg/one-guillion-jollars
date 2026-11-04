@@ -25,7 +25,7 @@ except ImportError:  # not built: everything stays in Python
 
 EPOCH = date(1970, 1, 1).toordinal()
 CURRENCIES = ["USD", "GBP", "CHF", "SEK", "DKK", "NOK"]
-SEPARATE = ("sector", "name", "stage2", "trend_score")  # kept apart from the float32 metrics
+SEPARATE = ("sector", "industry", "name", "stage2", "trend_score")  # kept apart from the float32 metrics
 
 
 def enabled(strategy: str) -> bool:
@@ -216,6 +216,17 @@ def build(markets: list, symbols: list[str] | None = None, sectors: list[str] | 
                 key = context.sector_key(sec, us=us)
                 ix.append(ctx_fields.index(f"{key}_{suffix}") if key and f"{key}_{suffix}" in ctx_fields else -1)
     trend_ix, rs_ix = sector_cols["sector_trend"], sector_cols["sector_rs"]
+    industries = [f"ind_{e}" for e in context.INDUSTRY_ETFS]
+    ind_ix = {k: i for i, k in enumerate(industries)}
+    sym_industry = [-1] * len(symbols)
+    sym_pos = {s: i for i, s in enumerate(symbols)}
+    for m in markets:  # a stock's industry as the market lists it (the first one seen)
+        for s, row in m.stocks.items():
+            i = sym_pos.get(s)
+            if i is not None and sym_industry[i] < 0:
+                key = context.industry_key(row.get("industry"))
+                if key:
+                    sym_industry[i] = ind_ix[key]
     zones = {z: i for i, z in enumerate(agents.ZONES)}
     data = {
         "fields": fields, "nullable": np.array([1 if f in nullable else 0 for f in fields], dtype=np.uint8),
@@ -232,6 +243,10 @@ def build(markets: list, symbols: list[str] | None = None, sectors: list[str] | 
         **{k: np.array(v, dtype=np.int32) for k, v in sector_cols.items() if k not in ("sector_trend", "sector_rs")},
         "sector_has_key": np.array([1 if context.sector_key(sec) else 0 for sec in sectors], dtype=np.uint8),
         "sector_eu_has_key": np.array([1 if context.sector_key(sec, us=False) else 0 for sec in sectors], dtype=np.uint8),
+        # each symbol's industry (theme: context.INDUSTRY_ETFS) and that industry's context columns
+        "sym_industry": np.array(sym_industry, dtype=np.int32), "industry_names": industries,
+        "industry_mom": np.array([ctx_fields.index(f"{k}_mom") if f"{k}_mom" in ctx_fields else -1 for k in industries], dtype=np.int32),
+        "industry_trend": np.array([ctx_fields.index(f"{k}_trend") if f"{k}_trend" in ctx_fields else -1 for k in industries], dtype=np.int32),
         "days": np.array([day_num(m.as_of) for m in markets], dtype=np.int32),
         "zone": np.array([zones[m.zone] for m in markets], dtype=np.uint8),
         "sessions": np.array([day_num(d) for d in markets[-1].sessions], dtype=np.int32),

@@ -312,3 +312,33 @@ def test_the_navegador_trades_exactly_like_python(markets, monkeypatch):
     compare("navegador", {**base, "cada": 2, "folga": 0.02, "limiar_conc": 0.0, "limiar_corr": 0.1}, regimes, monkeypatch, min_trades=10)
     reasons = {t[7] for t in rust_run("navegador", base, regimes)[1] if t[7]}
     assert len({r for r in reasons if r.startswith("regime")}) >= 3
+
+
+def test_the_tematico_trades_exactly_like_python(markets, monkeypatch):
+    import copy
+    import dataclasses
+
+    subs = ["Semiconductors", "Biotechnology", "Aerospace & Defense", "Regional Banks", None]
+    keys = ["ind_SMH", "ind_XBI", "ind_ITA", "ind_KRE"]
+    themed = []
+    for k, m in enumerate(markets):
+        stocks = {}
+        for j, (s, row) in enumerate(m.stocks.items()):
+            r = copy.copy(row)
+            sub = subs[int(s[2:4]) % 5] if s[2:4].isdigit() else None
+            if hasattr(r, "_extra"):
+                r._extra = {**r._extra, "industry": sub}
+            else:
+                r = {**r, "industry": sub}
+            stocks[s] = r
+        ctx = dict(m.context)
+        for i, key in enumerate(keys):
+            ctx[f"{key}_mom"] = round(0.08 * math.sin(k / (20 + 9 * i) + i), 5)
+            if i != 1:
+                ctx[f"{key}_trend"] = round(0.3 * math.cos(k / (30 + 5 * i)) + 0.1, 5)
+        themed.append(dataclasses.replace(m, stocks=stocks, context=ctx))
+    base = {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES["tematico"][2], "min_acoes_tema": 2}
+    compare("tematico", base, themed, monkeypatch, min_trades=10)
+    compare("tematico", {**base, "temas": 2, "por_tema": 1, "cada": 7, "esgotado_max": 0, "nucleo": 0.0, "stop_pct": 0.1},
+            themed, monkeypatch, min_trades=10)
+    assert any(t[7].startswith("tema: ") and t[7] != "tema: " for t in rust_run("tematico", base, themed)[1])
