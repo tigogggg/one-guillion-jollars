@@ -106,8 +106,31 @@ def test_the_live_parameters_change_only_for_a_clear_gain(monkeypatch):
     monkeypatch.setattr(pretrain, "previous_choices", lambda s: [{"chosen": {"n": 3, "stop_pct": 0.2}, "until": None}])
     monkeypatch.setattr(pretrain, "claude_candidates", lambda s, base: [])
     monkeypatch.setattr(pretrain, "DSR_MIN", 1.01)  # no gain can be that certain
+    monkeypatch.setitem(pretrain._WF, "foguetao", {"passed": True})  # the walk-forward held: only the DSR decides
     _, r = pretrain.train_strategy("foguetao")
     assert r["chosen"]["n"] == 3 and r["chosen"]["stop_pct"] == 0.2
+
+
+def test_a_failed_walk_forward_goes_back_to_the_original_parameters(monkeypatch):
+    _synthetic_training(monkeypatch)
+    monkeypatch.setattr(pretrain, "previous_choices", lambda s: [{"chosen": {"n": 3, "stop_pct": 0.2}, "until": None}])
+    monkeypatch.setattr(pretrain, "claude_candidates", lambda s, base: [])
+    monkeypatch.setitem(pretrain._WF, "foguetao", {"passed": False})
+    _, r = pretrain.train_strategy("foguetao")
+    original = pretrain.agents.STRATEGIES["foguetao"][2]
+    assert all(r["chosen"].get(k) == v for k, v in original.items())  # not the older search result (n 3)
+    assert r["previous_overall"] is not None
+
+
+def test_a_first_run_must_pass_the_luck_gate_too(monkeypatch):
+    _synthetic_training(monkeypatch)
+    monkeypatch.setattr(pretrain, "previous_choices", lambda s: [])
+    monkeypatch.setattr(pretrain, "claude_candidates", lambda s, base: [])
+    monkeypatch.setattr(pretrain, "DSR_MIN", 1.01)
+    monkeypatch.setitem(pretrain._WF, "foguetao", {"passed": True})
+    _, r = pretrain.train_strategy("foguetao")
+    original = pretrain.agents.STRATEGIES["foguetao"][2]
+    assert all(r["chosen"].get(k) == v for k, v in original.items())
 
 
 @pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="worker processes need fork (Linux)")

@@ -493,8 +493,12 @@ function positionSize({ capital, entrada, stop, risco = 1, max_posicao = 15 }) {
   ].join("\n");
 }
 
+// The agents run only tested code: tests.yml moves the branch `estavel` to each commit of main that passes, and the
+// agents' workflow is started there (its YAML and scripts from the same tested commit); main if that branch is missing.
+const STABLE_WORKFLOWS = new Set(["agents.yml"]);
+
 async function dispatchWorkflow(env, workflow, inputs) {
-  const resp = await fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${workflow}/dispatches`, {
+  const send = (ref) => fetch(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${workflow}/dispatches`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${env.GITHUB_TOKEN}`,
@@ -502,8 +506,13 @@ async function dispatchWorkflow(env, workflow, inputs) {
       "X-GitHub-Api-Version": "2022-11-28",
       "User-Agent": "coutotrading-discord-bot",
     },
-    body: JSON.stringify({ ref: "main", inputs }),
+    body: JSON.stringify({ ref, inputs }),
   });
+  let resp = await send(STABLE_WORKFLOWS.has(workflow) ? "estavel" : "main");
+  if (!resp.ok && STABLE_WORKFLOWS.has(workflow)) {
+    console.log(`dispatch ${workflow} on estavel failed (${resp.status}): main instead`);
+    resp = await send("main");
+  }
   if (!resp.ok) console.log(`dispatch ${workflow} failed: ${resp.status} ${await resp.clone().text()}`);
   return resp;
 }

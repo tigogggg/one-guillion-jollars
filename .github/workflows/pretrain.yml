@@ -314,16 +314,11 @@ jobs:
           fi
       - name: Guardar os resultados e os parâmetros
         if: ${{ !cancelled() && !inputs.ensaio }}  # also when posting the report failed
-        working-directory: agents
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet && exit 0
-          git commit -m "Agentes: pré-treino $(date -u +%F)"
-          # the intraday rounds push the agents' state every 10 minutes: retry on a race
-          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; git rebase --abort 2>/dev/null; sleep 10; done
-          exit 1
+          git -C agents config user.name "github-actions[bot]"
+          git -C agents config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # the rounds push the agents' state every 10 minutes: merged per agent (scripts/save_state.py)
+          uv run python scripts/save_state.py --mensagem "Agentes: pré-treino $(date -u +%F)" --prioridade nossa
       - name: Instalar o Claude Code
         if: ${{ success() && inputs.revisao_claude != false && !inputs.ensaio && (inputs.perfil == '' || inputs.perfil == 'equilibrado') }}
         run: npm install -g @anthropic-ai/claude-code

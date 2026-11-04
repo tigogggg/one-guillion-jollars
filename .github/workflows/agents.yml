@@ -42,6 +42,8 @@ jobs:
   agents:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      UV_NO_SYNC: "1"  # the environment is set up once below, with the engine built once per version (cache)
     steps:
       - uses: actions/checkout@v4
       - name: Dados dos agentes (repositório privado)
@@ -63,7 +65,22 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
-      - run: uv sync
+      # uv would rebuild the Rust engine on every fresh checkout (about 30 s a round): it is built once per version of
+      # its sources and of the private strategies, and kept in the cache
+      - name: Motor Rust (cache por versão)
+        id: motor
+        uses: actions/cache@v4
+        with:
+          path: engine-wheel
+          key: motor-${{ runner.os }}-${{ hashFiles('engine/src/**', 'engine/build.rs', 'engine/Cargo.toml', 'engine/Cargo.lock', 'engine/pyproject.toml', 'agents/receita/engine/**') }}
+      - name: Compilar o motor
+        if: ${{ steps.motor.outputs.cache-hit != 'true' }}
+        run: uv build --wheel engine -o engine-wheel
+      - name: Ambiente Python
+        run: |
+          uv sync --no-install-package ogj-engine
+          uv pip install engine-wheel/*.whl
+          uv run python -c "import ogj_engine; assert ogj_engine.RECEITA, 'motor sem a receita'"
       - name: Carregar a watchlist da manhã (ranking e VCP)
         uses: actions/cache/restore@v4
         with:
@@ -107,15 +124,12 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           MODE: ${{ inputs.mode || 'daily' }}
-        working-directory: agents
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet && exit 0
-          git commit -m "Agentes: $MODE $(date -u +%F)"
-          for i in 1 2 3; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 5; done
-          exit 1
+          git -C agents config user.name "github-actions[bot]"
+          git -C agents config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # merged per agent with whatever another run pushed meanwhile (scripts/save_state.py); a round gives way
+          prio=$([ "$MODE" = stops ] && echo deles || echo nossa)
+          uv run python scripts/save_state.py --mensagem "Agentes: $MODE $(date -u +%F)" --prioridade "$prio"
       - name: Guardar o arquivo intradiário
         if: ${{ !cancelled() && inputs.mode == 'stops' && hashFiles('arquivo-intradiario/**/*.csv.gz') != '' }}
         continue-on-error: true  # the archive never fails the round (nor its price cache)

@@ -989,7 +989,7 @@ def train_strategy(strategy: str) -> tuple[str, dict]:
 
     First the walk-forward check (WF_FOLDS): the same search, without the earlier choices, run on the data up to each
     of the years before the exam and judged on that unseen year against the original parameters. When the search
-    does not hold up out of sample, the agent keeps what it trades with (the search only fits noise for it)."""
+    does not hold up out of sample, the agent goes back to the original parameters (the search only fits noise)."""
     import engine
 
     if engine.enabled(strategy):  # the Rust engine's copy of the data, built before forking so the workers share it
@@ -1195,13 +1195,15 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
             mc = monte_carlo(full["daily"])
             adopt = True
 
-    # The agent keeps what it trades with (the last choice) unless the new choice passes the gates: the walk-forward
-    # check (keep_live when it failed) and the deflated Sharpe ratio of the yearly gains over it (DSR_MIN), which
-    # discounts the luck of the best of many candidates. The exam year plays no part.
+    # Gates (the exam year plays no part): (1) the walk-forward check: when the search did not beat the ORIGINAL
+    # parameters on unseen years (keep_live), the agent goes back to the original parameters, not to an older search
+    # result; (2) the deflated Sharpe ratio of the yearly gains over what the agent trades with (its last choice, or
+    # the original parameters on a strategy's first run), which discounts the luck of the best of many candidates.
     kept_previous = None
     change_gate = None
-    new_obj = overall(run_years(chosen)[0], chosen_valid["points"]) if history and strategy != "indexador" else None
-    live = None  # the last choice, which the agent trades with: (parameters, exam result, overall)
+    # (a fold of the walk-forward check measures the search itself: no gates there)
+    new_obj = overall(run_years(chosen)[0], chosen_valid["points"]) if strategy != "indexador" and not fold else None
+    live = None  # what the agent trades with before this run: (parameters, exam result, overall)
 
     def keep(previous: dict, prev_exam: dict, prev_obj: float) -> None:
         nonlocal kept_previous, new_obj, chosen, chosen_valid, adopt, full, mc, greedy_log, zones_tried
@@ -1215,8 +1217,18 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
         zones_tried = {z: dict(v, kept=False) for z, v in zones_tried.items()}
         crashes["kept_previous"] = crash_test(strategy, chosen, windows)
 
-    if history and new_obj is not None:
-        previous = {**pool[0], **history[0]["chosen"]}
+    if new_obj is not None and keep_live:
+        original = pool[0]
+        if history:  # what it traded with, for the report (previous_overall)
+            previous = {**pool[0], **history[0]["chosen"]}
+            prev_exam = default_valid if previous == original else simulate(strategy, previous, valid)
+            live = (previous, prev_exam, overall(run_years(previous)[0], prev_exam["points"]))
+        if chosen != original:
+            keep(original, default_valid, overall(base, default_valid["points"]))
+            kept_previous["walk_forward"] = True
+            kept_previous["original"] = True
+    elif new_obj is not None:
+        previous = {**pool[0], **history[0]["chosen"]} if history else pool[0]
         if previous != chosen:
             live_years = run_years(previous)[0]
             new_years = run_years(chosen)[0]
@@ -1226,13 +1238,11 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
             change_gate = {"dsr": round(dsr, 3), "dsr_min": DSR_MIN, "trials": len(trials), "years_better": sum(d > 0 for d in diffs),
                            "years": len(diffs), "mean_gain": round(statistics.fmean(diffs), 1) if diffs else 0.0,
                            "walk_forward": not keep_live}
-            prev_exam = simulate(strategy, previous, valid)  # reported only
+            prev_exam = default_valid if previous == pool[0] else simulate(strategy, previous, valid)  # reported only
             live = (previous, prev_exam, overall(live_years, prev_exam["points"]))
-            if keep_live or dsr < DSR_MIN:
+            if dsr < DSR_MIN:
                 keep(*live)
                 kept_previous["gate"] = change_gate
-                if keep_live:
-                    kept_previous["walk_forward"] = True
     if fold:  # only the choice matters
         return strategy, {"default": pool[0], "chosen": chosen}
 

@@ -1,12 +1,17 @@
 name: Testes
 
-# Runs the repo's own tests (tests/) on every pull request. The skills' tests
-# under skills/ are upstream's and some need files that are not copied here.
+# Runs the repo's own tests (tests/) on every pull request and on pushes to main that change what the agents run.
+# The skills' tests under skills/ are upstream's and some need files that are not copied here.
+# A commit of main that passes moves the branch `estavel` to it: the agents (agents.yml, started by the Worker on that
+# branch) only ever run tested code, workflow and scripts alike. Daily too, for changes of the private recipe.
 on:
   pull_request:
   push:
     branches: [main]
-    paths: ["engine/**", "scripts/agents.py", "scripts/pretrain.py", "scripts/engine.py", "tests/**"]
+    paths: ["engine/**", "scripts/**", "tests/**", "data/**", "pyproject.toml", "uv.lock", ".github/workflows/agents.yml",
+            ".github/workflows/tests.yml"]
+  schedule:
+    - cron: "13 5 * * *"
   workflow_dispatch:
 
 permissions:
@@ -35,3 +40,18 @@ jobs:
       - run: uv run python -m pytest tests -q
       - name: The Rust engine was really tested (not skipped)
         run: uv run python -c "import ogj_engine; assert ogj_engine.RECEITA, 'motor sem a receita'; print('motor Rust:', len(ogj_engine.SUPPORTED), 'estratégias')"
+  promote:
+    needs: pytest
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write  # moves the branch estavel, nothing else
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: estavel = este commit testado (só para a frente)
+        run: |
+          git push origin "$GITHUB_SHA:refs/heads/estavel" \
+            || echo "estavel já está à frente deste commit (um teste mais recente passou primeiro)"

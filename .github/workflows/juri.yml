@@ -82,12 +82,9 @@ jobs:
           uv run python scripts/jury.py $args
       - name: Guardar (repositório privado)
         if: ${{ !cancelled() }}
-        working-directory: agents
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A config.json state.json lab 2>/dev/null
-          git diff --cached --quiet && exit 0
-          git commit -m "Júri de domingo $(date -u +%F)"
-          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 10; done
-          exit 1
+          git -C agents config user.name "github-actions[bot]"
+          git -C agents config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p agents/lab
+          uv run python scripts/save_state.py --mensagem "Júri de domingo $(date -u +%F)" --prioridade nossa \
+            --caminhos config.json state.json lab
