@@ -3,7 +3,6 @@ name = "ogj_engine"
 version = "0.1.0"
 edition = "2021"
 description = "One Guillion Jollars: the agents' trading engine (portfolio, orders, fills, exits, taxes, strategies)"
-license = "MIT"
 publish = false
 
 [lib]

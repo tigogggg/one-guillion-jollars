@@ -267,6 +267,11 @@ This project is for education and research. It does not give investment advice a
 
 *Ferramenta educativa. Nada aqui é recomendação de compra; as decisões são tuas.*
 
+## ©️ Licence
+
+All rights reserved (see [`LICENSE`](LICENSE)): this code is public to be read, not to be copied, reused or run
+elsewhere. The trained parameters, results and the strategies themselves are kept in a private repository.
+
 ## 🙏 Credits
 
 The trading skills in `skills/` come from [tradermonty/claude-trading-skills](https://github.com/tradermonty/claude-trading-skills) under the MIT license (see [`LICENSE-claude-trading-skills`](LICENSE-claude-trading-skills)). The portal font is Press Start 2P (SIL OFL). Market data comes from Yahoo Finance, FMP, the SEC, FRED, the ECB and Eurostat under their own terms.
