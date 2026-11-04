@@ -1,4 +1,5 @@
 name: Júri de domingo
+# (the 1st of each month: the league renewal; Sundays: the jury, chained after the pre-training)
 
 # Six specialist jurors grade the pre-trained agents; the top 5 form the Super Agente, the last leaves the league, a year
 # on the bench switches a strategy off (scripts/jury.py). Dispatched after the last profile's pre-training (Sundays) or
