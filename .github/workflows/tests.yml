@@ -18,6 +18,13 @@ jobs:
     timeout-minutes: 20  # measured 1 min, plus the Rust build
     steps:
       - uses: actions/checkout@v4
+      - name: Receita (repositório privado, só leitura)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          persist-credentials: false
+          path: agents
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
@@ -27,4 +34,4 @@ jobs:
         run: cargo test --lib --quiet
       - run: uv run python -m pytest tests -q
       - name: The Rust engine was really tested (not skipped)
-        run: uv run python -c "import ogj_engine; print('motor Rust:', ', '.join(ogj_engine.SUPPORTED))"
+        run: uv run python -c "import ogj_engine; assert ogj_engine.RECEITA, 'motor sem a receita'; print('motor Rust:', len(ogj_engine.SUPPORTED), 'estratégias')"

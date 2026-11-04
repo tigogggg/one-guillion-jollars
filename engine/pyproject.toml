@@ -14,4 +14,5 @@ module-name = "ogj_engine"
 
 [tool.uv]
 # rebuild the extension whenever the Rust sources change (uv sync / uv run)
-cache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }, { file = "src/**/*.rs" }]
+cache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }, { file = "src/**/*.rs" }, { file = "build.rs" },
+              { file = "../agents/receita/engine/*.rs" }]  # the private strategies (build.rs)

@@ -5,6 +5,12 @@ pub mod engine;
 pub mod live;
 pub mod portjson;
 pub mod pyround;
+// The strategies are private (build.rs): the recipe when checked out, an empty stand-in otherwise.
+#[cfg(ogj_receita)]
+#[path = "../../agents/receita/engine/strategies.rs"]
+pub mod strategies;
+#[cfg(not(ogj_receita))]
+#[path = "strategies_stub.rs"]
 pub mod strategies;
 
 use std::collections::HashMap;
@@ -373,5 +379,6 @@ fn ogj_engine(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Batch>()?;
     m.add_function(wrap_pyfunction!(simulate, m)?)?;
     m.add("SUPPORTED", strategies::SUPPORTED.to_vec())?;
+    m.add("RECEITA", cfg!(ogj_receita))?;
     Ok(())
 }

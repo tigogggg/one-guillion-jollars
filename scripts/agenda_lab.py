@@ -21,7 +21,7 @@ import pretrain
 
 import agents
 
-BASE = dict(agents.STRATEGIES["estratega"][2])
+BASE = dict(agents.STRATEGIES.get("estratega", (None, "", {}))[2])  # the recipe's defaults (private)
 OFF = {"peso_gasto": 0.0, "peso_incerteza": 0.0, "peso_momentum": 0.0, "peso_capex": 0.0}
 VARIANTS = {
     "base": {},

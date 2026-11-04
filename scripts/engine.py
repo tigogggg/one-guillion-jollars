@@ -22,6 +22,10 @@ try:
     import ogj_engine  # the compiled engine (uv sync builds it from engine/)
 except ImportError:  # not built: everything stays in Python
     ogj_engine = None
+if ogj_engine is not None and agents.RECEITA and not getattr(ogj_engine, "RECEITA", False):
+    # built before the private recipe was checked out: it runs no strategy, so everything falls back to Python (slow)
+    print("::warning::O motor Rust foi compilado sem a receita privada: tudo corre em Python (mais lento). "
+          "Abre o repositório privado antes do uv sync, ou: uv sync --reinstall-package ogj-engine", flush=True)
 
 EPOCH = date(1970, 1, 1).toordinal()
 CURRENCIES = ["USD", "GBP", "CHF", "SEK", "DKK", "NOK"]

@@ -62,4 +62,6 @@ risk rules and the team sizes and limits the risk once. Rust only: the Python re
 ## Build
 
 `uv sync` builds `engine/` with maturin (Rust toolchain needed; GitHub's runners have it). `uv` rebuilds it when
-`engine/src/**/*.rs` or `Cargo.toml` change. Rust unit tests: `cd engine && cargo test --lib`.
+`engine/src/**/*.rs`, `Cargo.toml` or the private strategies change. The strategies themselves are private
+(`agents/receita/engine/strategies.rs`, with the Python ones in `agents/receita/estrategias.py`): `engine/build.rs` builds
+them in when that checkout exists (`ogj_engine.RECEITA`), an empty stand-in (`src/strategies_stub.rs`) otherwise. Rust unit tests: `cd engine && cargo test --lib`.
