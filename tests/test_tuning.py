@@ -338,3 +338,15 @@ def test_discord_hears_only_of_agents_that_improved(monkeypatch):
     assert pretrain.post_report(results, [], False, "agentes", {"sniper"}) == 0 and not sent  # nothing improved
     pretrain.post_report(results, [], False, "agentes", {"quant"})
     assert len(sent) == 1
+
+
+def test_a_year_with_half_the_index_missing_counts_half_for_stock_pickers(monkeypatch):
+    from datetime import date
+
+    import pretrain
+
+    monkeypatch.setattr(pretrain, "COVERAGE_DAYS", {date(2008, 1, 2): 0.5, date(2020, 1, 2): 1.0})
+    m = type("M", (), {"as_of": date(2008, 6, 1)})()
+    assert pretrain.coverage_scaled(-40.0, "quant", [m], 1.0) == -20.0
+    assert pretrain.coverage_scaled(-40.0, "rotador", [m], 1.0) == -40.0  # ETFs only: no survivorship
+    assert pretrain.coverage_scaled(-40.0, "quant", [m], 20.0) == -40.0  # whole periods are reported as they are

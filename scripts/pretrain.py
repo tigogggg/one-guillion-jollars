@@ -459,6 +459,12 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
             in_index = sum(1 for spans in membership.values()
                            if any(a <= d and (b is None or d <= b) for a, b in spans))
             COVERAGE[name] = round(sum(1 for s in stocks[d] if agents.is_us(s)) / max(in_index, 1), 3)
+    COVERAGE_DAYS.clear()
+    if membership:  # the same share on the first session of each month (survivorship: see coverage_on)
+        for d in days:
+            if d.day <= 7 and (d.year, d.month) not in {(x.year, x.month) for x in COVERAGE_DAYS}:
+                in_index = sum(1 for spans in membership.values() if any(a <= d and (b is None or d <= b) for a, b in spans))
+                COVERAGE_DAYS[d] = round(min(1.0, sum(1 for s in stocks[d] if agents.is_us(s)) / max(in_index, 1)), 3)
     etfs = snapshots(etf_hist, days, {s: {"name": names.get(s, s)} for s in etf_hist})
     hist = {**stock_hist, **etf_hist}
     closes = pd.DataFrame({s: df["Close"] for s, df in hist.items()}).sort_index().ffill()
@@ -517,7 +523,8 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
             years = len(markets) / SESSIONS_PER_YEAR
             net = r["final"] - r["tax_owed"]
             own = agents.profile_score(net / capital - 1, years, r["max_dd"], PROFILE)
-            return {"points": agents.relative_points(own, index_score(markets, years)), "profile_score": own,
+            return {"points": coverage_scaled(agents.relative_points(own, index_score(markets, years)), strategy, markets, years),
+                    "profile_score": own,
                     "league_points": r["points"], "return": r["final"] / capital - 1, "return_after_tax": net / capital - 1,
                     "max_drawdown": r["max_dd"], "trades": r["n_trades"],
                     "bankrupt": engine.from_day(r["bankrupt"]).isoformat() if r["bankrupt"] is not None else None}
@@ -526,7 +533,7 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
         zone_stats = {agents.ZONES[i]: (total, n) for i, (total, n) in enumerate(r["zone_stats"]) if n}
         bankrupt = engine.from_day(r["bankrupt"]).isoformat() if r["bankrupt"] is not None else None
         return _graded(markets, capital, r["final"], r["tax_owed"], r["max_dd"], r["points"], r["n_trades"], bankrupt,
-                       sells, zone_stats, history)
+                       sells, zone_stats, history, strategy)
     cfg = {"id": "bt", "name": strategy, "strategy": strategy, "params": params}
     port = new_portfolio(capital, markets[0].as_of)
     port["params"] = dict(params)
@@ -546,14 +553,15 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
             port["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders]
     final = equity(port, markets[-1])
     out = _graded(markets, capital, final, agents.tax_owed_if_sold(port, markets[-1]), port.get("max_dd", 0.0),
-                  port["points"], trades, bankrupt_on, sells, port.get("zone_stats", {}), port["history"])
+                  port["points"], trades, bankrupt_on, sells, port.get("zone_stats", {}), port["history"], strategy)
     if keep_port:
         out["port"] = port
     return out
 
 
 def _graded(markets: list[Market], capital: float, final: float, tax_owed: float, max_dd: float, league_points: int,
-            trades: int, bankrupt_on: str | None, sells: list[dict], zone_stats: dict, history: list[dict]) -> dict:
+            trades: int, bankrupt_on: str | None, sells: list[dict], zone_stats: dict, history: list[dict],
+            strategy: str = "indexador") -> dict:
     """A run's result as the training compares it (the same for the Python and the Rust day loop)."""
     years = len(markets) / SESSIONS_PER_YEAR
     equities = pd.Series([h["equity"] for h in history], dtype=float)
@@ -567,7 +575,7 @@ def _graded(markets: list[Market], capital: float, final: float, tax_owed: float
     net = final - tax_owed
     own = agents.profile_score(net / capital - 1, years, max_dd, PROFILE)
     return {
-        "points": agents.relative_points(own, index_score(markets, years)),
+        "points": coverage_scaled(agents.relative_points(own, index_score(markets, years)), strategy, markets, years),
         "profile_score": own,
         "league_points": league_points,
         "return": final / capital - 1,
@@ -867,6 +875,22 @@ def weighted(years: list[float]) -> float:
 
 
 COVERAGE: dict[str, float] = {}  # share of the index with prices at the start of each crisis
+COVERAGE_DAYS: dict = {}  # the same share on the first session of each month
+
+
+def coverage_on(d: date) -> float:
+    """Share of the S&P 500's members of that day we have prices for (the rest went bankrupt or were bought, and
+    Yahoo dropped them). A year of a stock picker scored with half the index missing flatters it (survivorship): its
+    points count in proportion (coverage_scaled)."""
+    keys = [k for k in COVERAGE_DAYS if k <= d]
+    return COVERAGE_DAYS[max(keys)] if keys else 1.0
+
+
+def coverage_scaled(points: float, strategy: str, markets: list[Market], years: float) -> float:
+    """One year's points times the coverage at its start, for strategies that pick stocks (not ETF-only ones)."""
+    if years > 1.5 or strategy in agents.NO_REGION or not markets:
+        return points
+    return points * coverage_on(markets[0].as_of)
 _MARKETS: list[Market] = []  # shared with the worker processes (fork), not pickled
 # One strategy's candidates are scored on all the machine's cores (a GitHub runner has 4) when it trains alone in
 # its process: worker processes forked after _SEGMENTS is set share the snapshots instead of pickling them.
@@ -1401,6 +1425,8 @@ def pretrain(markets: list[Market], only: set[str] | None = None, processes: int
         done = [train_strategy(s) for s in trainable]
     results["strategies"].update(done)
     results["coverage"] = dict(COVERAGE)
+    results["coverage_years"] = {str(y): min(v for k, v in COVERAGE_DAYS.items() if k.year == y)
+                                 for y in sorted({k.year for k in COVERAGE_DAYS})}
     return results
 
 
@@ -1590,6 +1616,11 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
         note = ("\n_Ações com dados no início de cada crise: " + ", ".join(f"{k} {v:.0%}" for k, v in coverage.items())
                 + " (as que faliram muitas vezes já não têm preços)._") if coverage else ""
         fields.append(("💥 Teste de colisão: queda máxima em cada crise", ("\n".join(crash_lines) + note)[:1024]))
+    cov_years = results.get("coverage_years") or {}
+    if cov_years:
+        fields.append(("🕳️ Ações do índice com preços, ano a ano (o resto faliu ou foi comprado)",
+                       (" · ".join(f"{y} {v:.0%}" for y, v in cov_years.items())
+                        + "\nOs pontos de cada ano de quem escolhe ações contam nesta proporção.")[:1024]))
     if mc_lines:
         fields.append((f"🎲 Monte Carlo: {MC_PATHS} anos alternativos", "\n".join(mc_lines)[:1024]))
     turned_on = []
