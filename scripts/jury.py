@@ -22,11 +22,13 @@ a juror's score by up to CLAUDE_MAX points, each move with its reason (recorded)
 The Presidente (Claude) writes the opinion.
 
 Decisions (on Sundays, at most once a week, or --forcar; the report alone any other day):
-- Fusion (strategy "super", named after constellations): the top 5 active agents, each weighted by its composite times RANK_WEIGHTS of its place (the 1st
-  counts 5, the 5th 1). Each Sunday whose top 5 differs makes a new version (super, super-2, ...); the earlier ones
-  keep their members and weights, so the versions compete live. At most MAX_AGENTS agents: beyond it a new one
-  replaces the agent with the worst real (live) performance against the Indexador. Its 20 years are replayed (scripts/teams.py with these weights) and compared with each
-  member and the index: does joining them add anything?
+- Fusion (strategy "super", named after constellations): the top 5 active agents in equal parts (FUSION_WEIGHTS; the
+  rank weights, composite x RANK_WEIGHTS, are replayed alongside for comparison). A new one at most every FUSION_DAYS
+  and only when the top 5 changed; the earlier ones keep their members and weights, so they compete live. At most
+  MAX_AGENTS agents: beyond it a new one replaces the agent with the worst real (live) performance against the
+  Indexador. Its 20 years are replayed (scripts/teams.py) and compared with each member and the index.
+- Luck test: the deflated Sharpe ratio of the league's best, every agent counted as a trial (league_luck): the league
+  is a laboratory until its best beats what luck would give.
 - An agent a year (RETIRE_DAYS) on the bench without coming back is switched off ("desligado"): its strategy is no
   longer pre-trained for that profile (agents.retired).
 
@@ -64,6 +66,7 @@ JUROR_NAMES = {"rendimento": "🎯 Rendimento", "risco": "🛡️ Risco", "robus
 TOP = 5
 RANK_WEIGHTS = [5, 4, 3, 2, 1]
 LEAGUE_SIZE = 20  # pre-trained agents in the league after each monthly renewal (Tiago)
+FUSION_DAYS = 28  # at most one new fusion a month (each one is another try: fewer tries, fewer lucky winners)
 MAX_AGENTS = 100  # agents in all (not switched off); beyond it a new one replaces the worst real performer (Tiago)
 LIVE_MAX = 0.5  # the live record's weight in Rendimento after a year of sessions
 LIVE_MIN_SESSIONS = 20
@@ -104,7 +107,8 @@ def genealogy(config: dict, state: dict, top: list[dict], weights: dict[str, flo
             "factos": x["facts"], "parametros": x["params"], "origem_parametros": member_origin(cfg, state),
             "linhagem": cfg.get("lineage_name") or (cfg.get("genealogia") or {}).get("nome"),
         })
-    return {"data": today.isoformat(), "membros": members, "pesos": "nota do júri × lugar no ranking (5, 4, 3, 2, 1)",
+    return {"data": today.isoformat(), "membros": members,
+            "pesos": "iguais (fora da amostra costumam ganhar a pesos ajustados; o júri compara com os pesos do ranking)",
             "parametros": dict(SUPER["params"])}
 
 
@@ -113,7 +117,7 @@ def describe(name: str, n: int, gen: dict, today: date) -> str:
     rows = [f"{m['lugar']}.º {m['emoji']} {m['name']} ({m['strategy_label'].split(':')[0]}, perfil {m['perfil']}, "
             f"peso {m['peso'] * 100:.0f}%, nota {m['nota']:.0f})" for m in gen["membros"]]
     return (f"{name} é a fusão n.º {n}, nascida no júri de {today.strftime('%d/%m/%Y')}: junta as carteiras do top 5 de "
-            "então, cada uma com o peso que o júri lhe deu (nota × lugar). Árvore: " + "; ".join(rows) + ". "
+            "então, em partes iguais. Árvore: " + "; ".join(rows) + ". "
             "Os membros e os pesos ficam fixos: cada fusão é comparada ao vivo com as outras.")
 
 
@@ -283,7 +287,7 @@ def judge(config: dict, state: dict, reps: dict[str, dict], use_claude: bool = F
     for cfg, r in rows:
         index_curve = ((reps.get(agents.profile_of(cfg)) or {}).get("strategies", {}).get("indexador") or {}).get("curve") or []
         m = raw_metrics(cfg, r, state, index_curve, curves)
-        out.append({"id": cfg["id"], "name": cfg["name"], "emoji": cfg["emoji"], "strategy": cfg["strategy"],
+        out.append({"id": cfg["id"], "name": cfg["name"], "emoji": cfg["emoji"], "strategy": cfg["strategy"], "years": years_of(r),
                     "profile": agents.profile_of(cfg), "active": cfg.get("active", True), "banco": cfg.get("banco"),
                     "params": (state["agents"].get(cfg["id"]) or {}).get("params", cfg["params"]), **m})
     for j in JURORS:
@@ -304,10 +308,32 @@ def judge(config: dict, state: dict, reps: dict[str, dict], use_claude: bool = F
     return sorted(out, key=lambda x: -x["composite"])
 
 
-def super_weights(top: list[dict]) -> dict[str, float]:
+FUSION_WEIGHTS = "iguais"  # equal weights: out of sample they usually beat fitted ones (DeMiguel, Garlappi & Uppal 2009)
+
+
+def super_weights(top: list[dict], how: str | None = None) -> dict[str, float]:
+    """The members' weights in a fusion: equal ("iguais", the default), or by grade times place ("ranking": the jury's
+    composite times RANK_WEIGHTS), which the backtest keeps comparing."""
+    if (how or FUSION_WEIGHTS) == "iguais":
+        return {x["id"]: round(1 / len(top), 4) for x in top} if top else {}
     raw = {x["id"]: x["composite"] * RANK_WEIGHTS[i] for i, x in enumerate(top)}
     total = sum(raw.values()) or 1.0
     return {k: round(v / total, 4) for k, v in raw.items()}
+
+
+def league_luck(ranked: list[dict], trials: int) -> dict:
+    """Is the league's best better than luck? The deflated Sharpe ratio (Bailey & López de Prado) of its yearly points
+    against the index, with every agent ever graded (and every fusion) counted as a trial."""
+    import pretrain
+
+    best = ranked[0] if ranked else None
+    if not best or not best.get("years"):
+        return {}
+    sharpes = [pretrain.sharpe_of(x["years"]) for x in ranked if x.get("years")]
+    sharpes += [0.0] * max(0, trials - len(sharpes))  # agents graded before and gone: counted as tries with no edge
+    dsr = pretrain.deflated_sharpe(best["years"], sharpes)
+    return {"agent": best["id"], "name": best["name"], "dsr": round(dsr, 3), "trials": max(trials, len(sharpes)),
+            "verdict": "melhor do que a sorte" if dsr >= 0.95 else "não se distingue da sorte"}
 
 
 def last_decision() -> date | None:
@@ -356,9 +382,9 @@ def decide(config: dict, state: dict, ranked: list[dict], today: date) -> dict:
         if c["name"].startswith("Super " + "Agente"):
             c["name"], c["emoji"] = fusion_name(k), SUPER["emoji"]
     latest = versions[-1] if versions else None
-    same = latest is not None and set(latest.get("membros") or {}) == set(weights) and all(
-        abs((latest["membros"] or {}).get(k, 0) - w) < 0.05 for k, w in weights.items())
-    if weights and not same:
+    same = latest is not None and set(latest.get("membros") or {}) == set(weights)
+    recent = latest is not None and latest.get("juri") and (today - date.fromisoformat(latest["juri"])).days < FUSION_DAYS
+    if weights and not same and not recent:
         n = len(versions) + 1
         new_id = "super" if n == 1 else f"super-{n}"
         moves["replaced"] = make_room(config, state, today, new_id)
@@ -488,6 +514,17 @@ def card(result: dict) -> dict:
         lines.append(f"**{i + 1}.** {x['emoji']} {x['name']} · nota **{x['composite']:.0f}**"
                      + (f" · peso {w * 100:.0f}%" if w else "") + f"\n{s}")
     fields = []
+    luck = result.get("sorte") or {}
+    if luck:
+        fields.append(("🎲 O 1.º é melhor do que a sorte?",
+                       f"{luck['name']}: Sharpe deflacionado {luck['dsr']:.2f} com {luck['trials']} agentes contados como tentativas "
+                       f"→ **{luck['verdict']}** (precisa de 0,95). A liga é um laboratório: só um resultado acima disto, e que se "
+                       "mantenha ao vivo, justificaria dinheiro real."))
+    rk = result.get("super_backtest_ranking")
+    if rk:
+        fields.append(("⚖️ Pesos iguais vs pesos do ranking (backtest)",
+                       f"iguais: veredito {result['super_backtest']['overall']:+.0f}, {result['super_backtest']['return_after_tax'] * 100:+.0f}% · "
+                       f"ranking: veredito {rk['overall']:+.0f}, {rk['return_after_tax'] * 100:+.0f}%"))
     bt = result.get("super_backtest")
     if bt:
         fields.append(("🧬 A fusão em 20 anos (backtest)",
@@ -555,13 +592,15 @@ def main() -> int:
               "ranking": ranked, "moves": moves, "renewal": renewal,
               "index_after_tax": ((reps.get(agents.DEFAULT_PROFILE) or {}).get("strategies", {}).get("indexador", {})
                                   .get("year", {}).get("return_after_tax") or 0.0)}
+    result["sorte"] = league_luck(ranked, len([c for c in config["agents"] if c["strategy"] != "indexador"]))
     if not a.sem_backtest:
         import pretrain
 
         markets = pretrain.build_markets(a.anos, a.contexto)
         pretrain._MARKETS[:] = markets
         top = [x for x in ranked if x["active"]][:TOP]
-        result["super_backtest"] = backtest_super(top, moves["weights"], markets, 1000.0)
+        result["super_backtest"] = backtest_super(top, super_weights(top, "iguais"), markets, 1000.0)
+        result["super_backtest_ranking"] = backtest_super(top, super_weights(top, "ranking"), markets, 1000.0)
         result["members_overall"] = {x["id"]: x["facts"]["overall"] for x in top}
     brief = {"ranking": [{k: x[k] for k in ("name", "profile", "composite", "scores", "facts")} for x in ranked[:8]],
              "super_backtest": result.get("super_backtest"), "index_after_tax": result["index_after_tax"],
@@ -574,6 +613,7 @@ def main() -> int:
     if created:  # the analysis that justified it, on its sheet (Tiago)
         created["genealogia"]["analise"] = {
             "juri": f"lab/juri-{today.isoformat()}.json", "jurados": {JUROR_NAMES[j]: w for j, w in JURORS.items()},
+            "backtest_pesos_ranking": result.get("super_backtest_ranking"), "sorte": result.get("sorte"),
             "parecer": result.get("president") or "", "backtest": result.get("super_backtest"),
             "indice_depois_impostos": result["index_after_tax"],
             "ranking": [{"lugar": i + 1, "id": x["id"], "name": x["name"], "nota": x["composite"]} for i, x in enumerate(ranked[:10])]}

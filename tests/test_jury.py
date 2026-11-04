@@ -45,9 +45,10 @@ def test_the_jurors_rank_every_agent_and_the_best_lead():
     assert ranked[0]["composite"] == pytest.approx(sum(w * ranked[0]["scores"][j] for j, w in jury.JURORS.items()), abs=0.1)
 
 
-def test_the_super_agent_weighs_the_top_five_by_grade_and_place():
+def test_the_fusion_weighs_its_members_equally_or_by_grade_and_place():
     top = [{"id": f"a{i}", "composite": 80.0} for i in range(5)]
-    w = jury.super_weights(top)
+    assert jury.super_weights(top) == {f"a{i}": 0.2 for i in range(5)}
+    w = jury.super_weights(top, "ranking")
     assert sum(w.values()) == pytest.approx(1.0, abs=1e-3)
     assert w["a0"] == pytest.approx(5 / 15, abs=1e-3) and w["a4"] == pytest.approx(1 / 15, abs=1e-3)
 
@@ -65,6 +66,7 @@ def test_sunday_sets_the_super_agent_and_a_year_out_switches_off():
 
 def test_the_monthly_renewal_keeps_the_best_twenty_live_winners_first(monkeypatch):
     monkeypatch.setattr(jury, "LEAGUE_SIZE", 5)
+    monkeypatch.setattr(agents, "LIVE_PROTECT_SESSIONS", 2)  # the test's live records are two days long
     config, state, reps = league(8)
     state["agents"]["campeao"]["history"][-1]["equity"] = 1100  # the jury's last, but beating the index live
     config["agents"].append({"id": "campeao-diario", "name": "Campeao · diário", "emoji": "🤖", "strategy": "campeao",
@@ -114,9 +116,17 @@ def test_each_sunday_with_a_new_top_five_makes_a_new_super_agent_and_the_cap_rep
     assert "created" not in again  # the same top 5: no copy
     by_id = {c["id"]: c for c in config["agents"]}
     by_id["analista"]["active"] = False  # the top changes
+    assert "created" not in jury.decide(config, state, jury.judge(config, state, reps), TODAY + timedelta(days=14))  # a month
     monkeypatch.setattr(jury, "MAX_AGENTS", len(config["agents"]))
     monkeypatch.setattr(jury, "LIVE_MIN_SESSIONS", 2)
     state["agents"]["campeao"]["history"][-1]["equity"] = 900  # the worst live
-    third = jury.decide(config, state, jury.judge(config, state, reps), TODAY + timedelta(days=14))
+    third = jury.decide(config, state, jury.judge(config, state, reps), TODAY + timedelta(days=30))
     assert third["created"] == "super-2" and third["replaced"] == "campeao"
     assert by_id["campeao"]["desligado"]["motivo"] == "substituido" and by_id["super"]["membros"] != third["weights"]
+
+
+def test_the_luck_test_counts_every_agent_as_a_try():
+    config, state, reps = league(8)
+    ranked = jury.judge(config, state, reps)
+    few, many = jury.league_luck(ranked, 8), jury.league_luck(ranked, 200)
+    assert few["agent"] == ranked[0]["id"] and many["trials"] == 200 and many["dsr"] <= few["dsr"]

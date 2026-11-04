@@ -933,8 +933,8 @@ def metrics(mkt: Market, symbol: str) -> dict | None:
 
 
 # An agent beating the Indexador live stays in the league whatever its backtest (Tiago: never take out an agent that is
-# winning against the S&P 500). Short records are noise, but the live league is what is being judged.
-LIVE_PROTECT_SESSIONS = 2
+# winning against the S&P 500), once its record is three months long (a few days of winning is noise).
+LIVE_PROTECT_SESSIONS = 63
 
 
 def live_vs_index(cfg: dict, state: dict) -> tuple[float, float, int] | None:
