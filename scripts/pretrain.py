@@ -1004,16 +1004,19 @@ WF_FOLDS = 6  # unseen years the search is checked on, before the exam year (0: 
 _WF: dict[str, dict] = {}
 
 
-def walk_forward(strategy: str) -> dict:
+def walk_forward(strategy: str, window: int | None = None) -> dict:
     """The search, run on the data up to each of the WF_FOLDS years before the exam (the exam year is sealed; no
     earlier choices: they saw those years), judged on that unseen year against the original parameters (not against
     what the agent trades with now: that was chosen with those years in view, an unfair head start). Passes when it
-    gains on average and wins more years than it loses: only then may the search replace what the agent trades with."""
+    gains on average and wins more years than it loses: only then may the search replace what the agent trades with.
+    window: only the last `window` years before each tested year (scripts/horizon_lab.py: does a shorter, more recent
+    history pick better parameters than all of it?)."""
     full = _MARKETS
     folds = []
     for k in range(2, WF_FOLDS + 2):  # k = 1 would test on the exam year
         end = len(full) - (k - 1) * EXAM_SESSIONS
-        test, past = full[end - EXAM_SESSIONS:end], full[:end - EXAM_SESSIONS]
+        start = max(0, end - EXAM_SESSIONS - window * EXAM_SESSIONS) if window else 0
+        test, past = full[end - EXAM_SESSIONS:end], full[start:end - EXAM_SESSIONS]
         if len(past) < 4 * EXAM_SESSIONS:
             break
         _, r = _search(strategy, past, fold=True)

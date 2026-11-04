@@ -1,0 +1,83 @@
+name: Laboratório do horizonte de treino
+
+# How much history should the training look at? The same search on the last 5, the last 10 or all the years before
+# each of the 6 years before the exam, each choice judged on that unseen year (scripts/horizon_lab.py). One machine per
+# strategy. This repo is public: results go to the private repo (agents/lab/horizonte/), the log only shows progress.
+on:
+  workflow_dispatch:
+    inputs:
+      perfil:
+        description: "Perfil do investidor"
+        type: choice
+        options: [equilibrado, conservador, arrojado]
+        default: equilibrado
+      estrategias:
+        description: "Estratégias, separadas por vírgulas"
+        required: false
+        default: "guardiao,rotador,foguetao,analista,quant,monge,abutre,pendulo,cacador,sniper,campeao,pescador,deriva,kamikaze,estratega"
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      strategies: ${{ steps.list.outputs.strategies }}
+    steps:
+      - id: list
+        env:
+          ESTRATEGIAS: ${{ inputs.estrategias }}
+        run: echo "strategies=$(echo "$ESTRATEGIAS" | tr ', ' '\n\n' | sed '/^$/d' | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  horizon:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        strategy: ${{ fromJson(needs.plan.outputs.strategies) }}
+    env:
+      PRETRAIN_PERFIL: ${{ inputs.perfil }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Dia (Lisboa)
+        id: dia
+        run: echo "day=$(TZ=Europe/Lisbon date +%F)" >> "$GITHUB_OUTPUT"
+      - name: Preços e contexto do pré-treino de hoje
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            precos/
+            ctx/
+          key: pretrain-data-${{ steps.dia.outputs.day }}-20-${{ hashFiles('data/universe/europe.csv', 'data/context/*.csv', 'scripts/context.py', 'scripts/policy.py') }}
+      - name: Contexto (se a cache não existir)
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: uv run python scripts/context.py --guardar ctx/context.csv
+      - name: Horizontes de ${{ matrix.strategy }}
+        env:
+          PRICE_CACHE_DIR: precos
+        run: uv run python scripts/horizon_lab.py --estrategia "${{ matrix.strategy }}" --contexto ctx/context.csv
+      - name: Guardar (repositório privado)
+        if: ${{ !cancelled() }}
+        working-directory: agents
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A lab/horizonte 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -m "Horizonte de treino: ${{ matrix.strategy }} ($PRETRAIN_PERFIL)"
+          for i in 1 2 3 4 5 6 7 8; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep $((RANDOM % 20 + 5)); done
+          exit 1

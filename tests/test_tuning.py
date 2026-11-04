@@ -271,3 +271,20 @@ def test_the_deflated_sharpe_discounts_the_best_of_many_tries():
     random.seed(1)
     lucky = max(([random.gauss(0, 10) for _ in range(10)] for _ in range(200)), key=pretrain.sharpe_of)
     assert pretrain.deflated_sharpe(lucky, tries) < pretrain.deflated_sharpe(lucky, [])  # many tries: less convincing
+
+
+def test_the_walk_forward_can_look_at_only_the_last_years(monkeypatch):
+    from datetime import date as _d, timedelta as _td
+    from types import SimpleNamespace
+
+    days = [SimpleNamespace(as_of=_d(2000, 1, 1) + _td(days=i)) for i in range(12 * pretrain.EXAM_SESSIONS)]
+    seen = []
+    monkeypatch.setattr(pretrain, "_MARKETS", days)
+    monkeypatch.setattr(pretrain, "_search", lambda s, past, fold=False: (seen.append(len(past)), (s, {"chosen": {"a": 1}, "default": {}}))[1])
+    monkeypatch.setattr(pretrain, "simulate", lambda s, p, test, detail=False: {"points": 5.0 if p else 0.0})
+    wf = pretrain.walk_forward("x", window=5)
+    assert wf["passed"] and len(wf["folds"]) == pretrain.WF_FOLDS
+    assert set(seen) == {5 * pretrain.EXAM_SESSIONS}
+    seen.clear()
+    pretrain.walk_forward("x")
+    assert seen[0] == 10 * pretrain.EXAM_SESSIONS  # all the years before the tested one
