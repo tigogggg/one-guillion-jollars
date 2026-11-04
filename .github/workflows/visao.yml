@@ -7,6 +7,11 @@ on:
   schedule:
     - cron: "41 5 * * 1,4"
   workflow_dispatch:
+    inputs:
+      motivo:
+        description: "Porque é refeita fora do calendário (o gatilho das notícias preenche)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -40,7 +45,8 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-        run: uv run python scripts/vision.py --contexto ctx/context.csv
+          MOTIVO: ${{ inputs.motivo }}
+        run: uv run python scripts/vision.py --contexto ctx/context.csv --motivo "$MOTIVO"
       - name: Guardar (repositório privado)
         if: ${{ !cancelled() }}
         working-directory: agents

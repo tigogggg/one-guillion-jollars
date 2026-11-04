@@ -24,7 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import agents
 import context
@@ -156,14 +156,56 @@ def card(v: dict) -> dict:
                ("🔴 A evitar", (neg(v["setores"]) + " · " + neg(v["industrias"])).strip(" ·")[:1024] or "—")]
     if v["riscos"]:
         fields.append(("⚠️ Riscos a vigiar", "\n".join(f"• {r}" for r in v["riscos"])[:1024]))
-    return embed("🔭 Visão a 18 meses (Visionário)", v["resumo"], color=BLUE, fields=fields)
+    title = "🔭 Visão a 18 meses (Visionário)" + (" · extraordinária" if v.get("extraordinaria") else "")
+    lead = (f"⚠️ Refeita fora do calendário: {v['extraordinaria']}\n\n" if v.get("extraordinaria") else "") + v["resumo"]
+    return embed(title, lead[:4000], color=BLUE, fields=fields)
+
+
+GEO_SHOCK = 4  # the news module's geopolitical risk (0-5) from which a view is redone at once
+VIX_SHOCK, VIX_JUMP = 30.0, 0.30  # or the VIX at least this high and up this much in five sessions
+EXTRA_AFTER = timedelta(hours=24)  # never more often than this
+
+
+def shock(now: datetime) -> str | None:
+    """Why a view should be redone now (a grave event between the scheduled ones), or None."""
+    try:
+        v = json.loads(VISION_PATH.read_text())
+        if now - datetime.fromisoformat(v["at"]) < EXTRA_AFTER:
+            return None
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
+        import news
+
+        geo = json.loads(news.GEO_PATH.read_text())
+        if (geo.get("risk") or 0) >= GEO_SHOCK and now - datetime.fromisoformat(geo["at"]) < timedelta(hours=12):
+            return f"risco geopolítico {geo['risk']}/5: {str(geo.get('summary', ''))[:200]}"
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
+        from rankings import download_history
+
+        vix = download_history(["^VIX"], period="1mo").get("^VIX")
+        if vix is not None and len(vix) >= 6:
+            last, before = float(vix["Close"].iloc[-1]), float(vix["Close"].iloc[-6])
+            if last >= VIX_SHOCK and last / before - 1 >= VIX_JUMP:
+                return f"VIX a {last:.0f} (+{(last / before - 1) * 100:.0f}% em 5 sessões)"
+    except Exception:  # noqa: BLE001 - no VIX, no trigger
+        pass
+    return None
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--contexto")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--gatilho", action="store_true", help="Only say whether a grave event calls for a view now")
+    ap.add_argument("--motivo", default="", help="Why this view was asked for outside the schedule")
     a = ap.parse_args()
+    if a.gatilho:
+        why = shock(datetime.now(timezone.utc))
+        print(f"VISAO_EXTRA={why}" if why else "VISAO_EXTRA=", flush=True)
+        return 0
     frame = context.load(a.contexto) if a.contexto else context.download("2y", None, None)
     ctx = context.on(frame, datetime.now(timezone.utc).date())
     raw = ask({**our_numbers(ctx), "manchetes_ultimas_2_semanas": headlines()})
@@ -172,6 +214,8 @@ def main() -> int:
         print("Visão: sem visão válida esta semana; fica a anterior", flush=True)
         return 0
     vision["at"] = datetime.now(timezone.utc).isoformat(timespec="minutes")
+    if a.motivo:
+        vision["extraordinaria"] = a.motivo[:300]
     if a.dry_run:
         print(json.dumps({k: vision[k] for k in ("setores", "industrias")}, ensure_ascii=False))
         return 0

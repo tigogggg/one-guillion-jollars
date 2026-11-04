@@ -35,3 +35,23 @@ def test_the_visionario_follows_the_view(monkeypatch):
     monkeypatch.setitem(agents._VISION, "v", {"at": "2000-01-01", "industrias": {"ind_ITA": 2}})  # stale view
     port = agents.new_portfolio(1000, m.as_of)
     assert [o["symbol"] for o in agents.s_visionario({}, port, m, p) if o["side"] == "buy"] == [agents.BENCHMARK]
+
+
+def test_a_grave_event_asks_for_a_view_but_not_twice_a_day(monkeypatch, tmp_path):
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    import news
+
+    now = datetime(2026, 11, 5, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr(vision, "VISION_PATH", tmp_path / "visao.json")
+    monkeypatch.setattr(news, "GEO_PATH", tmp_path / "geo.json")
+    monkeypatch.setattr("rankings.download_history", lambda *a, **k: {})
+    (tmp_path / "visao.json").write_text(json.dumps({"at": (now - timedelta(days=2)).isoformat()}))
+    (tmp_path / "geo.json").write_text(json.dumps({"at": (now - timedelta(hours=1)).isoformat(), "risk": 4, "summary": "escalada"}))
+    assert "risco geopolítico 4/5" in vision.shock(now)
+    (tmp_path / "geo.json").write_text(json.dumps({"at": now.isoformat(), "risk": 2}))
+    assert vision.shock(now) is None
+    (tmp_path / "geo.json").write_text(json.dumps({"at": now.isoformat(), "risk": 5}))
+    (tmp_path / "visao.json").write_text(json.dumps({"at": (now - timedelta(hours=3)).isoformat()}))
+    assert vision.shock(now) is None  # a view from 3 hours ago is recent enough

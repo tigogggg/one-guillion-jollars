@@ -17,6 +17,7 @@ concurrency:
 
 permissions:
   contents: read  # least privilege: nothing is pushed here (the archive goes to the private repo with its deploy key)
+  actions: write  # a grave event asks for an extraordinary 18-month view (visao.yml)
 
 jobs:
   news:
@@ -74,6 +75,16 @@ jobs:
           uv pip install torch --index-url https://download.pytorch.org/whl/cpu
           uv pip install "transformers>=4.44,<5"
           uv run --no-sync python scripts/news.py --finbert
+      - name: Visão extraordinária (choque grave)
+        if: ${{ !inputs.republicar && !cancelled() }}
+        continue-on-error: true  # never fails the news run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          why=$(uv run python scripts/vision.py --gatilho | sed -n 's/^VISAO_EXTRA=//p')
+          if [ -n "$why" ]; then
+            gh workflow run visao.yml --ref "$GITHUB_REF_NAME" -f motivo="$why" && echo "Pedi uma visão extraordinária."
+          fi
       - name: Negócios declarados no Congresso dos EUA (Câmara, PTR)
         if: ${{ !inputs.republicar && !cancelled() }}
         continue-on-error: true  # never fails the news run
