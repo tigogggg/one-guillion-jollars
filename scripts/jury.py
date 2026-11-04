@@ -330,7 +330,8 @@ def league_luck(ranked: list[dict], trials: int) -> dict:
     if not best or not best.get("years"):
         return {}
     sharpes = [pretrain.sharpe_of(x["years"]) for x in ranked if x.get("years")]
-    sharpes += [0.0] * max(0, trials - len(sharpes))  # agents graded before and gone: counted as tries with no edge
+    if sharpes and trials > len(sharpes):  # agents graded before and gone count as tries with the same spread of luck
+        sharpes = [sharpes[i % len(sharpes)] for i in range(trials)]
     dsr = pretrain.deflated_sharpe(best["years"], sharpes)
     return {"agent": best["id"], "name": best["name"], "dsr": round(dsr, 3), "trials": max(trials, len(sharpes)),
             "verdict": "melhor do que a sorte" if dsr >= 0.95 else "não se distingue da sorte"}
