@@ -6,11 +6,11 @@ use crate::pyround::{py_max, py_min, round_to};
 
 pub const SUPPORTED: &[&str] = &[
     "indexador", "guardiao", "rotador", "foguetao", "analista", "quant", "monge", "abutre", "pendulo", "cacador", "sniper",
-    "campeao", "pescador", "deriva", "kamikaze", "estratega",
+    "campeao", "pescador", "deriva", "kamikaze", "estratega", "navegador",
 ];
 
 /// Strategies that trade only ETFs or other agents' portfolios (agents.NO_REGION).
-const NO_REGION: &[&str] = &["indexador", "guardiao", "rotador", "pendulo", "joalheiro", "conselho", "maestro"];
+const NO_REGION: &[&str] = &["indexador", "guardiao", "rotador", "pendulo", "joalheiro", "conselho", "maestro", "navegador"];
 
 pub fn uses_region(strategy: &str) -> bool {
     !NO_REGION.contains(&strategy)
@@ -91,6 +91,7 @@ pub fn run(strategy: &str, port: &mut Port, m: &Mkt, p: &P, region: i64) -> Vec<
         "sniper" => sniper(port, m, p, region),
         "campeao" => campeao(port, m, p, region),
         "estratega" => estratega(port, m, p, region),
+        "navegador" => navegador(port, m, p),
         "pescador" => pescador(port, m, p, region),
         "deriva" => deriva(port, m, p, region),
         "kamikaze" => kamikaze(port, m, p, region),
@@ -502,6 +503,71 @@ fn estratega(port: &mut Port, m: &Mkt, p: &P, region: i64) -> Vec<Order> {
         let mut o = order_sell(core, "núcleo S&P 500");
         o.fraction = (current - target) / current;
         orders.push(o);
+    }
+    orders
+}
+
+/// agents.REGIME_ALLOC
+const REGIME_ALLOC: &[(&str, &[(&str, f64)])] = &[
+    ("Concentração", &[("SXRV.DE", 0.6), ("SXR8.DE", 0.4)]),
+    ("Alargamento", &[("SXR8.DE", 0.4), ("ZPRR.DE", 0.3), ("IS3S.DE", 0.3)]),
+    ("Contração", &[("SXR8.DE", 0.4), ("EUNH.DE", 0.3), ("4GLD.DE", 0.3)]),
+    ("Inflação", &[("SXR8.DE", 0.5), ("4GLD.DE", 0.25), ("XDW0.DE", 0.25)]),
+    ("Transição", &[("SXR8.DE", 1.0)]),
+];
+
+/// agents.regime_of
+fn regime_of(m: &Mkt, p: &P) -> &'static str {
+    let c = |k: &str| m.data.context(m.d, k);
+    let (conc, size, credit, cycle, corr) = (c("reg_conc"), c("reg_size"), c("reg_credit"), c("reg_cycle"), c("reg_corr"));
+    if credit.is_some_and(|x| x < -p.req("limiar_credito")) || cycle.is_some_and(|x| x < -p.req("limiar_ciclo")) {
+        return "Contração";
+    }
+    if corr.is_some_and(|x| x > p.req("limiar_corr")) {
+        return "Inflação";
+    }
+    if conc.is_some_and(|x| x < -p.req("limiar_conc")) {
+        return "Concentração";
+    }
+    if conc.is_some_and(|x| x > p.req("limiar_conc")) && size.is_some_and(|x| x > 0.0) {
+        return "Alargamento";
+    }
+    "Transição"
+}
+
+fn navegador(port: &mut Port, m: &Mkt, p: &P) -> Vec<Order> {
+    if !due(port, m, p.req("cada")) {
+        return Vec::new();
+    }
+    let Some(&core) = m.data.by_name.get("SXR8.DE") else { return Vec::new() };
+    if m.etf(core).is_none() {
+        return Vec::new();
+    }
+    let regime = regime_of(m, p);
+    let plan = REGIME_ALLOC.iter().find(|(r, _)| *r == regime).map(|(_, a)| *a).unwrap_or(&[]);
+    let mut alloc: Vec<(usize, f64)> = Vec::new();
+    for &(name, w) in plan {
+        let key = match m.data.by_name.get(name) { Some(&s) if m.etf(s).is_some() => s, _ => core };
+        match alloc.iter_mut().find(|(s, _)| *s == key) {
+            Some(e) => e.1 += w,
+            None => alloc.push((key, w)),
+        }
+    }
+    let reason = format!("regime {regime}");
+    let eq = equity(port, m);
+    let mut orders: Vec<Order> = port.positions.keys().filter(|s| !alloc.iter().any(|(a, _)| a == *s))
+        .map(|&s| order_sell(s, &reason)).collect();
+    let folga = p.req("folga");
+    for &(s, w) in &alloc {
+        let pos = port.positions.get(&s);
+        let current = match pos { Some(pos) => position_value(m, s, pos) / eq, None => 0.0 };
+        if w - current > folga {
+            orders.push(order_buy(s, (w - current) * eq, &reason, None, None));
+        } else if pos.is_some() && current - w > folga {
+            let mut o = order_sell(s, &reason);
+            o.fraction = (current - w) / current;
+            orders.push(o);
+        }
     }
     orders
 }

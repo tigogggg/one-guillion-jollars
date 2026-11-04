@@ -295,3 +295,20 @@ def test_the_estratega_trades_exactly_like_python(markets, monkeypatch):
     compare("foguetao", {**fog, "filtro_agenda": 0.3}, agenda, monkeypatch, min_trades=10)
     compare("quant", {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES["quant"][2],
                       "filtro_agenda": 0.2, "regiao": 2}, agenda, monkeypatch, min_trades=1)
+
+
+def test_the_navegador_trades_exactly_like_python(markets, monkeypatch):
+    import dataclasses
+
+    regimes = []
+    for k, m in enumerate(markets):  # the regimes take turns: concentration, broadening, contraction, inflation, none
+        ctx = {**m.context, "reg_conc": round(0.05 * math.sin(k / 40), 5), "reg_size": round(0.04 * math.cos(k / 55), 5),
+               "reg_credit": round(0.05 * math.sin(k / 70 + 1), 5), "reg_cycle": round(0.1 * math.cos(k / 90), 5)}
+        if k % 3:
+            ctx["reg_corr"] = round(0.5 * math.sin(k / 33), 5)
+        regimes.append(dataclasses.replace(m, context=ctx))
+    base = {**{k: agents.COMMON[k] for k in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES["navegador"][2]}
+    compare("navegador", base, regimes, monkeypatch, min_trades=10)
+    compare("navegador", {**base, "cada": 2, "folga": 0.02, "limiar_conc": 0.0, "limiar_corr": 0.1}, regimes, monkeypatch, min_trades=10)
+    reasons = {t[7] for t in rust_run("navegador", base, regimes)[1] if t[7]}
+    assert len({r for r in reasons if r.startswith("regime")}) >= 3

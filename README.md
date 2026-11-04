@@ -231,7 +231,7 @@ Running the bot itself needs a Discord application, a Cloudflare Worker and the 
 | AI | Claude (news, agent reviews, portfolio analysis, update notes), FinBERT fallback |
 | Scheduling and compute | GitHub Actions, plus local training on any PC |
 | Site and bot | Cloudflare Workers, KV, D1, Discord interactions, Plotly |
-| Trading skills | [tradermonty/claude-trading-skills](https://github.com/tradermonty/claude-trading-skills) (MIT) |
+| Trading skills | [tradermonty/claude-trading-skills](https://github.com/tradermonty/claude-trading-skills) (MIT); the Navegador's macro regime follows its macro-regime-detector |
 
 ## 📁 Project structure
 

@@ -199,7 +199,7 @@ def relative_points(own: float, index: float) -> float:
 # Where a strategy buys stocks (a trained parameter, regiao): 0 both, 1 only the US, 2 only Europe. The strategies
 # that trade only ETFs or other agents' portfolios have no use for it, so it is neither trained nor shown for them.
 REGIONS = {0: "EUA e Europa", 1: "só EUA", 2: "só Europa"}
-NO_REGION = {"indexador", "guardiao", "rotador", "pendulo", "joalheiro", "conselho", "maestro"}
+NO_REGION = {"indexador", "guardiao", "rotador", "pendulo", "joalheiro", "conselho", "maestro", "navegador"}
 
 
 def uses_param(strategy: str | None, key: str) -> bool:
@@ -304,6 +304,11 @@ PARAM_BOUNDS = {
     "peso_incerteza": (0.0, 2.0, float),
     "peso_capex": (0.0, 2.0, float),
     "segue_zona": (0, 1, int),
+    # Navegador: how far a six-month ratio must move to call a regime (context.regime_fields)
+    "limiar_conc": (0.0, 0.06, float),
+    "limiar_credito": (0.0, 0.08, float),
+    "limiar_ciclo": (0.02, 0.20, float),
+    "limiar_corr": (0.0, 0.6, float),
     # Pêndulo: minimum momentum of the best equity ETF to stay in equities
     "limiar_mom": (0.0, 0.08, float),
 }
@@ -1850,6 +1855,57 @@ def s_maestro(cfg, port, mkt, p):
     return orders
 
 
+# What the Navegador holds in each macro regime: (ETF, weight), in this order; an ETF without a price that day leaves its
+# weight to the S&P 500. Concentration: the mega caps lead (Nasdaq 100 and the cap-weighted S&P 500); broadening: small
+# caps and value join; contraction: bonds and gold beside the index; inflation (stocks and bonds falling together):
+# gold and energy; transition: the index alone.
+REGIME_ALLOC = {
+    "Concentração": [("SXRV.DE", 0.6), ("SXR8.DE", 0.4)],
+    "Alargamento": [("SXR8.DE", 0.4), ("ZPRR.DE", 0.3), ("IS3S.DE", 0.3)],
+    "Contração": [("SXR8.DE", 0.4), ("EUNH.DE", 0.3), ("4GLD.DE", 0.3)],
+    "Inflação": [("SXR8.DE", 0.5), ("4GLD.DE", 0.25), ("XDW0.DE", 0.25)],
+    "Transição": [("SXR8.DE", 1.0)],
+}
+
+
+def regime_of(ctx: dict, p: dict) -> str:
+    """The macro regime from the context's six-month ratios (context.regime_fields), the first rule that holds."""
+    conc, size, credit, cycle, corr = (ctx.get(k) for k in ("reg_conc", "reg_size", "reg_credit", "reg_cycle", "reg_corr"))
+    if (credit is not None and credit < -p["limiar_credito"]) or (cycle is not None and cycle < -p["limiar_ciclo"]):
+        return "Contração"
+    if corr is not None and corr > p["limiar_corr"]:
+        return "Inflação"
+    if conc is not None and conc < -p["limiar_conc"]:
+        return "Concentração"
+    if conc is not None and conc > p["limiar_conc"] and size is not None and size > 0:
+        return "Alargamento"
+    return "Transição"
+
+
+def s_navegador(cfg, port, mkt, p):
+    """ETFs by macro regime (after tradermonty's macro-regime-detector): where the market is going over the next
+    year or two, read from cross-asset ratios."""
+    if not due(port, mkt, p["cada"]):
+        return []
+    if BENCHMARK not in mkt.etfs:
+        return []
+    regime = regime_of(mkt.context, p)
+    alloc: dict[str, float] = {}
+    for s, w in REGIME_ALLOC[regime]:
+        key = s if s in mkt.etfs else BENCHMARK
+        alloc[key] = alloc.get(key, 0.0) + w
+    eq = equity(port, mkt)
+    orders = [order_sell(s, f"regime {regime}") for s in port["positions"] if s not in alloc]
+    for s, w in alloc.items():
+        pos = port["positions"].get(s)
+        current = position_value(mkt, s, pos) / eq if pos else 0.0
+        if w - current > p["folga"]:
+            orders.append(order_buy(s, (w - current) * eq, f"regime {regime}"))
+        elif pos and current - w > p["folga"]:
+            orders.append(order_sell(s, f"regime {regime}", fraction=(current - w) / current))
+    return orders
+
+
 def s_super(cfg, port, mkt, p):
     """The Sunday jury's top 5 together (scripts/jury.py): the members' portfolios blended with the jury's weights
     (cfg["membros"]: {agent id: weight}), every `cada` sessions; a holding more than `banda` off its target moves."""
@@ -1911,6 +1967,9 @@ STRATEGIES = {
     "cetico": (s_cetico, "Más notícias que o mercado ignorou", {"n": 4, "limiar": 3, "stop_pct": 0.06, "alvo_pct": 0.08, "max_dias": 10}),
     "conselho": (s_conselho, "Compra o que vários agentes apoiam", {"n": 6, "min_votos": 2, "stop_pct": 0.10}),
     "maestro": (s_maestro, "Copia os agentes que melhor se portam no regime de mercado atual", {"n": 8, "lideres": 3, "janela": 20, "cada": 5}),
+    "navegador": (s_navegador, "ETFs pelo regime macro: concentração, alargamento, contração, inflação ou transição",
+                  {"cada": 5, "folga": 0.05, "limiar_conc": 0.02, "limiar_credito": 0.03, "limiar_ciclo": 0.08,
+                   "limiar_corr": 0.3}),
     "super": (s_super, "Fusão: o top 5 do júri de domingo num só agente, com os pesos do júri", {"cada": 5, "banda": 0.02}),
     "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5, "ignora_resultados": True, "ignora_risco": True}),
     "relampago": (s_relampago, "Rompimento do intervalo de abertura, dentro do dia (ORB)", {"n": 4, "alvo_r": 1.5, "rompimento_max": 0.01}),

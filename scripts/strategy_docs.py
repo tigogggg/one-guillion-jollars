@@ -69,7 +69,7 @@ PARAMS = {
 }
 
 PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext", "gap_max",
-              "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max", "queda_min", "limiar_mom", "nucleo", "banda"}
+              "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max", "queda_min", "limiar_mom", "nucleo", "banda", "limiar_conc", "limiar_credito", "limiar_ciclo"}
 
 # strategy: (idea, buys when, sells when, position size)
 DOCS = {
@@ -198,6 +198,12 @@ DOCS = {
         "A cada {cada} sessões copia a carteira combinada dos {lideres} agentes que mais batem o S&P 500 na zona atual do mercado (alta, neutra, cautelosa ou queda): pelo registo ao vivo nessa zona (15+ dias) ou, até lá, pelo pré-treino.",
         "Vende o que sai das carteiras dos líderes; fica em dinheiro se nenhum agente bater o S&P 500 nesta zona.",
         "Os pesos das posições dos líderes, até {n} ações.",
+    ),
+    "navegador": (
+        "Para onde vai o mercado: lê o regime macro (1-2 anos) em rácios entre ativos e escolhe os ETFs desse regime (ideia do macro-regime-detector das trading skills de tradermonty).",
+        "A cada {cada} sessões vê o regime: contração (crédito de alto risco a perder mais de {limiar_credito} para o de qualidade em 6 meses, ou cíclicas a perder mais de {limiar_ciclo} para as defensivas), inflação (ações e obrigações a cair juntas, correlação acima de {limiar_corr}), concentração (o S&P 500 de pesos iguais a perder mais de {limiar_conc} para o normal: as gigantes a puxar) ou alargamento (o contrário, com as pequenas a acompanhar).",
+        "Concentração: Nasdaq 100 e S&P 500. Alargamento: S&P 500, small caps e value. Contração: S&P 500, obrigações do euro e ouro. Inflação: S&P 500, ouro e energia. Sem regime claro: só o S&P 500. Acerta um peso que se afaste mais de {folga} do alvo.",
+        "Pesos fixos por regime; um ETF ainda sem preço deixa o peso ao S&P 500.",
     ),
     "super": (
         "Fusão: o júri de domingo avalia a liga com seis jurados (rendimento, risco, robustez, eficiência, diversificação e regimes) e junta os 5 melhores num só agente.",

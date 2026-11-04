@@ -45,7 +45,12 @@ import requests
 FRED = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 FRED_SERIES = {"epu": "USEPUINDXD", "hy": "BAMLH0A0HYM2"}
 EPU_DIRECT = "https://www.policyuncertainty.com/media/All_Daily_Policy_Data.csv"  # the index's own site, if FRED fails
-YAHOO_SERIES = {"vix": "^VIX", "tnx": "^TNX", "oil_y": "BZ=F", "oil_y2": "CL=F", "gold": "GC=F"}
+YAHOO_SERIES = {"vix": "^VIX", "tnx": "^TNX", "oil_y": "BZ=F", "oil_y2": "CL=F", "gold": "GC=F", "irx": "^IRX"}
+# The macro regime (after the macro-regime-detector of tradermonty/claude-trading-skills, MIT): cross-asset ratios over
+# six months. Equal-weight vs cap-weight S&P 500 (concentration), small vs large caps, high yield vs investment grade
+# (credit), consumer discretionary vs staples (cycle), the stock-bond correlation (inflation), the yield curve.
+REGIME_ETFS = ["RSP", "IWM", "HYG", "LQD", "TLT"]
+SESSIONS_6M = 126
 GPR_URLS = ["https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xls",
             "https://www.matteoiacoviello.com/gpr_files/data_gpr_daily_recent.xlsx"]
 # GICS sector -> its SPDR ETF, then an older proxy for the years before it existed
@@ -244,7 +249,8 @@ def download(period: str, spy: pd.DataFrame | None, fx: pd.Series | None) -> pd.
         if s is not None and len(s):
             raw[name] = s
     step("ETFs de setor")
-    sector_tickers = sorted({t for ts in [*SECTOR_ETFS.values(), *EU_SECTOR_ETFS.values()] for t in ts} | {EU_BENCHMARK})
+    sector_tickers = sorted({t for ts in [*SECTOR_ETFS.values(), *EU_SECTOR_ETFS.values()] for t in ts} | {EU_BENCHMARK}
+                            | set(REGIME_ETFS))
     sectors = download_history(sector_tickers, period=period)
     for t, df in sectors.items():
         raw[f"etf:{t}"] = df["Close"]
@@ -320,11 +326,46 @@ def features(raw: dict[str, pd.Series]) -> pd.DataFrame:
         cols[f"{key}_trend"] = px / px.rolling(200).mean() - 1
         if stoxx is not None and not stoxx.empty:
             cols[f"{key}_rs"] = (px / px.shift(SESSIONS_3M) - 1) - (stoxx / stoxx.shift(SESSIONS_3M) - 1).reindex(px.index)
+    cols.update(regime_fields(raw))
     if not cols:
         return pd.DataFrame()
     frame = pd.DataFrame({k: v.groupby(v.index.normalize()).last() for k, v in cols.items()})
     days = pd.date_range(frame.index.min(), frame.index.max(), freq="D")
     return frame.reindex(days).ffill(limit=10)
+
+
+def regime_fields(raw: dict[str, pd.Series]) -> dict[str, pd.Series]:
+    """reg_conc (RSP/SPY), reg_size (IWM/SPY), reg_credit (HYG/LQD), reg_cycle (XLY/XLP): each ratio's change over six
+    months (negative: the first one lagging); reg_corr: the 63-session correlation of the S&P 500's daily returns with
+    long Treasuries' (positive: bonds no longer hedge, the inflation regime); reg_curve: 10-year minus 3-month yield."""
+    def strip(s: pd.Series) -> pd.Series:
+        s = s.copy()
+        if getattr(s.index, "tz", None) is not None:
+            s.index = s.index.tz_localize(None)
+        return s.groupby(s.index.normalize()).last()
+
+    def ratio_chg(a: str, b: str) -> pd.Series | None:
+        x, y = raw.get(a), raw.get(b)
+        if x is None or y is None or x.empty or y.empty:
+            return None
+        r = (strip(x) / strip(y).reindex(strip(x).index)).dropna()
+        return r / r.shift(SESSIONS_6M) - 1
+
+    out = {}
+    for name, (a, b) in {"reg_conc": ("etf:RSP", "spy"), "reg_size": ("etf:IWM", "spy"), "reg_credit": ("etf:HYG", "etf:LQD"),
+                         "reg_cycle": ("etf:XLY", "etf:XLP")}.items():
+        s = ratio_chg(a, b)
+        if s is not None:
+            out[name] = s
+    if raw.get("spy") is not None and raw.get("etf:TLT") is not None:
+        rets = pd.DataFrame({"s": strip(raw["spy"]), "b": strip(raw["etf:TLT"])}).dropna().pct_change()
+        out["reg_corr"] = rets["s"].rolling(63, min_periods=40).corr(rets["b"])
+    if raw.get("tnx") is not None and raw.get("irx") is not None:
+        tnx = strip(raw["tnx"])
+        tnx = tnx.where(tnx < 20, tnx / 10)
+        irx = strip(raw["irx"])
+        out["reg_curve"] = (tnx - irx.reindex(tnx.index)).dropna()
+    return out
 
 
 def on(frame: pd.DataFrame, day) -> dict:
