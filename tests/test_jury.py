@@ -81,3 +81,25 @@ def test_the_monthly_renewal_keeps_the_best_twenty_live_winners_first(monkeypatc
     assert {"campeao-diario"} <= {c["id"] for c in config["agents"] if c.get("active", True)}  # the twin follows
     assert not by_id["monge-diario"].get("active", True) or "monge" in active
     assert by_id["indexador"].get("active", True)
+
+
+def test_claude_helps_the_jurors_within_bounds(monkeypatch):
+    import json as _json
+
+    config, state, reps = league(8)
+    reply = {"agentes": {"campeao": {"risco": {"ajuste": 40, "porque": "quedas fortes nas crises"}},
+                         "nobody": {"risco": {"ajuste": 5, "porque": "x"}}, "quant": {"inventado": {"ajuste": 3}}}}
+
+    class Proc:
+        returncode = 0
+        stdout = _json.dumps({"result": _json.dumps(reply)})
+        stderr = ""
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "t")
+    monkeypatch.setattr(jury.shutil, "which", lambda _: "/bin/claude")
+    monkeypatch.setattr(jury.subprocess, "run", lambda *a, **k: Proc())
+    plain = {x["id"]: x for x in jury.judge(config, state, reps)}
+    helped = {x["id"]: x for x in jury.judge(config, state, reps, use_claude=True)}
+    assert helped["campeao"]["claude"]["risco"]["ajuste"] == jury.CLAUDE_MAX  # clamped
+    assert helped["campeao"]["scores"]["risco"] == min(100, plain["campeao"]["scores"]["risco"] + jury.CLAUDE_MAX)
+    assert helped["quant"]["claude"] == {} and "nobody" not in helped
