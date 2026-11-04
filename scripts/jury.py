@@ -23,7 +23,9 @@ The Presidente (Claude) writes the opinion.
 
 Decisions (on Sundays, at most once a week, or --forcar; the report alone any other day):
 - Super Agente: the top 5 active agents, each weighted by its composite times RANK_WEIGHTS of its place (the 1st
-  counts 5, the 5th 1). Its 20 years are replayed (scripts/teams.py with these weights) and compared with each
+  counts 5, the 5th 1). Each Sunday whose top 5 differs makes a new version (super, super-2, ...); the earlier ones
+  keep their members and weights, so the versions compete live. At most MAX_AGENTS agents: beyond it a new one
+  replaces the agent with the worst real (live) performance against the Indexador. Its 20 years are replayed (scripts/teams.py with these weights) and compared with each
   member and the index: does joining them add anything?
 - An agent a year (RETIRE_DAYS) on the bench without coming back is switched off ("desligado"): its strategy is no
   longer pre-trained for that profile (agents.retired).
@@ -62,6 +64,7 @@ JUROR_NAMES = {"rendimento": "🎯 Rendimento", "risco": "🛡️ Risco", "robus
 TOP = 5
 RANK_WEIGHTS = [5, 4, 3, 2, 1]
 LEAGUE_SIZE = 20  # pre-trained agents in the league after each monthly renewal (Tiago)
+MAX_AGENTS = 100  # agents in all (not switched off); beyond it a new one replaces the worst real performer (Tiago)
 LIVE_MAX = 0.5  # the live record's weight in Rendimento after a year of sessions
 LIVE_MIN_SESSIONS = 20
 RETIRE_DAYS = 365
@@ -277,21 +280,54 @@ def last_decision() -> date | None:
     return date.fromisoformat(done[-1]) if done else None
 
 
+def live_excess(cfg: dict, state: dict) -> float | None:
+    """The agent's real (live) return over the Indexador's on the same days, or None with too short a record."""
+    lv = agents.live_vs_index(cfg, state)
+    return None if not lv or lv[2] < LIVE_MIN_SESSIONS else lv[0] - lv[1]
+
+
+def make_room(config: dict, state: dict, today: date, new_id: str) -> str | None:
+    """At most MAX_AGENTS agents (not switched off): beyond it, a new one replaces the agent with the worst real
+    performance against the Indexador (Tiago). Never the Indexador; agents with a live record too short to judge are
+    spared while others can be judged. Returns the replaced agent's id."""
+    alive = [c for c in config["agents"] if not c.get("desligado")]
+    if len(alive) < MAX_AGENTS:
+        return None
+    pool = [c for c in alive if c["strategy"] != "indexador"]
+    judged = [(x, c) for c in pool if (x := live_excess(c, state)) is not None]
+    if judged:
+        worst = min(judged, key=lambda xc: xc[0])[1]
+    else:  # nobody has a long enough record: the least grown since it started
+        worst = min(pool, key=lambda c: (agents.live_vs_index(c, state) or (0.0, 0.0, 0))[0])
+    worst["active"] = False
+    worst["desligado"] = {"since": today.isoformat(), "motivo": "substituido", "por": new_id}
+    return worst["id"]
+
+
 def decide(config: dict, state: dict, ranked: list[dict], today: date) -> dict:
-    """Sunday's moves: the Super Agente's members and weights; a year out of the league switches an agent off."""
+    """Sunday's moves: a new Super Agente version from this week's top 5 (Tiago: each Sunday may create a better
+    version; the earlier ones keep their members and weights, so the versions are compared live), when its members
+    differ from the latest version's; a year out of the league switches an agent off."""
     active = [x for x in ranked if x["active"]]
     top = active[:TOP]
     weights = super_weights(top)
     moves = {"top": [x["id"] for x in top], "weights": weights, "out": [], "back": [], "off": []}
-    if not any(c["strategy"] == "super" for c in config["agents"]):
-        config["agents"].append(dict(SUPER))
-        state["agents"]["super"] = agents.new_portfolio(SUPER["capital"], today)
-        state["agents"]["super"]["params"] = dict(SUPER["params"])
-        moves["created"] = True
-    for c in config["agents"]:
-        if c["strategy"] == "super":
-            c["membros"] = weights
-            c["juri"] = today.isoformat()
+    versions = [c for c in config["agents"] if c["strategy"] == "super"]
+    latest = versions[-1] if versions else None
+    same = latest is not None and set(latest.get("membros") or {}) == set(weights) and all(
+        abs((latest["membros"] or {}).get(k, 0) - w) < 0.05 for k, w in weights.items())
+    if weights and not same:
+        n = len(versions) + 1
+        new_id = "super" if n == 1 else f"super-{n}"
+        moves["replaced"] = make_room(config, state, today, new_id)
+        agent = {**SUPER, "id": new_id, "name": SUPER["name"] + ("" if n == 1 else f" {n}"), "membros": weights,
+                 "juri": today.isoformat(), "versao": n,
+                 "description": SUPER["description"] + f" Versão {n}, do júri de {today.strftime('%d/%m/%Y')}: "
+                                + ", ".join(x["name"] for x in top) + "."}
+        config["agents"].append(agent)
+        state["agents"][new_id] = agents.new_portfolio(SUPER["capital"], today)
+        state["agents"][new_id]["params"] = dict(SUPER["params"])
+        moves["created"] = new_id
     for cfg in config["agents"]:  # a year on the bench without coming back: switched off for good
         since = (cfg.get("banco") or {}).get("since")
         if since and not cfg.get("desligado") and today - date.fromisoformat(since) >= timedelta(days=RETIRE_DAYS):
@@ -429,6 +465,8 @@ def card(result: dict) -> dict:
         moved.append("Só o relatório: o Super Agente muda aos domingos; a liga renova-se no dia 1 de cada mês.")
     if moved:
         fields.append(("Decisões", "\n".join(moved)[:1024]))
+    if mv.get("created"):
+        fields.insert(0, ("🦸 Nova versão do Super Agente", f"`{mv['created']}`" + (f" · substitui `{mv['replaced']}` (o pior ao vivo; limite de {MAX_AGENTS} agentes)" if mv.get("replaced") else "")))
     adj = [f"{x['emoji']} {x['name']} · {JUROR_NAMES[j]} {a['ajuste']:+d}: {a['porque']}"
            for x in result["ranking"] for j, a in (x.get("claude") or {}).items()]
     if adj:

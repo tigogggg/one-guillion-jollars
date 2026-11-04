@@ -3001,7 +3001,7 @@ def ensure_twins(config: dict, state: dict, start: date) -> list[dict]:
     twinned = {a.get("twin_of") for a in config["agents"] if mode_of(a) == DAILY}
     created = []
     for cfg in list(active_agents(config)):
-        if (mode_of(cfg) == DAILY or cfg["strategy"] == "indexador" or cfg["id"] in twinned
+        if (mode_of(cfg) == DAILY or cfg["strategy"] in ("indexador", "super") or cfg["id"] in twinned
                 or profile_of(cfg) != DEFAULT_PROFILE):  # one twin per strategy is enough for the comparison
             continue
         twin = {**{k: v for k, v in cfg.items() if k not in ("id", "name", "description", "lineage", "lineage_name")},

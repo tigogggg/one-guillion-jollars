@@ -103,3 +103,20 @@ def test_claude_helps_the_jurors_within_bounds(monkeypatch):
     assert helped["campeao"]["claude"]["risco"]["ajuste"] == jury.CLAUDE_MAX  # clamped
     assert helped["campeao"]["scores"]["risco"] == min(100, plain["campeao"]["scores"]["risco"] + jury.CLAUDE_MAX)
     assert helped["quant"]["claude"] == {} and "nobody" not in helped
+
+
+def test_each_sunday_with_a_new_top_five_makes_a_new_super_agent_and_the_cap_replaces_the_worst_live(monkeypatch):
+    config, state, reps = league(8)
+    ranked = jury.judge(config, state, reps)
+    first = jury.decide(config, state, ranked, TODAY)
+    assert first["created"] == "super"
+    again = jury.decide(config, state, ranked, TODAY + timedelta(days=7))
+    assert "created" not in again  # the same top 5: no copy
+    by_id = {c["id"]: c for c in config["agents"]}
+    by_id["analista"]["active"] = False  # the top changes
+    monkeypatch.setattr(jury, "MAX_AGENTS", len(config["agents"]))
+    monkeypatch.setattr(jury, "LIVE_MIN_SESSIONS", 2)
+    state["agents"]["campeao"]["history"][-1]["equity"] = 900  # the worst live
+    third = jury.decide(config, state, jury.judge(config, state, reps), TODAY + timedelta(days=14))
+    assert third["created"] == "super-2" and third["replaced"] == "campeao"
+    assert by_id["campeao"]["desligado"]["motivo"] == "substituido" and by_id["super"]["membros"] != third["weights"]
