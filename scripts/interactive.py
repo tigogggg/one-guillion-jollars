@@ -48,7 +48,7 @@ def _series(series: dict[str, list[tuple]]) -> list[dict]:
 
 def publish(title: str, series: dict[str, list[tuple]], references: dict[str, list[tuple]] | None = None,
             highlight: set[str] | None = None, subtitle: str = "", agents: list[dict] | None = None,
-            kind: str | None = None) -> str | None:
+            kind: str | None = None, bench: list[dict] | None = None) -> str | None:
     """Store the chart and return its page URL, or None (no credentials, or Cloudflare unreachable).
 
     `agents`: one dict per agent (agents.agent_details or pretrain's), shown as
@@ -68,6 +68,9 @@ def publish(title: str, series: dict[str, list[tuple]], references: dict[str, li
         "highlight": sorted(highlight or []),
         "agents": agents or [],
         "kind": kind,
+        # agents out of the league (on the bench): only the performance table lists them, greyed
+        "bench": [{**{k: v for k, v in s.items() if k != "points"}, **_series({s["name"]: s["points"]})[0]}
+                  for s in bench or [] if s.get("points")],
     }
     if not discord_bot.kv_put(f"chart:{chart_id}", data, ttl_days=CHART_DAYS):
         return None

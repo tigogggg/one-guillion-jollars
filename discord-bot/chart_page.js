@@ -439,7 +439,7 @@ h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem
 @keyframes bob { to { transform:translateY(-4px) rotate(-6deg); } }
 #race-scrub, #pt-race-scrub { width:100%; margin:10px 0 0; accent-color:var(--accent); }
 table.perf th, table.perf td { padding:6px 5px; font-size:.86rem; } table.perf th { white-space:normal; line-height:1.2; }
-table.perf td:first-child { white-space:normal; min-width:120px; }
+table.perf td:first-child { white-space:normal; min-width:120px; } table.perf tr.benched td { opacity:.45; }
 .race-split { display:grid; grid-template-columns:minmax(260px,2fr) 3fr; gap:14px; align-items:start; }
 .race-split > div { min-width:0; } .race-split h2 { margin-top:6px; }
 @media (max-width:820px) { .race-split { grid-template-columns:1fr; } .race-track { order:-1; } }
@@ -1120,7 +1120,10 @@ const PERIODS = [["1D", 1], ["1W", 7], ["1M", 30], ["3M", 91], ["6M", 182], ["1A
 function perfTable(boxId, data, people, pick) {
   const box = $(boxId);
   if (!box) return;
-  const series = (data.series || []).filter((s) => s.x.length);
+  // agents on the bench (out of the league: not beating the S&P 500 in the pre-training) are listed too, greyed,
+  // with their values up to the day they left
+  const series = (data.series || []).filter((s) => s.x.length)
+    .concat((data.bench || []).filter((s) => s.x.length).map((s) => ({ ...s, bench: true })));
   if (!series.length) { box.innerHTML = '<p class="muted">Ainda sem histórico.</p>'; return; }
   const byName = Object.fromEntries((people || []).map((a) => [a.name, a]));
   const dayOf = (v) => String(v).slice(0, 10);  // the live point has a time; the table counts in days
@@ -1150,8 +1153,12 @@ function perfTable(boxId, data, people, pick) {
   function draw() {
     const cols = PERIODS.filter(([, d]) => d >= step).map(([k, d]) => ({ key: k, label: k, from: shift(last, d), to: last }))
       .concat([{ key: "custom", label: "Personalizado", from: custom.from, to: custom.to }, { key: "all", label: "Desde o início", from: "0000-01-01", to: last }]);
-    const rows = series.map((s) => ({ s, a: byName[s.name], cells: Object.fromEntries(cols.map((c) => [c.key, between(s, c.from, c.to, c.key === "all")])) }));
-    const best = Object.fromEntries(cols.map((c) => [c.key, Math.max(...rows.map((r) => r.cells[c.key].v ?? -Infinity))]));
+    const rows = series.map((s) => ({ s, a: s.bench ? null : byName[s.name], cells: Object.fromEntries(cols.map((c) => {
+      const end = s.bench && dayOf(s.x[s.x.length - 1]) < c.to ? dayOf(s.x[s.x.length - 1]) : c.to;  // a benched one: up to its exit
+      return [c.key, between(s, c.from, end, c.key === "all")];
+    })) }));
+    const best = Object.fromEntries(cols.map((c) => [c.key, Math.max(...rows.filter((r) => !r.s.bench).map((r) => r.cells[c.key].v ?? -Infinity))]));
+    const benchDay = (s) => { const d = dayOf(s.since || s.x[s.x.length - 1]); return d.slice(8, 10) + "/" + d.slice(5, 7); };
     rows.sort((x, y) => (y.cells[sortCol].v ?? -Infinity) - (x.cells[sortCol].v ?? -Infinity));
     const total = rows.length;
     if (!showAll) rows.splice(LIMIT);
@@ -1159,14 +1166,17 @@ function perfTable(boxId, data, people, pick) {
       '<label class="small">a <input type="date" class="pf-to" value="' + custom.to + '" min="' + first + '" max="' + last + '"></label>' +
       '<span class="muted small">Toca no título de uma coluna para ordenar. Dados até ' + esc(lastX.length > 10 ? lisbon(Date.parse(lastX), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : last) + '.</span></div>' +
       '<div class="scroll"><table class="perf"><tr><th>Agente</th>' + cols.map((c) => '<th class="num"><a href="#" class="pf-sort" data-k="' + c.key + '">' + esc(c.label) + (sortCol === c.key ? " ▼" : "") + '</a></th>').join("") + '</tr>' +
-      rows.map((r) => '<tr><td>' + (r.a && pick ? '<a href="#" class="pf-agent" data-n="' + esc(r.s.name) + '" title="Abrir a ficha do agente">' : "") +
-        esc((r.a ? r.a.emoji + " " : "") + r.s.name) + (r.a && pick ? "</a>" : "") + '</td>' + cols.map((c) => {
+      rows.map((r) => '<tr' + (r.s.bench ? ' class="benched" title="No banco desde ' + benchDay(r.s) + ': não bate o S&P 500 no pré-treino deste perfil. Continua a treinar e volta quando o bater. Valores até à saída."' : "") + '><td>' +
+        (r.a && pick ? '<a href="#" class="pf-agent" data-n="' + esc(r.s.name) + '" title="Abrir a ficha do agente">' : "") +
+        esc((r.s.bench ? "🪑 " + (r.s.emoji ? r.s.emoji + " " : "") : r.a ? r.a.emoji + " " : "") + r.s.name) + (r.a && pick ? "</a>" : "") +
+        (r.s.bench ? ' <span class="small">(banco desde ' + benchDay(r.s) + ')</span>' : "") + '</td>' + cols.map((c) => {
         const x = r.cells[c.key];
         if (x.v == null) return '<td class="num muted">—</td>';
-        return '<td class="num"><span class="' + cls(x.v) + '">' + (x.v === best[c.key] && rows.length > 1 ? "🏆 " : "") + fmtPct(x.v) + (x.late ? "*" : "") + '</span></td>';
+        return '<td class="num"><span class="' + cls(x.v) + '">' + (!r.s.bench && x.v === best[c.key] && rows.length > 1 ? "🏆 " : "") + fmtPct(x.v) + (x.late ? "*" : "") + '</span></td>';
       }).join("") + '</tr>').join("") + '</table></div>' +
       (total > LIMIT ? '<p><button class="chip pf-more">' + (showAll ? "Mostrar só os " + LIMIT + " primeiros" : "Mostrar todos (" + total + ")") + '</button></p>' : "") +
-      '<p class="muted small">Rentabilidade em cada período, com custos e impostos. Toca no nome de um agente para abrir a ficha. * o agente começou depois do início do período: conta desde o primeiro dia dele.</p>';
+      '<p class="muted small">Rentabilidade em cada período, com custos e impostos. Toca no nome de um agente para abrir a ficha. * o agente começou depois do início do período: conta desde o primeiro dia dele.' +
+        (series.some((s) => s.bench) ? ' 🪑 a cinzento: no banco (fora da liga por não bater o S&P 500 no pré-treino do seu perfil), com os valores até ao dia em que saiu.' : "") + '</p>';
     const more = box.querySelector(".pf-more");
     if (more) more.addEventListener("click", () => { showAll = !showAll; draw(); });
     box.querySelectorAll(".pf-sort").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); sortCol = a.dataset.k; draw(); }));

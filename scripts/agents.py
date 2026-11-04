@@ -2473,8 +2473,11 @@ def league(config: dict, state: dict, mkt: Market, title: str, moves=(), trainin
     top = interactive.leaders(series)
     files = {"agentes.png": lines_chart(series, "Rentabilidade desde o início (a cores: os 5 melhores e o Indexador)",
                                         refs, top)}
+    bench = [{"name": cfg["name"], "emoji": cfg["emoji"], "since": cfg["banco"].get("since"),
+              "points": [(h["date"], (h["equity"] / h["deposits"] - 1) * 100) for h in port["history"]]}
+             for cfg in config["agents"] if cfg.get("banco") and (port := state["agents"].get(cfg["id"])) and port.get("history")]
     link = interactive.publish(title, series, refs, top, subtitle="Rentabilidade desde o início, sobre o dinheiro depositado",
-                               agents=agent_details(config, state, mkt), kind="liga")
+                               agents=agent_details(config, state, mkt), kind="liga", bench=bench)
     leader = rows[0][2] / rows[0][1]["deposits"] - 1 if rows else 0
     card = embed(
         title,
