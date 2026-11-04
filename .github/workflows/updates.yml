@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 300
-      - name: Dados dos agentes (repositório privado: guarda o uso do Claude)
+      - name: "Dados dos agentes (repositório privado, guarda o uso do Claude)"
         uses: actions/checkout@v4
         with:
           repository: tigogggg/one-guillion-jollars-dados

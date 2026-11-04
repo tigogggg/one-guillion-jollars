@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Dados dos agentes (repositório privado: guarda o uso do Claude)
+      - name: "Dados dos agentes (repositório privado, guarda o uso do Claude)"
         uses: actions/checkout@v4
         with:
           repository: tigogggg/one-guillion-jollars-dados
