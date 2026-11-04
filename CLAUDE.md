@@ -54,8 +54,11 @@ It repeats runs until no strategy improves for 2 runs (max 12), merges, applies 
 `--perfil conservador|equilibrado|arrojado|todos` picks the investor profile (default equilibrado). Each profile has
 its own agents (`<id>-conservador`, `<id>-arrojado`) and report (`pretrain.json`, `pretrain-<perfil>.json`). Points are
 the profile's grade (`agents.profile_score`) minus the S&P 500's over the same days (10 points ≈ 1%/year), counted
-double below the index (`agents.relative_points`); a run's verdict (`overall`) weighs every year alike, the exam as the
-latest. Who is in the league (Tiago's rules, `scripts/jury.py`): on the 1st of each month the league is renewed to the
+double below the index (`agents.relative_points`). A run's verdict (`overall`, OBJECTIVE 4) is over every 5- and
+10-year stretch held continuously (`pretrain.window_points`): the agent pays each year's tax, the index only when sold
+at the end (its tax deferral counts, as in a real account); stock pickers' points scale with the index coverage of
+those years (survivorship, `coverage_on`); the old one-year verdict stays as `overall_anual`. The search itself still
+ranks candidates on one-year blocks. Who is in the league (Tiago's rules, `scripts/jury.py`): on the 1st of each month the league is renewed to the
 best 20 pre-trained agents, even with a poor grade (live winners against the Indexador first, never taken out while
 winning; then the Sunday jury's grade); the rest wait on the bench (config `banco`) and keep training. Every Sunday six
 jurors (return, risk, robustness, efficiency, diversification, regimes; Claude writes the opinion, no vote) grade them

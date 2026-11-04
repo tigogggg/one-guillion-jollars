@@ -350,3 +350,26 @@ def test_a_year_with_half_the_index_missing_counts_half_for_stock_pickers(monkey
     assert pretrain.coverage_scaled(-40.0, "quant", [m], 1.0) == -20.0
     assert pretrain.coverage_scaled(-40.0, "rotador", [m], 1.0) == -40.0  # ETFs only: no survivorship
     assert pretrain.coverage_scaled(-40.0, "quant", [m], 20.0) == -40.0  # whole periods are reported as they are
+
+
+def test_the_verdict_holds_five_and_ten_year_stretches(monkeypatch):
+    from datetime import date, timedelta
+
+    import pretrain
+
+    per = pretrain.SESSIONS_PER_YEAR
+    days = [date(2006, 1, 2) + timedelta(days=i * 365 / per) for i in range(12 * per)]
+    markets = [type("M", (), {"as_of": d})() for d in days]
+    seen = []
+
+    def fake(strategy, params, seg, detail=True):
+        seen.append(len(seg))
+        return {"points": 10.0}
+
+    monkeypatch.setattr(pretrain, "simulate", fake)
+    monkeypatch.setattr(pretrain, "COVERAGE_DAYS", {date(2006, 1, 2): 0.5, date(2009, 1, 2): 1.0})
+    w = pretrain.window_points("quant", {}, markets)
+    assert len(w["5a"]) == 8 and len(w["10a"]) == 3 and set(seen) == {5 * per, 10 * per}
+    assert w["5a"][-1] == 10.0 and w["5a"][0] < 10.0  # the oldest stretch had part of the index missing
+    assert pretrain.window_points("rotador", {}, markets)["5a"][0] == 10.0  # ETFs: no survivorship
+    assert abs(pretrain.window_verdict({"5a": [10.0] * 8, "10a": [-10.0] * 3})) < 1e-9

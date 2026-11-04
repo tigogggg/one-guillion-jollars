@@ -868,6 +868,40 @@ def overall(years: list[float], exam: float) -> float:
     return weighted(list(years) + [exam])
 
 
+VERDICT_WINDOWS = (5, 10)  # years: the verdict holds the agent this long, as a real account would
+
+
+def coverage_mean(markets: list[Market]) -> float:
+    """Mean coverage of the index's members over a stretch (coverage_on each month)."""
+    keys = [k for k in COVERAGE_DAYS if markets[0].as_of <= k <= markets[-1].as_of]
+    return statistics.fmean(COVERAGE_DAYS[k] for k in keys) if keys else coverage_on(markets[0].as_of)
+
+
+def window_points(strategy: str, params: dict, markets: list[Market]) -> dict[str, list[float]]:
+    """Points against the S&P 500 over every 5- and 10-year stretch ending at the end of each year (oldest first),
+    each from fresh capital and held continuously: the agent's taxes paid when due (each year's realised gains), the
+    index's only when it is sold at the end (index_score). A real account holds for years, so this is how the index's
+    tax deferral counts; one-year blocks tax the index every year and flatter active trading."""
+    out: dict[str, list[float]] = {}
+    for w in VERDICT_WINDOWS:
+        size = w * SESSIONS_PER_YEAR
+        pts = []
+        for end in range(len(markets), size - 1, -SESSIONS_PER_YEAR):
+            seg = markets[end - size:end]
+            p = simulate(strategy, params, seg, detail=False)["points"]
+            if strategy not in agents.NO_REGION:  # survivorship: the stretch counts as much as the index is covered
+                p *= coverage_mean(seg)
+            pts.append(round(p, 1))
+        out[f"{w}a"] = pts[::-1]
+    return out
+
+
+def window_verdict(windows: dict[str, list[float]]) -> float:
+    """The verdict: the recency-weighted mean of each window length's points, then the mean of the lengths."""
+    means = [weighted(v) for v in windows.values() if v]
+    return statistics.fmean(means) if means else 0.0
+
+
 def weighted(years: list[float]) -> float:
     """Recency-weighted mean of the yearly points: the latest year weighs 1, the one before 0.85, ..."""
     w = [RECENCY ** (len(years) - 1 - i) for i in range(len(years))]
@@ -1226,7 +1260,17 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
     kept_previous = None
     change_gate = None
     # (a fold of the walk-forward check measures the search itself: no gates there)
-    new_obj = overall(run_years(chosen)[0], chosen_valid["points"]) if strategy != "indexador" and not fold else None
+    _verdicts: dict[str, tuple[float, dict]] = {}
+
+    def verdict(p: dict) -> float:
+        """The verdict against the S&P 500 (window_points), once per parameter set."""
+        key = json.dumps(p, sort_keys=True, default=str)
+        if key not in _verdicts:
+            w = window_points(strategy, p, markets)
+            _verdicts[key] = (window_verdict(w), w)
+        return _verdicts[key][0]
+
+    new_obj = verdict(chosen) if strategy != "indexador" and not fold else None
     live = None  # what the agent trades with before this run: (parameters, exam result, overall)
 
     def keep(previous: dict, prev_exam: dict, prev_obj: float) -> None:
@@ -1246,9 +1290,9 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
         if history:  # what it traded with, for the report (previous_overall)
             previous = {**pool[0], **history[0]["chosen"]}
             prev_exam = default_valid if previous == original else simulate(strategy, previous, valid)
-            live = (previous, prev_exam, overall(run_years(previous)[0], prev_exam["points"]))
+            live = (previous, prev_exam, verdict(previous))
         if chosen != original:
-            keep(original, default_valid, overall(base, default_valid["points"]))
+            keep(original, default_valid, verdict(original))
             kept_previous["walk_forward"] = True
             kept_previous["original"] = True
     elif new_obj is not None:
@@ -1263,7 +1307,7 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
                            "years": len(diffs), "mean_gain": round(statistics.fmean(diffs), 1) if diffs else 0.0,
                            "walk_forward": not keep_live}
             prev_exam = default_valid if previous == pool[0] else simulate(strategy, previous, valid)  # reported only
-            live = (previous, prev_exam, overall(live_years, prev_exam["points"]))
+            live = (previous, prev_exam, verdict(previous))
             if dsr < DSR_MIN:
                 keep(*live)
                 kept_previous["gate"] = change_gate
@@ -1272,6 +1316,7 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
 
     final_years = run_years(chosen)[0] if strategy != "indexador" else base
     final_obj = new_obj if new_obj is not None else overall(final_years, chosen_valid["points"])
+    windows = _verdicts.get(json.dumps(chosen, sort_keys=True, default=str), (None, None))[1]
     importance = parameter_importance(strategy, chosen, train_mk, valid, chosen_valid["points"])
     claude_log = []
     for j, c in enumerate(claude):
@@ -1298,10 +1343,12 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
         "crises": crashes.get("kept_previous") or crashes.get(best_i if adopt else 0, crashes[0]),
         "monte_carlo": mc, "by_zone": full["by_zone"], "zones": zones_tried, "importance": importance, "greedy": greedy_log,
         "claude": claude_log,
-        # the verdict against the S&P 500 (agents.relative_points, every year, the exam the latest): above 0 beats it
+        # the verdict against the S&P 500: 5- and 10-year stretches held after tax (window_points); above 0 beats it
         "overall": round(final_obj, 1),
+        "janelas": windows,
+        "overall_anual": round(overall(final_years, chosen_valid["points"]), 1),  # the old one-year blocks (diagnostic)
         # the same verdict for what the agent traded before this run (its last choice, or the original parameters)
-        "previous_overall": (round(live[2], 1) if live else round(overall(base, default_valid["points"]), 1))
+        "previous_overall": (round(live[2], 1) if live else round(verdict(pool[0]), 1))
                             if strategy != "indexador" else None,
         "corretoras": broker_comparison(strategy, chosen) if strategy != "indexador" and not fold else None,
         "years_beating_index": sum(y > 0 for y in final_years) + (chosen_valid["points"] > 0),
@@ -1479,7 +1526,8 @@ def apply(results: dict, today: date, changed_strategies: set | None = None) -> 
     return changed
 
 
-OBJECTIVE = 3  # 1: league points; 2: profile grade minus the index's; 3: below the index counts double, all years
+OBJECTIVE = 4  # 1: league points; 2: profile grade minus the index's; 3: below the index counts double, all years;
+# 4: as 3 over 5- and 10-year stretches held after tax (the index's tax deferred), stock pickers scaled by coverage
 BENCH_AFTER = 10  # pre-trainings (of a profile, with this objective) a strategy gets to beat the S&P 500
 
 
@@ -1590,8 +1638,9 @@ def report(results: dict, applied: list[str] | None) -> tuple[list[dict], dict]:
                "(10 pontos ≈ 1% ao ano acima do índice; abaixo do índice contam a dobrar). Composição "
                "histórica do S&P 500, ordens à abertura seguinte, custos, câmbio e 28% de imposto, sem ver o futuro.\n"
                "*O período inclui os anos em que os parâmetros foram escolhidos, por isso é otimista; "
-               "o veredicto é \"vs S&P 500\": todos os anos de treino e o exame (o ano mais recente, fora do treino), os "
-               "recentes a pesar mais. Acima de 0 bate o índice; quem não o bate ao fim de 10 pré-treinos sai da liga.")]
+               "o veredicto é \"vs S&P 500\" como numa conta real: cada período de 5 e de 10 anos (um a acabar em cada ano, "
+               "o último inclui o exame), sem vender pelo meio; o agente paga o imposto de cada ano, o índice só quando "
+               "vende no fim. Os recentes pesam mais. Acima de 0 bate o índice.")]
     brokers = broker_lines(results, by_strategy)
     if brokers:
         fields.append((f"💶 Com cada corretora (treino com {agents.broker_name()}; conta de {agents.real_capital():.0f} €)",
@@ -1762,7 +1811,8 @@ def improvement_card(results: dict, better: list[dict], link: str | None) -> tup
         lines.append(f"{cfg['emoji']} **{cfg['name']}**: {b['before']:+.0f} → **{b['after']:+.0f}** ({verdict})\n{extra}")
     if more > 0:
         lines.append(f"…e mais {more} (no portal).")
-    lines.append("_Pontos face ao S&P 500 em todos os anos (0 = igual ao índice, 10 ≈ 1%/ano), com custos e impostos. "
+    lines.append("_Pontos face ao S&P 500 em períodos de 5 e 10 anos sem vender (0 = igual ao índice, 10 ≈ 1%/ano), com "
+                 "custos e impostos (o índice só paga quando vende). "
                  "Os % do texto são depois de impostos; no gráfico o índice ainda não pagou o imposto da venda final._")
     series = {by_strategy.get(b["strategy"], {"name": b["strategy"]})["name"]: b["curve"] for b in better if b["curve"]}
     refs = {"S&P 500": index["curve"]} if index.get("curve") else None  # the yardstick, dashed
