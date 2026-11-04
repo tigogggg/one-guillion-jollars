@@ -1,0 +1,64 @@
+name: Laboratório da agenda política
+
+# What each piece of the political agenda adds: a fixed set of Estratega variants and the agenda filter on a few
+# agents, on the pre-training's 20 years, graded like the pre-training (scripts/agenda_lab.py). A diagnosis: nothing
+# is adopted. This repo is public: the results go to the private repo (agents/lab/), the log only shows progress.
+on:
+  workflow_dispatch:
+    inputs:
+      perfil:
+        description: "Perfil do investidor"
+        type: choice
+        options: [equilibrado, conservador, arrojado]
+        default: equilibrado
+
+permissions:
+  contents: read
+
+jobs:
+  lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PRETRAIN_PERFIL: ${{ inputs.perfil }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Dia (Lisboa)
+        id: dia
+        run: echo "day=$(TZ=Europe/Lisbon date +%F)" >> "$GITHUB_OUTPUT"
+      - name: Preços e contexto do pré-treino de hoje
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            precos/
+            ctx/
+          key: pretrain-data-${{ steps.dia.outputs.day }}-20-${{ hashFiles('data/universe/europe.csv', 'data/context/*.csv', 'scripts/context.py', 'scripts/policy.py') }}
+      - name: Contexto (se a cache não existir)
+        if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+        run: uv run python scripts/context.py --guardar ctx/context.csv
+      - name: Variantes
+        env:
+          PRICE_CACHE_DIR: precos
+        run: uv run python scripts/agenda_lab.py --contexto ctx/context.csv
+      - name: Guardar os resultados (repositório privado)
+        if: ${{ !cancelled() }}
+        working-directory: agents
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A lab 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -m "Laboratório da agenda $(date -u +%F)"
+          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 10; done
+          exit 1
