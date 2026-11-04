@@ -54,6 +54,7 @@ STRATEGY_CHOICES = [
     ("maestro", "copia os agentes com melhores resultados"),
     ("kamikaze", "tudo nas maiores subidas a 3 meses"),
     ("estratega", "S&P 500 e os setores da agenda política"),
+    ("visionario", "a visão do Claude a 18 meses: para onde vai o mercado"),
     ("tematico", "as ações dos temas mais quentes do mercado"),
     ("navegador", "ETFs pelo regime macro do mercado"),
     ("super", "fusão: o top 5 do júri de domingo junto"),

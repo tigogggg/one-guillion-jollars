@@ -227,7 +227,7 @@ def in_region(mkt: "Market", region: int, held=()) -> "Market":
 # trades at once in the markets that are open, while its plan for the next opens waits as pending orders. Daily: the
 # twin of each reactive agent, deciding once a day before the opens (07:30), as in the 20-year pre-training.
 REACTIVE, DAILY = "reativo", "diario"
-LIVE_ONLY = {"joalheiro", "jornalista", "catalisador", "cetico", "conselho", "maestro", "super"}
+LIVE_ONLY = {"joalheiro", "jornalista", "catalisador", "cetico", "conselho", "maestro", "super", "visionario"}
 META = {"conselho", "maestro", "super"}  # decide after the others, from their portfolios
 INTRADAY_ONLY = {"relampago"}  # trade within the day: the daily backtest skips them, the intraday lab replays them
 TRADES_KEPT = 200
@@ -1860,6 +1860,57 @@ def s_maestro(cfg, port, mkt, p):
     return orders
 
 
+VISION_MAX_DAYS = 15  # an older view (scripts/vision.py did not run) leaves the Visionário in its core only
+_VISION: dict = {}
+
+
+def vision() -> dict:
+    """The latest 18-month view (scripts/vision.py), read once per process."""
+    if "v" not in _VISION:
+        try:
+            _VISION["v"] = json.loads((REPO_AGENTS / "visao.json").read_text())
+        except (OSError, ValueError):
+            _VISION["v"] = {}
+    return _VISION["v"]
+
+
+def s_visionario(cfg, port, mkt, p):
+    """Where the market is going (Claude's 18-month scenarios, scripts/vision.py): a core in the S&P 500 and the rest in
+    the strongest stocks of the industries and sectors the view favours, each in proportion to its tilt."""
+    import context
+
+    if not due(port, mkt, p["cada"]):
+        return []
+    v = vision()
+    fresh = v.get("at") and (mkt.as_of - date.fromisoformat(v["at"][:10])).days <= VISION_MAX_DAYS
+    tilt: dict[str, float] = {}
+    if fresh:
+        for s, m in mkt.stocks.items():
+            if not is_us(s):
+                continue
+            t = (v.get("industrias") or {}).get(context.industry_key(m.get("industry")) or "", 0)
+            t = t or (v.get("setores") or {}).get(m.get("sector") or "", 0)
+            if t >= 1 and m.get("stage2"):
+                tilt[s] = t
+    ranked = sorted(tilt, key=lambda s: (tilt[s], mkt.stocks[s]["trend_score"]), reverse=True)[: p["n"]]
+    total = sum(tilt[s] for s in ranked)
+    eq = equity(port, mkt)
+    core = BENCHMARK
+    orders = [order_sell(s, "fora da visão a 18 meses") for s in port["positions"] if s not in ranked and s != core]
+    for s in ranked:
+        if s not in port["positions"]:
+            orders.append(order_buy(s, eq * (1 - p["nucleo"]) * tilt[s] / total, f"visão a 18 meses: inclinação {tilt[s]:+.0f}",
+                                    stop=round(last_close(mkt, s) * (1 - p["stop_pct"]), 4) if p.get("stop_pct") and last_close(mkt, s) else None))
+    pos = port["positions"].get(core)
+    current = position_value(mkt, core, pos) / eq if pos else 0.0
+    target = p["nucleo"] + (1 - p["nucleo"]) * (0.0 if ranked else 1.0)
+    if current < target - p["folga"]:
+        orders.append(order_buy(core, (target - current) * eq, "núcleo S&P 500"))
+    elif pos and current > target + p["folga"]:
+        orders.append(order_sell(core, "núcleo S&P 500", fraction=(current - target) / current))
+    return orders
+
+
 def s_tematico(cfg, port, mkt, p):
     """The hottest themes (after tradermonty's theme-detector): industries ranked by their momentum against the S&P 500
     over 1, 3, 6 and 12 months (context.INDUSTRY_ETFS), the best stocks of the top `temas`, a core in the S&P 500; an
@@ -2013,6 +2064,8 @@ STRATEGIES = {
     "cetico": (s_cetico, "Más notícias que o mercado ignorou", {"n": 4, "limiar": 3, "stop_pct": 0.06, "alvo_pct": 0.08, "max_dias": 10}),
     "conselho": (s_conselho, "Compra o que vários agentes apoiam", {"n": 6, "min_votos": 2, "stop_pct": 0.10}),
     "maestro": (s_maestro, "Copia os agentes que melhor se portam no regime de mercado atual", {"n": 8, "lideres": 3, "janela": 20, "cada": 5}),
+    "visionario": (s_visionario, "Para onde vai o mercado: os cenários a 18 meses do Claude (notícias, política, guerras, investimento)",
+                   {"n": 8, "cada": 5, "nucleo": 0.4, "folga": 0.05, "stop_pct": 0.15}),
     "tematico": (s_tematico, "Os temas mais quentes: as melhores ações das indústrias com mais força face ao S&P 500",
                  {"temas": 3, "por_tema": 3, "cada": 21, "nucleo": 0.3, "folga": 0.05, "esgotado_max": 0.35}),
     "navegador": (s_navegador, "ETFs pelo regime macro: concentração, alargamento, contração, inflação ou transição",

@@ -88,6 +88,7 @@ EXAM_SESSIONS = SESSIONS_PER_YEAR  # the last year is the exam; the years before
 VARIANTS = 40
 WARMUP = 220
 SKIP = {
+    "visionario": "segue a visão a 18 meses do Claude (notícias e pesquisa na web): sem arquivo histórico, avalia-se ao vivo",
     "super": "junta o top 5 do júri de domingo: avalia-se ao vivo e no backtest do júri (scripts/jury.py)",
     "joalheiro": "precisa dos fundamentais do passado, que o Yahoo não tem",
     "jornalista": "não há histórico gratuito de notícias; só se avalia ao vivo",

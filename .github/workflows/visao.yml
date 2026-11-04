@@ -1,0 +1,54 @@
+name: Visão a 18 meses (Visionário)
+
+# Claude reads the last two weeks of news (web search) and our numbers, builds three 18-month scenarios and the tilts
+# per sector and industry the Visionário follows (scripts/vision.py). Twice a week, before the European open, or by hand.
+# This repo is public: the view goes to the private repo and Discord, never to this log.
+on:
+  schedule:
+    - cron: "41 5 * * 1,4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: visao
+  cancel-in-progress: false
+
+jobs:
+  visao:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Contexto de mercado
+        run: uv run python scripts/context.py --periodo 2y --guardar ctx/context.csv
+      - name: Visão
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: uv run python scripts/vision.py --contexto ctx/context.csv
+      - name: Guardar (repositório privado)
+        if: ${{ !cancelled() }}
+        working-directory: agents
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add visao.json lab/visao_historico.json 2>/dev/null || exit 0
+          git diff --cached --quiet && exit 0
+          git commit -m "Visão a 18 meses $(date -u +%F)"
+          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 10; done
+          exit 1

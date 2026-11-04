@@ -199,6 +199,12 @@ DOCS = {
         "Vende o que sai das carteiras dos líderes; fica em dinheiro se nenhum agente bater o S&P 500 nesta zona.",
         "Os pesos das posições dos líderes, até {n} ações.",
     ),
+    "visionario": (
+        "Para onde vai o mercado: todas as semanas o Claude lê as notícias (geopolítica, guerras, eleições, orçamentos e investimento público, tarifas, juros, tecnologia) e os nossos números, constrói três cenários a 18 meses e diz que setores e indústrias favorecer ou evitar (ideia do scenario-analyzer das trading skills de tradermonty).",
+        "A cada {cada} sessões compra as {n} ações dos EUA em tendência de alta das indústrias e setores que a visão favorece (inclinação +1 ou +2), as mais favorecidas primeiro.",
+        "Vende o que sai da visão; sem visão recente (mais de 15 dias), fica no S&P 500.",
+        "{nucleo} no S&P 500 (núcleo, folga de {folga}); o resto pelas ações, em proporção à inclinação.",
+    ),
     "tematico": (
         "Segue os temas do mercado (ideia do theme-detector das trading skills de tradermonty): semicondutores, software, defesa, biotecnologia, bancos, energia... ordenados pela força face ao S&P 500 a 1, 3, 6 e 12 meses.",
         "A cada {cada} sessões escolhe os {temas} temas mais fortes (acima do S&P 500 e sem estarem esgotados: mais de {esgotado_max} acima da média de 200 dias) e compra as {por_tema} ações mais fortes de cada.",
