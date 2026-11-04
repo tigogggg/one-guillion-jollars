@@ -46,8 +46,13 @@ It repeats runs until no strategy improves for 2 runs (max 12), merges, applies 
 its own agents (`<id>-conservador`, `<id>-arrojado`) and report (`pretrain.json`, `pretrain-<perfil>.json`). Points are
 the profile's grade (`agents.profile_score`) minus the S&P 500's over the same days (10 points ≈ 1%/year), counted
 double below the index (`agents.relative_points`); a run's verdict (`overall`) weighs every year alike, the exam as the
-latest. A strategy still at or below 0 after 10 runs of a profile (`pretrain.OBJECTIVE`) leaves the league for that
-profile (`pretrain.bench`, config `banco`) and comes back when above 0. A series (`repetir`, default 10) runs inside
+latest. Who is in the league (Tiago's rules, `scripts/jury.py`): on the 1st of each month the league is renewed to the
+best 20 pre-trained agents, even with a poor grade (live winners against the Indexador first, never taken out while
+winning; then the Sunday jury's grade); the rest wait on the bench (config `banco`) and keep training. Every Sunday six
+jurors (return, risk, robustness, efficiency, diversification, regimes; Claude writes the opinion, no vote) grade them
+and the top 5, weighted by grade and place, form the Super Agente (strategy `super`), whose 20 years are replayed.
+A year on the bench without coming back switches an agent off for good (`desligado`, no more training for that
+profile). The old rule (out after 10 runs below the index, `pretrain.bench`) is off (`BENCH_BY_PRETRAIN`). A series (`repetir`, default 10) runs inside
 each strategy's machine (`pretrain.series`, data loaded once) until its choice stays the same 2 runs in a row; then
 the next profile starts. Every report also says whether the many agents add anything
 (`scripts/ensemble.py`: all together, last year's leaders, correlation).

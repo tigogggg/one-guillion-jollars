@@ -227,14 +227,15 @@ def in_region(mkt: "Market", region: int, held=()) -> "Market":
 # trades at once in the markets that are open, while its plan for the next opens waits as pending orders. Daily: the
 # twin of each reactive agent, deciding once a day before the opens (07:30), as in the 20-year pre-training.
 REACTIVE, DAILY = "reativo", "diario"
-LIVE_ONLY = {"joalheiro", "jornalista", "catalisador", "cetico", "conselho", "maestro"}
-META = {"conselho", "maestro"}  # decide after the others, from their portfolios
+LIVE_ONLY = {"joalheiro", "jornalista", "catalisador", "cetico", "conselho", "maestro", "super"}
+META = {"conselho", "maestro", "super"}  # decide after the others, from their portfolios
 INTRADAY_ONLY = {"relampago"}  # trade within the day: the daily backtest skips them, the intraday lab replays them
 TRADES_KEPT = 200
 POINTS_LOG_KEPT = 60
 
 # Numeric parameters the monthly training may change, with their bounds.
 PARAM_BOUNDS = {
+    "banda": (0.01, 0.05, float),
     "n": (1, 10, int),
     "cada": (3, 30, int),
     "stop_pct": (0.04, 0.30, float),
@@ -929,6 +930,41 @@ def metrics(mkt: Market, symbol: str) -> dict | None:
 # --------------------------------------------------------------------------
 # Portfolio
 # --------------------------------------------------------------------------
+
+
+# An agent beating the Indexador live stays in the league whatever its backtest (Tiago: never take out an agent that is
+# winning against the S&P 500). Short records are noise, but the live league is what is being judged.
+LIVE_PROTECT_SESSIONS = 2
+
+
+def live_vs_index(cfg: dict, state: dict) -> tuple[float, float, int] | None:
+    """(agent's return, the Indexador's over the same days, sessions) from the live records, or None."""
+    port = state["agents"].get(cfg["id"]) or {}
+    idx = state["agents"].get("indexador") or {}
+    hist, ih = port.get("history") or [], {h["date"]: h for h in idx.get("history") or []}
+    if len(hist) < 2 or not ih:
+        return None
+    first = next((h for h in hist if h["date"] in ih), None)
+    if not first:
+        return None
+    last = hist[-1]
+    i0, i1 = ih[first["date"]], ih.get(last["date"]) or idx["history"][-1]
+    agent = (last["equity"] - (last["deposits"] - first["deposits"])) / first["equity"] - 1 if first["equity"] else 0.0
+    index = (i1["equity"] - (i1["deposits"] - i0["deposits"])) / i0["equity"] - 1 if i0["equity"] else 0.0
+    return agent, index, len(hist)
+
+
+def beats_index_live(cfg: dict, state: dict) -> bool:
+    lv = live_vs_index(cfg, state)
+    return bool(lv) and lv[2] >= LIVE_PROTECT_SESSIONS and lv[0] > lv[1]
+
+
+def retired(profile: str) -> set[str]:
+    """Strategies switched off for this profile: their agent of the profile spent a year on the bench (scripts/jury.py)."""
+    config = load_config()
+    gone = {c["strategy"] for c in config["agents"] if c.get("desligado") and profile_of(c) == profile and mode_of(c) == REACTIVE}
+    back = {c["strategy"] for c in config["agents"] if c.get("active", True) and profile_of(c) == profile}
+    return gone - back
 
 
 def new_portfolio(capital: float, start: date) -> dict:
@@ -1814,6 +1850,36 @@ def s_maestro(cfg, port, mkt, p):
     return orders
 
 
+def s_super(cfg, port, mkt, p):
+    """The Sunday jury's top 5 together (scripts/jury.py): the members' portfolios blended with the jury's weights
+    (cfg["membros"]: {agent id: weight}), every `cada` sessions; a holding more than `banda` off its target moves."""
+    if not due(port, mkt, p["cada"]):
+        return []
+    members = {a: w for a, w in (cfg.get("membros") or {}).items() if a in mkt.league and w > 0}
+    total = sum(members.values())
+    if not total:
+        return []
+    weights: dict[str, float] = {}
+    for agent_id, w in members.items():
+        other = mkt.league[agent_id][1]
+        other_eq = equity(other, mkt)
+        if other_eq <= 0:
+            continue
+        for s, pos in other["positions"].items():
+            weights[s] = weights.get(s, 0.0) + w / total * position_value(mkt, s, pos) / other_eq
+    eq = equity(port, mkt)
+    names = ", ".join(mkt.league[a][0]["name"] for a in sorted(members, key=members.get, reverse=True))
+    orders = [order_sell(s, "saiu das carteiras do top 5") for s in port["positions"] if s not in weights]
+    for s in sorted(weights, key=weights.get, reverse=True):
+        pos = port["positions"].get(s)
+        current = position_value(mkt, s, pos) / eq if pos else 0.0
+        if weights[s] - current > p["banda"]:
+            orders.append(order_buy(s, (weights[s] - current) * eq, f"top 5 do júri: {names}"))
+        elif pos and current - weights[s] > p["banda"]:
+            orders.append(order_sell(s, "acerto ao top 5 do júri", fraction=(current - weights[s]) / current))
+    return orders
+
+
 STRATEGIES = {
     "indexador": (s_indexador, "Compra e mantém o S&P 500 (referência)", {}),
     "guardiao": (s_guardiao, "ETF mundial com peso pela zona do mercado", {"max_exposicao": 1.0, "folga": 0.1}),
@@ -1845,6 +1911,7 @@ STRATEGIES = {
     "cetico": (s_cetico, "Más notícias que o mercado ignorou", {"n": 4, "limiar": 3, "stop_pct": 0.06, "alvo_pct": 0.08, "max_dias": 10}),
     "conselho": (s_conselho, "Compra o que vários agentes apoiam", {"n": 6, "min_votos": 2, "stop_pct": 0.10}),
     "maestro": (s_maestro, "Copia os agentes que melhor se portam no regime de mercado atual", {"n": 8, "lideres": 3, "janela": 20, "cada": 5}),
+    "super": (s_super, "O top 5 do júri de domingo junto, com os pesos do júri", {"cada": 5, "banda": 0.02}),
     "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5, "ignora_resultados": True, "ignora_risco": True}),
     "relampago": (s_relampago, "Rompimento do intervalo de abertura, dentro do dia (ORB)", {"n": 4, "alvo_r": 1.5, "rompimento_max": 0.01}),
 }

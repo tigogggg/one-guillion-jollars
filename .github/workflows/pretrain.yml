@@ -388,6 +388,7 @@ jobs:
               # population of teams evolves a few more generations (scripts/teams.py)
               gh workflow run intraday-lab.yml --ref "$GITHUB_REF_NAME" -f modo=reatividade && echo "Pedi o treino da reatividade."
               gh workflow run equipas.yml --ref "$GITHUB_REF_NAME" && echo "Pedi a evolução das equipas."
+              gh workflow run juri.yml --ref "$GITHUB_REF_NAME" && echo "Pedi o júri (decide aos domingos)."
               return 0
             fi
             next="${SEGUINTES%%,*}"; rest="${SEGUINTES#"$next"}"; rest="${rest#,}"

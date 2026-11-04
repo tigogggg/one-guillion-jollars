@@ -458,7 +458,7 @@ def run_team(p: dict, members: list[str], desks: dict, weights: dict, markets: l
         peak = max(peak, now)
         # the picks (manager and desks) every `cada` sessions; the risk manager every day (as LEAN's ManageRisk)
         if (i - lo) % p["cada"] == 0 or picks is None:
-            a = manager(p["gestor"], equities, i)
+            a = np.asarray(p["pesos"], dtype=float) if p["gestor"] == "fixo" else manager(p["gestor"], equities, i)
             if p["corte_mesa"]:
                 a = pod_cut(a, equities, peaks, desk_vol, i)
             picks = target_weights(p, members, weights, a, i, vol, sectors)

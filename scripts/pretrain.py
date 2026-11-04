@@ -88,6 +88,7 @@ EXAM_SESSIONS = SESSIONS_PER_YEAR  # the last year is the exam; the years before
 VARIANTS = 40
 WARMUP = 220
 SKIP = {
+    "super": "junta o top 5 do júri de domingo: avalia-se ao vivo e no backtest do júri (scripts/jury.py)",
     "joalheiro": "precisa dos fundamentais do passado, que o Yahoo não tem",
     "jornalista": "não há histórico gratuito de notícias; só se avalia ao vivo",
     "catalisador": "não há histórico gratuito de notícias; só se avalia ao vivo",
@@ -1364,10 +1365,13 @@ def pretrain(markets: list[Market], only: set[str] | None = None, processes: int
     results = {"train": [markets[0].as_of.isoformat(), markets[split - 1].as_of.isoformat()],
                "valid": [markets[split].as_of.isoformat(), markets[-1].as_of.isoformat()], "strategies": {}}
     todo = [s for s in STRATEGIES if not only or s in only]
+    gone = agents.retired(PROFILE)  # a year on the bench without coming back: no longer trained for this profile
     for s in todo:
         if s in SKIP:
             results["strategies"][s] = {"skipped": SKIP[s]}
-    trainable = [s for s in todo if s not in SKIP]
+        elif s in gone:
+            results["strategies"][s] = {"skipped": "desligado: um ano no banco sem voltar à liga"}
+    trainable = [s for s in todo if s not in SKIP and s not in gone]
     long_run = len(markets) > LONG_YEARS * SESSIONS_PER_YEAR  # forked copies of years of snapshots would not fit
     processes = processes or (1 if long_run else min(len(trainable), os.cpu_count() or 1))
     _INNER_POOL = processes == 1  # one strategy at a time: its candidates can use the cores instead
@@ -1400,10 +1404,11 @@ def strip(r: dict) -> dict:
 
 
 def apply(results: dict, today: date) -> list[str]:
-    """Give every agent of a trained strategy the parameters the exam chose, and let it decide again."""
+    """Give every agent of a trained strategy the parameters the exam chose, and let it decide again: those in the
+    league and those on the bench alike (the pre-training tunes the agents; who plays is the monthly renewal's)."""
     config, state = agents.load_config(), agents.load_state()
     changed = []
-    for cfg in agents.active_agents(config):
+    for cfg in [c for c in config["agents"] if not c.get("desligado")]:
         r = results["strategies"].get(cfg["strategy"], {})
         if "chosen" not in r or agents.profile_of(cfg) != PROFILE:  # not trained here, or another profile's agent
             continue
@@ -1451,9 +1456,10 @@ def same_scale(report: dict) -> bool:
 
 
 def bench(results: dict, today: date) -> list[str]:
-    """The league keeps only what beats the index. A strategy whose verdict for this profile ("overall", every year
-    against the S&P 500) is still at or below 0 after BENCH_AFTER pre-trainings leaves the league (its agents of this
-    profile are set aside, "banco"); it keeps training on Sundays and comes back, with fresh capital, once above 0."""
+    """Who is in the league is decided by the monthly renewal (scripts/jury.py --renovar, the 1st of each month: the
+    best 20, live winners first): the pre-training no longer takes agents out or brings them back."""
+    if not BENCH_BY_PRETRAIN:
+        return []
     import evolution
 
     runs: dict[str, int] = {}
@@ -1468,7 +1474,9 @@ def bench(results: dict, today: date) -> list[str]:
         if "overall" not in r or agents.profile_of(cfg) != PROFILE or cfg["strategy"] == "indexador":
             continue
         n = runs.get(cfg["strategy"], 0)
-        if cfg.get("active", True) and n >= BENCH_AFTER and r["overall"] <= 0:
+        if cfg.get("desligado") or (cfg.get("banco") or {}).get("motivo") == "juri":  # the jury decides those
+            continue
+        if cfg.get("active", True) and n >= BENCH_AFTER and r["overall"] <= 0 and not agents.beats_index_live(cfg, state):
             cfg["active"] = False
             cfg["banco"] = {"since": today.isoformat(), "overall": r["overall"], "runs": n}
             notes.append(f"🪑 {cfg['emoji']} {cfg['name']} sai da liga: não bate o S&P 500 ao fim de {n} pré-treinos")
@@ -1484,6 +1492,9 @@ def bench(results: dict, today: date) -> list[str]:
             notes.append(f"🔙 {cfg['emoji']} {cfg['name']} volta à liga com capital novo: já bate o S&P 500")
     agents.save(config, state)
     return notes
+
+
+BENCH_BY_PRETRAIN = False  # the old rule (out after BENCH_AFTER runs below the index), replaced by the monthly renewal
 
 
 def benched(profile: str) -> set[str]:

@@ -69,7 +69,7 @@ PARAMS = {
 }
 
 PCT_PARAMS = {"stop_pct", "risco_pct", "max_pos", "aperto_pct", "queda_pct", "alvo_pct", "max_exposicao", "folga", "salto_pct", "max_ext", "gap_max",
-              "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max", "queda_min", "limiar_mom", "nucleo"}
+              "epu_max", "usd_max", "credito_max", "gpr_max", "petroleo_max", "ouro_max", "queda_min", "limiar_mom", "nucleo", "banda"}
 
 # strategy: (idea, buys when, sells when, position size)
 DOCS = {
@@ -198,6 +198,12 @@ DOCS = {
         "A cada {cada} sessões copia a carteira combinada dos {lideres} agentes que mais batem o S&P 500 na zona atual do mercado (alta, neutra, cautelosa ou queda): pelo registo ao vivo nessa zona (15+ dias) ou, até lá, pelo pré-treino.",
         "Vende o que sai das carteiras dos líderes; fica em dinheiro se nenhum agente bater o S&P 500 nesta zona.",
         "Os pesos das posições dos líderes, até {n} ações.",
+    ),
+    "super": (
+        "O júri de domingo avalia a liga com seis jurados (rendimento, risco, robustez, eficiência, diversificação e regimes) e junta os 5 melhores num só agente.",
+        "A cada {cada} sessões copia a carteira combinada do top 5, com os pesos do júri (nota e lugar no ranking).",
+        "Vende o que sai das carteiras do top 5; acerta uma posição que se afaste mais de {banda} do peso alvo.",
+        "Os pesos das posições do top 5, cada membro com o peso que o júri lhe deu.",
     ),
     "estratega": (
         "Segue o dinheiro: o S&P 500 como base e o resto nos setores para onde vai o dinheiro público, com menos risco político, mais fortes e sem excesso de investimento.",

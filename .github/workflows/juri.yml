@@ -1,0 +1,92 @@
+name: Júri de domingo
+
+# Six specialist jurors grade the pre-trained agents; the top 5 form the Super Agente, the last leaves the league, a year
+# on the bench switches a strategy off (scripts/jury.py). Dispatched after the last profile's pre-training (Sundays) or
+# by hand. Decisions at most once a week. This repo is public: results go to the private repo and Discord, never here.
+on:
+  schedule:
+    - cron: "37 6 1 * *"  # the 1st of each month, before the daily round: the league's renewal
+  workflow_dispatch:
+    inputs:
+      renovar:
+        description: "Renovar a liga (os 20 melhores; normalmente no dia 1 de cada mês)"
+        type: boolean
+        default: false
+      forcar:
+        description: "Decidir mesmo que o júri já tenha decidido esta semana"
+        type: boolean
+        default: false
+      backtest:
+        description: "Repetir os 20 anos do Super Agente"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: juri
+  cancel-in-progress: false
+
+jobs:
+  juri:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Claude Code (o presidente do júri)
+        continue-on-error: true
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Dia (Lisboa)
+        id: dia
+        run: echo "day=$(TZ=Europe/Lisbon date +%F)" >> "$GITHUB_OUTPUT"
+      - name: Preços e contexto do pré-treino de hoje
+        id: cache
+        if: ${{ inputs.backtest || github.event_name == 'schedule' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            precos/
+            ctx/
+          key: pretrain-data-${{ steps.dia.outputs.day }}-20-${{ hashFiles('data/universe/europe.csv', 'data/context/*.csv', 'scripts/context.py', 'scripts/policy.py') }}
+      - name: Contexto (se a cache não existir)
+        if: ${{ (inputs.backtest || github.event_name == 'schedule') && steps.cache.outputs.cache-hit != 'true' }}
+        run: uv run python scripts/context.py --guardar ctx/context.csv
+      - name: Júri
+        env:
+          PRICE_CACHE_DIR: precos
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: |
+          args=""
+          [ "${{ inputs.forcar }}" = "true" ] && args="$args --forcar"
+          # the renewal also sets the Super Agente from the new league
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.renovar }}" = "true" ]; then args="$args --renovar --forcar"; fi
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.backtest }}" = "true" ]; then
+            args="$args --contexto ctx/context.csv"
+          else
+            args="$args --sem-backtest"
+          fi
+          uv run python scripts/jury.py $args
+      - name: Guardar (repositório privado)
+        if: ${{ !cancelled() }}
+        working-directory: agents
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A config.json state.json lab 2>/dev/null
+          git diff --cached --quiet && exit 0
+          git commit -m "Júri de domingo $(date -u +%F)"
+          for i in 1 2 3 4 5; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 10; done
+          exit 1
