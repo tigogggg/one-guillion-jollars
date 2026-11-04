@@ -288,3 +288,30 @@ def test_the_walk_forward_can_look_at_only_the_last_years(monkeypatch):
     seen.clear()
     pretrain.walk_forward("x")
     assert seen[0] == 10 * pretrain.EXAM_SESSIONS  # all the years before the tested one
+
+
+def test_discord_hears_only_of_agents_that_improved(monkeypatch):
+    import pretrain
+
+    curve = [("2010-01-04", 0.0), ("2020-01-02", 120.0)]
+    results = {"strategies": {
+        "quant": {"previous_overall": -40.0, "overall": 12.0, "years_beating_index": 11, "years_total": 20,
+                  "year": {"max_drawdown": 0.3, "return_after_tax": 4.1}, "curve": curve},
+        "sniper": {"previous_overall": 5.0, "overall": -3.0, "curve": curve},  # changed but worse: not news
+        "monge": {"previous_overall": -9.0, "overall": 30.0, "curve": curve},  # better but did not change
+        "indexador": {"year": {"return_after_tax": 4.4}, "curve": curve}}}
+    better = pretrain.improvements(results, {"quant", "sniper"})
+    assert [b["strategy"] for b in better] == ["quant"]
+    monkeypatch.setattr(pretrain.agents, "load_config", lambda: {"agents": [
+        {"id": "quant", "strategy": "quant", "name": "Quant", "emoji": "🧮", "params": {}}]})
+    embeds, files = pretrain.improvement_card(results, better, "https://portal")
+    assert "1 agente melhorou" in embeds[0]["title"] and "−40" not in embeds[0]["description"]
+    assert "-40 → **+12**" in embeds[0]["description"] and "acima do S&P 500" in embeds[0]["description"]
+    assert set(files) == {"melhorias.png"} and files["melhorias.png"][:4] == b"\x89PNG"
+    sent = []
+    monkeypatch.setattr(pretrain, "report", lambda r, a: ([{"url": "https://portal"}], {}))
+    monkeypatch.setattr(pretrain, "send", lambda *a, **k: sent.append(a) or 0)
+    monkeypatch.setattr(pretrain, "route", lambda c: {})
+    assert pretrain.post_report(results, [], False, "agentes", {"sniper"}) == 0 and not sent  # nothing improved
+    pretrain.post_report(results, [], False, "agentes", {"quant"})
+    assert len(sent) == 1

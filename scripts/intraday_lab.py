@@ -839,9 +839,9 @@ def main() -> int:
         print(f"Reatividade aplicada ({len(notes)} mudanças); resultados no repositório privado (agents/lab)", flush=True)
         if a.dry_run:
             return 0
-        from discord_post import route, send
+        from discord_post import detail_posts, route, send
 
-        return send([card], {}, **(route("agentes") or {}))
+        return send([card], {}, **(route("agentes") or {})) if detail_posts() else 0
     if a.reatividade:
         if a.reatividade not in agents.PROFILES:
             print(f"Perfil desconhecido: {a.reatividade}", file=sys.stderr)
@@ -886,10 +886,10 @@ def main() -> int:
         out.write_text(json.dumps(report_embed(results, a.anos), ensure_ascii=False, indent=1))
         print(f"Relatório em {out}")
         return 0
-    from discord_post import route, send
+    from discord_post import detail_posts, route, send
 
     where = route("agentes") or {}
-    return send([report_embed(results, a.anos)], {}, **where)
+    return send([report_embed(results, a.anos)], {}, **where) if detail_posts() else 0
 
 
 if __name__ == "__main__":

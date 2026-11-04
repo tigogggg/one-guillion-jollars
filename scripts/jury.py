@@ -619,8 +619,11 @@ def main() -> int:
                  "super": {k: (result.get("super_backtest") or {}).get(k) for k in ("overall", "exam", "return_after_tax", "max_drawdown")}})
     HISTORY_PATH.write_text(json.dumps(hist[-200:], ensure_ascii=False, indent=1, default=float) + "\n")
     print("Júri: resultados guardados no repositório privado", flush=True)
-    from discord_post import route, send
+    from discord_post import detail_posts, route, send
 
+    if not detail_posts():  # the verdict, the fusions and the renewal are in the portal
+        print("Discord: júri só no portal", flush=True)
+        return 0
     return send([card(result)], {}, **(route("agentes") or {}))
 
 

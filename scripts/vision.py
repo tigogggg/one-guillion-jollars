@@ -324,7 +324,7 @@ def main() -> int:
     print("Visão: guardada no repositório privado", flush=True)
     from discord_post import route, send
 
-    return send([card(vision)], {}, **(route("agentes") or {}))
+    return send([card(vision)], {}, **(route("mercado") or {}))  # a market view: 📈-mercado, not the agents' channel
 
 
 if __name__ == "__main__":

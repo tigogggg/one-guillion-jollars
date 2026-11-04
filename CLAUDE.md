@@ -21,6 +21,9 @@ Reply to him in **pt-PT**, short and clear; commit messages in English.
   prompts there, never back in this public repo. Every workflow job that runs `uv sync` and needs them checks out the
   private repo first; without it only the Indexador exists (`agents.RECEITA`, `ogj_engine.RECEITA` are False).
 - Licence: all rights reserved (`LICENSE`).
+- Discord: 🤖-agentes only gets a short card when a pre-training made agents better against the S&P 500
+  (`pretrain.improvement_card`, with the chart vs the index); rounds, daily league, jury, labs and reviews stay in the
+  portal (`discord_post.detail_posts`, `OGJ_DISCORD_DETALHE=1` brings them back). The Visionário's view goes to 📈-mercado.
 - Tests: `uv run pytest -q tests` (must pass before pushing).
 - Data in git: `data/context/*.csv`, `data/fundamentals/fundamentals.csv.gz` (refreshed weekly by `context-data.yml`).
 - Agents state: `agents/config.json`, `agents/state.json`, `agents/pretrain.json` (latest pre-training),

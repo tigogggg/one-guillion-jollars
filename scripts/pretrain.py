@@ -54,7 +54,7 @@ from agents import (
 )
 from charts import lines_chart
 from references import reference_lines
-from discord_post import BLUE, embed, route, send
+from discord_post import BLUE, GREEN, embed, route, send
 from rankings import UCITS_ETFS, download_history, load_constituents
 
 SESSIONS_PER_YEAR = 252
@@ -1266,6 +1266,9 @@ def _train_strategy(strategy: str, markets: list[Market] | None = None, fold: bo
         "claude": claude_log,
         # the verdict against the S&P 500 (agents.relative_points, every year, the exam the latest): above 0 beats it
         "overall": round(final_obj, 1),
+        # the same verdict for what the agent traded before this run (its last choice, or the original parameters)
+        "previous_overall": (round(live[2], 1) if live else round(overall(base, default_valid["points"]), 1))
+                            if strategy != "indexador" else None,
         "corretoras": broker_comparison(strategy, chosen) if strategy != "indexador" and not fold else None,
         "years_beating_index": sum(y > 0 for y in final_years) + (chosen_valid["points"] > 0),
         "years_total": len(final_years) + 1,
@@ -1409,7 +1412,7 @@ def strip(r: dict) -> dict:
 # --------------------------------------------------------------------------
 
 
-def apply(results: dict, today: date) -> list[str]:
+def apply(results: dict, today: date, changed_strategies: set | None = None) -> list[str]:
     """Give every agent of a trained strategy the parameters the exam chose, and let it decide again: those in the
     league and those on the bench alike (the pre-training tunes the agents; who plays is the monthly renewal's)."""
     config, state = agents.load_config(), agents.load_state()
@@ -1433,6 +1436,9 @@ def apply(results: dict, today: date) -> list[str]:
         port["pending"], port["last_decision"], port["last_rebalance"] = [], None, None
         port["evolution"] = (port["evolution"] + [{"date": today.isoformat(), "note": note}])[-24:]
         changed.append(f"{cfg['emoji']} {cfg['name']}: {note}")
+        defaults = {**agents.COMMON, **agents.STRATEGIES.get(cfg["strategy"], (None, "", {}))[2]}
+        if changed_strategies is not None and any(k in old or v != defaults.get(k) for k, v in changes.items()):
+            changed_strategies.add(cfg["strategy"])  # a real change, not a new rule written down at its default
     agents.save(None, state)
     return changed
 
@@ -1676,17 +1682,81 @@ PROFILE_INFO = agents.PROFILES[PROFILE]
 REPORT_TITLE = f"🧠 Pré-treino dos agentes · {PROFILE_INFO['emoji']} {PROFILE_INFO['label']}"  # the latest per profile stays
 
 
-def post_report(results: dict, applied: list[str] | None, dry_run: bool, channel: str) -> int:
-    """The report, with a button to its interactive chart, replacing the previous report in that channel."""
+def improvements(results: dict, changed: set[str]) -> list[dict]:
+    """The strategies whose agents got new parameters in this run AND whose verdict against the S&P 500 went up."""
+    out = []
+    for s in sorted(changed):
+        r = results["strategies"].get(s) or {}
+        before, after = r.get("previous_overall"), r.get("overall")
+        if before is not None and after is not None and after > before:
+            out.append({"strategy": s, "before": before, "after": after, "years": r.get("years_beating_index"),
+                        "total": r.get("years_total"), "dd": (r.get("year") or {}).get("max_drawdown"),
+                        "ret": (r.get("year") or {}).get("return_after_tax"), "curve": r.get("curve") or []})
+    return sorted(out, key=lambda x: -x["after"])
+
+
+SHOWN_MAX = 6  # agents in the card and its chart (the rest: "...e mais N")
+IMPROVED_TITLE = f"📈 Treino · {PROFILE_INFO['emoji']} {PROFILE_INFO['label']}"
+
+
+def improvement_card(results: dict, better: list[dict], link: str | None) -> tuple[list[dict], dict]:
+    """Tiago (2026-11-04): 🤖-agentes only hears about the agents when a training made them better: a short summary
+    and the chart against the S&P 500 as the yardstick. The full report stays in the portal (the button)."""
+    by_strategy: dict = {}
+    for c in agents.load_config()["agents"]:  # the main agent of each strategy, not its daily twin
+        if agents.profile_of(c) == PROFILE and not c.get("twin_of"):
+            by_strategy.setdefault(c["strategy"], c)
+    index = results["strategies"].get("indexador") or {}
+    more = len(better) - SHOWN_MAX
+    better = better[:SHOWN_MAX]
+    idx_ret = (index.get("year") or {}).get("return_after_tax")
+    lines = []
+    for b in better:
+        cfg = by_strategy.get(b["strategy"], {"emoji": "🤖", "name": b["strategy"]})
+        verdict = "acima do S&P 500" if b["after"] > 0 else "ainda abaixo do S&P 500"
+        extra = " · ".join(x for x in (
+            f"{b['years']}/{b['total']} anos acima" if b.get("total") else "",
+            f"20 anos {pct(b['ret'])} vs índice {pct(idx_ret)}" if b.get("ret") is not None and idx_ret is not None else "",
+            f"queda máx. {pct(-b['dd'])}" if b.get("dd") is not None else "") if x)
+        lines.append(f"{cfg['emoji']} **{cfg['name']}**: {b['before']:+.0f} → **{b['after']:+.0f}** ({verdict})\n{extra}")
+    if more > 0:
+        lines.append(f"…e mais {more} (no portal).")
+    lines.append("_Pontos face ao S&P 500 em todos os anos (0 = igual ao índice, 10 ≈ 1%/ano), com custos e impostos. "
+                 "Os % do texto são depois de impostos; no gráfico o índice ainda não pagou o imposto da venda final._")
+    series = {by_strategy.get(b["strategy"], {"name": b["strategy"]})["name"]: b["curve"] for b in better if b["curve"]}
+    refs = {"S&P 500": index["curve"]} if index.get("curve") else None  # the yardstick, dashed
+    files = {"melhorias.png": lines_chart(series, "Os que melhoraram e o S&P 500 (tracejado), 20 anos com custos",
+                                          refs)} if series else {}
+    n = len(better) + max(more, 0)
+    card = embed(f"{IMPROVED_TITLE}: {n} {'agente melhorou' if n == 1 else 'agentes melhoraram'}",
+                 "\n\n".join(lines)[:4000], color=GREEN, image="melhorias.png" if files else None,
+                 footer="Backtest: resultados passados simulados, não garantem resultados futuros.")
+    if link:
+        card["url"] = link
+    return [card], files
+
+
+def post_report(results: dict, applied: list[str] | None, dry_run: bool, channel: str,
+                changed: set[str] | None = None) -> int:
+    """The full report goes to the portal; Discord only hears of the agents that got better (improvement_card)."""
     try:  # the evolution between runs, for the portal (needs the Worker's KV credentials)
         import evolution
 
         interactive.publish_section("evolution", evolution.compact(evolution.load()))
     except Exception as e:  # noqa: BLE001 - the report matters more
         print(f"WARN: evolução: {e!r}", file=sys.stderr)
-    embeds, files = report(results, applied)
-    buttons = [(interactive.BUTTON, embeds[0]["url"])] if embeds and embeds[0].get("url") else None
-    return send(embeds, files, dry_run=dry_run, **route(channel), replace=REPORT_TITLE, buttons=buttons)
+    embeds, files = report(results, applied)  # also publishes the portal's interactive report
+    link = embeds[0].get("url") if embeds else None
+    if os.environ.get("OGJ_DISCORD_DETALHE") == "1":  # the old full report in Discord
+        buttons = [(interactive.BUTTON, link)] if link else None
+        return send(embeds, files, dry_run=dry_run, **route(channel), replace=REPORT_TITLE, buttons=buttons)
+    better = improvements(results, changed or set())
+    if not better:
+        print("Discord: nenhum agente melhorou neste treino; o relatório está só no portal", flush=True)
+        return 0
+    embeds, files = improvement_card(results, better, link)
+    buttons = [(interactive.BUTTON, link)] if link else None
+    return send(embeds, files, dry_run=dry_run, **route(channel), buttons=buttons)
 
 
 def finish(results: dict, today: date, apply_params: bool, dry_run: bool, partial: bool) -> int:
@@ -1703,8 +1773,9 @@ def finish(results: dict, today: date, apply_params: bool, dry_run: bool, partia
     import evolution
 
     evolution.append(json.loads(REPORT_PATH.read_text()), SEED.lstrip("-"))
-    applied = (apply(results, today) + bench(results, today)) if apply_params else None
-    return post_report(results, applied, dry_run, "agentes")
+    changed: set[str] = set()
+    applied = (apply(results, today, changed) + bench(results, today)) if apply_params else None
+    return post_report(results, applied, dry_run, "agentes", changed)
 
 
 def main() -> int:

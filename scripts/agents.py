@@ -51,7 +51,7 @@ import strategy_docs
 from charts import lines_chart, returns_chart
 from references import reference_lines
 from discord_daily import WATCHLIST_DIR
-from discord_post import BLUE, GREEN, RED, embed, route, send
+from discord_post import BLUE, GREEN, RED, detail_posts, embed, route, send
 from rankings import (
     SECTORS_PT,
     UCITS_ETFS,
@@ -2745,7 +2745,7 @@ def main() -> int:
             league(config, state, mkt, f"🤖 Liga dos agentes · {mkt.as_of.isoformat()} às {now.astimezone(timezone.utc):%H:%M} UTC")
         except Exception as e:
             print(f"WARN: portal: {e!r}", file=sys.stderr)
-        if not moves and not avoided:
+        if not moves and not avoided or not detail_posts():  # the trades are in the portal
             return 0
         lines = [f"{cfg['emoji']} **{cfg['name']}** {'comprou' if t['side'] == 'compra' else 'vendeu'} {t['symbol']} "
                  f"({eur(t['eur'])}{', ' + t['reason'] if t['side'] == 'venda' and t.get('reason') else ''}) · às {t['hora']}"
@@ -2819,6 +2819,9 @@ def main() -> int:
                 buttons.append(("🏟️ Abrir o portal", portal))
         except Exception as e:  # the league post matters more than the portal
             print(f"WARN: portal: {e!r}", file=sys.stderr)
+    if a.mode == "daily" and replace and not detail_posts():  # the league and the month are in the portal
+        print("Discord: liga do dia só no portal", flush=True)
+        return 0
     status = send(embeds, files, dry_run=a.dry_run, buttons=buttons, **target, **replace)
     if follow_up[0]:
         status = status or send(*follow_up, dry_run=a.dry_run, **target, **({"replace": MONTHLY_TITLE} if replace else {}))

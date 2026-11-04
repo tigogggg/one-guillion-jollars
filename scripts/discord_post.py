@@ -35,6 +35,13 @@ MIRROR_PATH = REPO / "discord" / "mirror.json"  # a second server that gets a co
 API = "https://discord.com/api/v10"
 
 
+def detail_posts() -> bool:
+    """Tiago (2026-11-04): 🤖-agentes only hears about the agents when a training made them better (pretrain's
+    improvement card); rounds, the daily league, the jury, the labs and the reviews stay in the portal.
+    OGJ_DISCORD_DETALHE=1 brings those posts back."""
+    return os.environ.get("OGJ_DISCORD_DETALHE") == "1"
+
+
 def route(kind: str) -> dict:
     """send()/post_message() arguments for the channel of `kind` ("mercado", "alertas", "agentes").
 

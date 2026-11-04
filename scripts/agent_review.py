@@ -27,7 +27,7 @@ from datetime import date
 import claude_usage
 import agents
 import strategy_docs
-from discord_post import BLUE, embed, route, send
+from discord_post import BLUE, detail_posts, embed, route, send
 
 MODEL = "sonnet"
 MAX_PROPOSALS = 3
@@ -169,6 +169,8 @@ def main() -> int:
         print(json.dumps(review, ensure_ascii=False, indent=1))
         return 0
     REVIEW_PATH.write_text(json.dumps(review, ensure_ascii=False, indent=1) + "\n")
+    if not detail_posts():  # the review is in the portal (each strategy's sheet)
+        return 0
     return send([card(review)], **route("agentes"), replace="🤖 Revisão dos agentes pelo Claude")
 
 

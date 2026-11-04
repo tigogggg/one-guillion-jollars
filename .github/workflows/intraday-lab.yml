@@ -277,7 +277,9 @@ jobs:
           uv run python - <<'EOF'
           import json, sys
           sys.path.insert(0, "scripts")
-          from discord_post import route, send
+          from discord_post import detail_posts, route, send
+          if not detail_posts():
+              sys.exit(0)  # the lab's result is in the private repo and the portal; 🤖-agentes only hears improvements
           card = json.load(open("out/lab/reatividade-embed.json"))
           sys.exit(send([card], {}, **(route("agentes") or {})))
           EOF
