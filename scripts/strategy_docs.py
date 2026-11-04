@@ -200,7 +200,7 @@ DOCS = {
         "Os pesos das posições dos líderes, até {n} ações.",
     ),
     "super": (
-        "O júri de domingo avalia a liga com seis jurados (rendimento, risco, robustez, eficiência, diversificação e regimes) e junta os 5 melhores num só agente.",
+        "Fusão: o júri de domingo avalia a liga com seis jurados (rendimento, risco, robustez, eficiência, diversificação e regimes) e junta os 5 melhores num só agente.",
         "A cada {cada} sessões copia a carteira combinada do top 5, com os pesos do júri (nota e lugar no ranking).",
         "Vende o que sai das carteiras do top 5; acerta uma posição que se afaste mais de {banda} do peso alvo.",
         "Os pesos das posições do top 5, cada membro com o peso que o júri lhe deu.",

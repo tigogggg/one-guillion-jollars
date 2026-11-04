@@ -439,6 +439,8 @@ h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem
 @keyframes bob { to { transform:translateY(-4px) rotate(-6deg); } }
 #race-scrub, #pt-race-scrub { width:100%; margin:10px 0 0; accent-color:var(--accent); }
 table.perf th, table.perf td { padding:6px 5px; font-size:.86rem; } table.perf th { white-space:normal; line-height:1.2; }
+ul.tree { list-style:none; padding-left:0; } ul.tree ul { list-style:none; padding-left:18px; border-left:2px solid #3a2f86; margin-left:6px; }
+ul.tree li { margin:6px 0; } ul.tree details summary { cursor:pointer; }
 table.perf td:first-child { white-space:normal; min-width:120px; } table.perf tr.benched td { opacity:.45; }
 .race-split { display:grid; grid-template-columns:minmax(260px,2fr) 3fr; gap:14px; align-items:start; }
 .race-split > div { min-width:0; } .race-split h2 { margin-top:6px; }
@@ -842,6 +844,38 @@ const table = (head, rows, numeric = []) => rows.length
     rows.map((r) => '<tr>' + r.map((c, i) => '<td class="' + (numeric.includes(i) ? "num" : "") + '">' + c + '</td>').join("") + '</tr>').join("") + '</table></div>'
   : '<p class="muted">Nada.</p>';
 
+// a fusion's family tree (scripts/jury.py): the members it came from, their parameters and where these came from, and
+// the jury's analysis that justified it
+function genealogyHtml(a) {
+  const g = a.genealogia;
+  if (!g || !(g.membros || []).length) return "";
+  const jur = { rendimento: "🎯", risco: "🛡️", robustez: "🧪", eficiencia: "💶", diversificacao: "🧩", regimes: "🌦️" };
+  const params = (p) => Object.entries(p || {}).filter(([, v]) => typeof v !== "object" && v !== 0 && v !== false)
+    .map(([k, v]) => k + " " + v).join(", ");
+  const an = g.analise || {}, bt = an.backtest;
+  return '<h3>🌳 Árvore genealógica</h3><div class="prose"><p>' + esc(a.name) + ' nasceu a ' + esc(g.data) +
+    ' do júri de domingo: junta as carteiras do top 5 de então, com pesos ' + esc(g.pesos || "") + '. Os membros e os pesos ficam fixos.</p></div>' +
+    '<ul class="tree"><li><b>' + esc(a.emoji + " " + a.name) + '</b> · parâmetros: ' + esc(params(g.parametros)) + '<ul>' +
+    g.membros.map((m) => '<li><details><summary><b>' + m.lugar + '.º ' + esc(m.emoji + " " + m.name) + '</b> · ' +
+      fmtNum((m.peso || 0) * 100, 0) + '% · nota ' + fmtNum(m.nota, 0) + ' · ' + esc(m.strategy_label || m.strategy) + ' · perfil ' + esc(m.perfil) +
+      (m.linhagem ? ' · descende de ' + esc(m.linhagem) : "") + '</summary>' +
+      '<p class="small">Notas dos jurados: ' + Object.entries(m.notas || {}).map(([j, v]) => (jur[j] || j) + " " + fmtNum(v, 0)).join(" · ") + '</p>' +
+      (Object.keys(m.ajustes_claude || {}).length ? '<p class="small">🤖 Ajustes do Claude: ' + Object.entries(m.ajustes_claude).map(([j, x]) =>
+        (jur[j] || j) + " " + (x.ajuste > 0 ? "+" : "") + x.ajuste + " (" + esc(x.porque) + ")").join("; ") + '</p>' : "") +
+      '<p class="small"><b>Parâmetros com que entrou:</b> <code>' + esc(params(m.parametros)) + '</code></p>' +
+      ((m.origem_parametros || []).length ? '<p class="small"><b>De onde vêm:</b></p>' + table(["Data", "O que mudou"],
+        m.origem_parametros.map((e) => [esc(e.date), esc(e.note)])) : '<p class="small muted">Parâmetros originais da estratégia (sem mudanças registadas).</p>') +
+      '</details></li>').join("") + '</ul></li></ul>' +
+    '<h3>⚖️ A análise que justificou a criação</h3><div class="prose">' +
+    (an.parecer ? '<p>🧑‍⚖️ ' + md(an.parecer) + '</p>' : '<p class="muted">Sem parecer do presidente nesse dia.</p>') +
+    (bt ? '<p>📼 <b>Backtest de 20 anos da fusão:</b> veredito ' + fmtNum(bt.overall, 0) + ' · exame ' + fmtNum(bt.exam, 0) + ' · ' +
+      bt.years_beating_index + '/' + bt.years_total + ' anos acima do S&P 500 · ' + fmtPct((bt.return_after_tax || 0) * 100, 0) +
+      ' depois de impostos (S&P 500 ' + fmtPct((an.indice_depois_impostos || 0) * 100, 0) + ') · queda máxima ' + fmtPct(-(bt.max_drawdown || 0) * 100, 0) + '</p>' : "") +
+    (an.jurados ? '<p class="small">Pesos dos jurados: ' + Object.entries(an.jurados).map(([j, w]) => esc(j) + " " + fmtNum(w * 100, 0) + "%").join(" · ") + '</p>' : "") +
+    ((an.ranking || []).length ? '<p class="small">Ranking do júri nesse dia: ' + an.ranking.map((r) => r.lugar + ".º " + esc(r.name) + " (" + fmtNum(r.nota, 0) + ")").join(" · ") + '</p>' : "") +
+    '</div>';
+}
+
 function strategyHtml(s) {
   return '<h3>🧭 Estratégia: ' + esc(s.label) + '</h3><div class="prose">' +
     (s.description ? '<p>' + md(s.description) + '</p>' : "") +
@@ -959,7 +993,7 @@ function show(i, scroll) {
   $("detail").innerHTML = '<div class="panel"><h2>' + esc(a.emoji + " " + a.name) + '</h2>' +
     '<p class="muted">🏅 ' + rank + '.º de ' + agents.length + ' na liga toda · ' + (byReturn(group).indexOf(a) + 1) + '.º de ' + group.length +
     ' em ' + esc(agentGroup(a).replace(/^\S+\s/, "")) + ' · ' + esc(a.strategy.label) + '</p>' +
-    (a.backtest ? backtestHtml(a) : liveHtml(a)) + strategyHtml(a.strategy) + '</div>';
+    (a.backtest ? backtestHtml(a) : liveHtml(a)) + genealogyHtml(a) + strategyHtml(a.strategy) + '</div>';
   chapters($("detail").firstElementChild);
   if (scroll) { openTab("agentes"); $("detail").scrollIntoView({ behavior: "smooth", block: "start" }); }
 }

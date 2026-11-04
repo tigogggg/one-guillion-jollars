@@ -54,7 +54,7 @@ STRATEGY_CHOICES = [
     ("maestro", "copia os agentes com melhores resultados"),
     ("kamikaze", "tudo nas maiores subidas a 3 meses"),
     ("estratega", "S&P 500 e os setores da agenda política"),
-    ("super", "o top 5 do júri de domingo junto"),
+    ("super", "fusão: o top 5 do júri de domingo junto"),
     ("relampago", "rompimento da abertura, dentro do dia"),
 ]
 WEEKDAYS = [("segunda", "seg"), ("terça", "ter"), ("quarta", "qua"), ("quinta", "qui"),

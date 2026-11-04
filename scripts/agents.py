@@ -1911,7 +1911,7 @@ STRATEGIES = {
     "cetico": (s_cetico, "Más notícias que o mercado ignorou", {"n": 4, "limiar": 3, "stop_pct": 0.06, "alvo_pct": 0.08, "max_dias": 10}),
     "conselho": (s_conselho, "Compra o que vários agentes apoiam", {"n": 6, "min_votos": 2, "stop_pct": 0.10}),
     "maestro": (s_maestro, "Copia os agentes que melhor se portam no regime de mercado atual", {"n": 8, "lideres": 3, "janela": 20, "cada": 5}),
-    "super": (s_super, "O top 5 do júri de domingo junto, com os pesos do júri", {"cada": 5, "banda": 0.02}),
+    "super": (s_super, "Fusão: o top 5 do júri de domingo num só agente, com os pesos do júri", {"cada": 5, "banda": 0.02}),
     "kamikaze": (s_kamikaze, "Tudo nas maiores subidas a 3 meses", {"n": 2, "stop_pct": 0.20, "cada": 5, "ignora_resultados": True, "ignora_risco": True}),
     "relampago": (s_relampago, "Rompimento do intervalo de abertura, dentro do dia (ORB)", {"n": 4, "alvo_r": 1.5, "rompimento_max": 0.01}),
 }
@@ -2861,6 +2861,7 @@ def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
                          "ret_pct": round(sh.get("ret", 0) * 100, 2), "parent_ret_pct": round(sh.get("parent_ret", 0) * 100, 2)}
                         for sh in state.get("shadows", {}).get(cfg["id"], [])],
             "por_zona": params.get("por_zona") or {},
+            "genealogia": cfg.get("genealogia"),  # a fusion's family tree and the analysis behind it (scripts/jury.py)
         })
     return out
 
