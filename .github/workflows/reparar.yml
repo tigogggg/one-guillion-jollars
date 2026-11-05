@@ -1,0 +1,57 @@
+name: "Reparação: dias europeus de novembro"
+
+# One-off (scripts/repair_european_days.py): puts the points of 2-4 November at their own day's European closes.
+# Runs in the same queue as the daily league, so it never overlaps it. Only counts reach this (public) log.
+on:
+  workflow_dispatch:
+    inputs:
+      simular:
+        description: "Só calcular, sem gravar"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agents-state
+  cancel-in-progress: false
+
+jobs:
+  reparar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      UV_NO_SYNC: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dados dos agentes (repositório privado)
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Motor Rust (cache por versão)
+        id: motor
+        uses: actions/cache@v4
+        with:
+          path: engine-wheel
+          key: motor-${{ runner.os }}-${{ hashFiles('engine/src/**', 'engine/build.rs', 'engine/Cargo.toml', 'engine/Cargo.lock', 'engine/pyproject.toml', 'agents/receita/engine/**') }}
+      - name: Compilar o motor
+        if: ${{ steps.motor.outputs.cache-hit != 'true' }}
+        run: uv build --wheel engine -o engine-wheel
+      - name: Ambiente Python
+        run: |
+          uv sync --no-install-package ogj-engine
+          uv pip install engine-wheel/*.whl
+      - name: Reparar
+        run: uv run python scripts/repair_european_days.py ${{ inputs.simular && '--simular' || '' }}
+      - name: Guardar
+        if: ${{ !inputs.simular }}
+        run: |
+          git -C agents config user.name "github-actions[bot]"
+          git -C agents config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          uv run python scripts/save_state.py --mensagem "Reparação: dias europeus de 2-4 nov" --prioridade nossa
