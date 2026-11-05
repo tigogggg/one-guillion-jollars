@@ -105,3 +105,16 @@ def test_every_list_is_shown_by_score_highest_first():
     for kind in ("buy", "watch", "sell"):
         scores = [r["safety"] for r in out[kind]]
         assert scores == sorted(scores, reverse=True)
+
+
+def test_rule_failures_agree_with_the_buy_list_and_say_what_fails():
+    mkt = market({
+        "VCP": metrics(), "PULL": metrics(price=102.0), "RANK": metrics(),
+        "BRK": metrics(price=111.0, high20_prev=108.0, vol_ratio=2.0), "AAPL": metrics(),
+    }, rankings=["PULL", "RANK"], vcp=["VCP", "AAPL"], earnings={"AAPL": date(2026, 11, 2)})
+    buys = set(lists(build(mkt))["buy"])
+    for sym in mkt.stocks:
+        assert (not opportunities.rule_failures(mkt, sym)) == (sym in buys), sym
+    assert any("sinal de entrada" in f for f in opportunities.rule_failures(mkt, "RANK"))
+    assert any("resultados daqui a 3 dias" in f for f in opportunities.rule_failures(mkt, "AAPL"))
+    assert opportunities.rule_failures(mkt, "NADA") == ["sem dados de mercado"]

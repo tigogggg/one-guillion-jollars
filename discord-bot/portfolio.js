@@ -870,7 +870,7 @@ const WALLET_TABS = [["resumo", "📊 Resumo"], ["posicoes", "💼 Posições"],
                      ["propostas", "🧠 Propostas para ti"], ["importar", "📥 Importar"], ["analise", "🤖 Análise do Claude"]];
 const PROFILE_TABS = [["definicoes", "⚙️ Definições"], ["seguir", "👀 Seguir"], ["conta", "🔒 Privacidade"]];
 const START_TABS = [["", "🏠 Hoje"], ["corrida", "🏁 Corrida"], ["pretreino", "⏪ Pré-treino"], ["agentes", "🧾 Agentes"], ["propostas", "🧠 Propostas"],
-                    ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"], ["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]];
+                    ["noticias", "📰 Notícias"], ["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]];
 
 function portfolioPage(data, tok, opts = {}) {
   const tabButton = ([t, label], on) => `<button class="tab${on ? " on" : ""}" data-tab="${t}">${label}</button>`;

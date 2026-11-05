@@ -173,37 +173,103 @@ def flags(m: dict, earnings_days: int | None, news_score: float | None) -> tuple
     return sell, watch
 
 
+def _days_to(mkt, sym: str) -> int | None:
+    d = mkt.earnings.get(sym)
+    return (d - mkt.as_of).days if isinstance(d, date) and d >= mkt.as_of else None
+
+
+def _news_of(mkt, sym: str) -> tuple[float | None, str]:
+    sig = mkt.news.get(sym) or {}
+    items = sorted(sig.get("items", []), key=lambda i: (i.get("importancia", 0), i.get("published", "")), reverse=True)
+    return sig.get("score"), (items[0].get("resumo") or items[0].get("title", "")) if items else ""
+
+
+def _stop_of(m: dict, etf: bool) -> float:
+    if etf:
+        return m["price"] * 0.92
+    atr = m.get("atr14") or 0
+    base = m.get("low10_prev", m["price"] * 0.92)
+    return min(base, m["price"] - 1.5 * atr) if atr else min(base, m["price"] * 0.97)
+
+
+def _sector_trend(mkt, m: dict, sym: str) -> float | None:
+    import agents
+    import context
+
+    key = context.sector_key(m.get("sector") or "", us=agents.is_us(sym))
+    return (getattr(mkt, "context", {}) or {}).get(f"{key}_trend") if key else None
+
+
+def _stage2(m: dict) -> bool:
+    return bool(m.get("stage2")) and m["price"] > m["sma50"] > m["sma200"] and m["sma200_rising"]
+
+
+def _entry_signals(mkt, ranked: set, sym: str, m: dict) -> list[str]:
+    out = []
+    pivot = m.get("high20_prev")
+    if sym in mkt.vcp:
+        out.append("🔍 setup VCP perto do pivot")
+    if pivot and m["price"] > pivot and m.get("vol_ratio", 0) >= 1.5 and m["price"] <= pivot * (1 + MAX_ABOVE_PIVOT):
+        out.append(f"🚀 rompeu o máximo de 20 dias com {m['vol_ratio']:.1f}× o volume")
+    if sym in ranked and 0 <= m["price"] / m["sma50"] - 1 <= PULLBACK:
+        out.append("🎯 líder do setor de volta à média de 50 dias")
+    return out
+
+
+def rule_failures(mkt, sym: str) -> list[str]:
+    """Which of the buy rules (BUY_RULES) a stock fails today, in words; empty when it passes them all. The same
+    rules as the buy list, without its cap of MAX_BUY names (used to mark the agents' proposals)."""
+    m = mkt.stocks.get(sym) or mkt.etfs.get(sym)
+    if not m:
+        return ["sem dados de mercado"]
+    etf = sym in mkt.etfs
+    min_safety = MIN_BUY_SAFETY.get(mkt.zone)
+    out = [] if min_safety is not None else [f"mercado em zona {mkt.zone}: sem compras"]
+    d, (news_score, _) = _days_to(mkt, sym), _news_of(mkt, sym)
+    s_sig, w_sig = flags(m, d, news_score)
+    out += s_sig + w_sig
+    trend_ok = (m["price"] > m["sma50"] > m["sma200"] and m["sma200_rising"]) if etf else _stage2(m)
+    if not trend_ok:
+        out.append("sem tendência de alta (Stage 2)")
+    if not etf and not _entry_signals(mkt, {r["symbol"] for r in mkt.rankings}, sym, m):
+        out.append("sem sinal de entrada (VCP, rompimento ou recuo à média de 50 dias)")
+    stretch = m["price"] / m["sma50"] - 1 if m.get("sma50") else 0
+    if stretch > MAX_STRETCH:
+        out.append(f"esticada: {stretch * 100:.0f}% acima da média de 50 dias (máx. {MAX_STRETCH * 100:.0f}%)")
+    if d is not None and d <= EARNINGS_BUY_DAYS:
+        out.append(f"resultados daqui a {d} dias")
+    if news_score is not None and news_score < 0:
+        out.append("notícias negativas")
+    if not etf and (m.get("dollar_volume") or 0) < MIN_DOLLAR_VOLUME:
+        out.append("pouca liquidez")
+    risk = (m["price"] - _stop_of(m, etf)) / m["price"]
+    if not etf and risk > MAX_RISK:
+        out.append(f"stop longe: {risk * 100:.1f}% (máx. {MAX_RISK * 100:.0f}%)")
+    quality = {r["symbol"]: r.get("quality_score") for r in mkt.rankings}
+    sector = None if etf else _sector_trend(mkt, m, sym)
+    score, _ = safety(m, quality.get(sym), d, news_score, mkt.zone, etf, sector)
+    if min_safety is not None and score < min_safety:
+        out.append(f"score {score} (mín. {min_safety})")
+    if sector is not None and sector < 0:
+        out.append("setor abaixo da média de 200 dias")
+    if not etf and m.get("fund_q") is not None and m["fund_q"] < MIN_FUND_Q:
+        out.append(f"fundamentos fracos ({m['fund_q']:.0f}/100)")
+    return list(dict.fromkeys(out))
+
+
 def build(mkt, holders: dict[str, list[str]], fetch_earnings=None) -> dict:
     """{"buy", "watch", "sell", "criteria", "rules", ...} from the agents' Market and who holds what.
 
     fetch_earnings(symbols) -> {symbol: date | None} fills in results dates not looked up yet.
     """
-    today = mkt.as_of
     quality = {r["symbol"]: r.get("quality_score") for r in mkt.rankings}
     ranked = {r["symbol"] for r in mkt.rankings}
-
-    def days_to(sym: str) -> int | None:
-        d = mkt.earnings.get(sym)
-        return (d - today).days if isinstance(d, date) and d >= today else None
-
-    def news_of(sym: str) -> tuple[float | None, str]:
-        sig = mkt.news.get(sym) or {}
-        items = sorted(sig.get("items", []), key=lambda i: (i.get("importancia", 0), i.get("published", "")), reverse=True)
-        return sig.get("score"), (items[0].get("resumo") or items[0].get("title", "")) if items else ""
-
-    def stop_of(m: dict, etf: bool) -> float:
-        if etf:
-            return m["price"] * 0.92
-        atr = m.get("atr14") or 0
-        base = m.get("low10_prev", m["price"] * 0.92)
-        return min(base, m["price"] - 1.5 * atr) if atr else min(base, m["price"] * 0.97)
-
-    def sector_trend(m: dict, sym: str) -> float | None:
-        import agents
-        import context
-
-        key = context.sector_key(m.get("sector") or "", us=agents.is_us(sym))
-        return (getattr(mkt, "context", {}) or {}).get(f"{key}_trend") if key else None
+    days_to = lambda sym: _days_to(mkt, sym)  # noqa: E731
+    news_of = lambda sym: _news_of(mkt, sym)  # noqa: E731
+    stop_of = _stop_of
+    sector_trend = lambda m, sym: _sector_trend(mkt, m, sym)  # noqa: E731
+    stage2 = _stage2
+    entry_signals = lambda sym, m: _entry_signals(mkt, ranked, sym, m)  # noqa: E731
 
     def row(sym: str, m: dict, etf: bool = False) -> dict:
         news_score, headline = news_of(sym)
@@ -223,20 +289,6 @@ def build(mkt, holders: dict[str, list[str]], fetch_earnings=None) -> dict:
                      if m.get(k) is not None} if not etf else {},
             "sector_trend": None if etf or sector_trend(m, sym) is None else round(sector_trend(m, sym) * 100, 1),
         }
-
-    def stage2(m: dict) -> bool:
-        return bool(m.get("stage2")) and m["price"] > m["sma50"] > m["sma200"] and m["sma200_rising"]
-
-    def entry_signals(sym: str, m: dict) -> list[str]:
-        out = []
-        pivot = m.get("high20_prev")
-        if sym in mkt.vcp:
-            out.append("🔍 setup VCP perto do pivot")
-        if pivot and m["price"] > pivot and m.get("vol_ratio", 0) >= 1.5 and m["price"] <= pivot * (1 + MAX_ABOVE_PIVOT):
-            out.append(f"🚀 rompeu o máximo de 20 dias com {m['vol_ratio']:.1f}× o volume")
-        if sym in ranked and 0 <= m["price"] / m["sma50"] - 1 <= PULLBACK:
-            out.append("🎯 líder do setor de volta à média de 50 dias")
-        return out
 
     # Candidates for each list; earnings dates looked up once for all of them.
     watchlist = sorted(s for s in set(holders) | ranked if s in mkt.stocks or s in mkt.etfs)
@@ -310,7 +362,7 @@ def build(mkt, holders: dict[str, list[str]], fetch_earnings=None) -> dict:
     # The lists above pick who gets in; the page shows each one by safety score, highest first.
     by_score = lambda rows: sorted(rows, key=lambda r: r["safety"], reverse=True)  # noqa: E731
     return {
-        "as_of": today.isoformat(), "zone": mkt.zone, "stage2_pct": round(mkt.stage2_share * 100, 1),
+        "as_of": mkt.as_of.isoformat(), "zone": mkt.zone, "stage2_pct": round(mkt.stage2_share * 100, 1),
         "buy": by_score(buy), "watch": by_score(watch[:MAX_WATCH]), "sell": by_score(sell[:MAX_SELL]),
         "criteria": [{"key": k, "label": label, "max": mx, "rule": rule} for k, label, mx, rule in CRITERIA],
         "rules": {"buy": BUY_RULES, "sell": SELL_RULES, "watch": WATCH_RULES},

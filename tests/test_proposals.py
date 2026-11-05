@@ -56,6 +56,15 @@ def test_scoreboard_counts_by_confidence():
     sb = proposals.scoreboard(log)
     assert sb["all"]["closed"] == 2 and sb["all"]["win_rate"] == 0.5 and sb["all"]["avg_r"] == 0.75
     assert sb["by_bucket"]["alta"]["targets"] == 1 and sb["by_bucket"]["baixa"]["executed"] == 0
+    assert sb["by_rules"]["passa"]["proposals"] == 0  # logged before the rules flag: in neither group
+
+
+def test_scoreboard_keeps_the_proposals_that_passed_the_rules_apart():
+    log = [{"status": "alvo", "fill": 1, "ret": 0.1, "r": 2.5, "regras": True},
+           {"status": "stop", "fill": 1, "ret": -0.04, "r": -1.0, "regras": False},
+           {"status": "stop", "fill": 1, "ret": -0.05, "r": -1.0, "regras": False}]
+    sb = proposals.scoreboard(log)["by_rules"]
+    assert sb["passa"]["win_rate"] == 1.0 and sb["falha"]["win_rate"] == 0.0 and sb["falha"]["closed"] == 2
 
 
 def test_odds_say_what_share_of_wins_the_plan_needs():

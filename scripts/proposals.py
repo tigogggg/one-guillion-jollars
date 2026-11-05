@@ -242,8 +242,10 @@ def build(config: dict, state: dict, mkt: Market) -> dict:
             "news": ((mkt.news.get(sym) or {}).get("items") or [{}])[0].get("resumo", ""),
             # the same signals as the Oportunidades tab: a proposal against them is shown with the warning, at the end
             "alerts": sell_sig + watch_sig, "conflict": "venda" if sell_sig else "atencao" if watch_sig else None,
+            # the Oportunidades buy rules: a proposal that also passes them comes first; the record counts both apart
+            "falhas": (falhas := opportunities.rule_failures(mkt, sym)), "regras": not falhas,
         })
-    out_buys.sort(key=lambda r: (r["conflict"] is None, r["support"], r["safety"] or 0), reverse=True)
+    out_buys.sort(key=lambda r: (r["regras"], r["conflict"] is None, r["support"], r["safety"] or 0), reverse=True)
 
     out_sells = []
     for sym, votes in sells.items():
@@ -336,7 +338,7 @@ def update_log(proposals: dict, mkt: Market) -> list[dict]:
         log.append({"date": proposals["as_of"], "symbol": b["symbol"], "confidence": b["confidence"],
                     "bucket": bucket(b["confidence"]), "agents": [a["name"] for a in b["agents"]],
                     "entry_max": b["plan"]["entry_max"], "stop": b["plan"]["stop"], "target": b["plan"]["target"],
-                    "status": "à espera"})
+                    "regras": b.get("regras"), "status": "à espera"})
     log = log[-LOG_KEPT:]
     LOG_PATH.write_text(json.dumps(log, indent=1, ensure_ascii=False) + "\n")
     return log
@@ -357,5 +359,8 @@ def scoreboard(log: list[dict]) -> dict:
     return {
         "all": stats(log),
         "by_bucket": {b: stats([e for e in log if e.get("bucket") == b]) for b in ("alta", "média", "baixa")},
+        # proposals that also passed the buy rules vs those that did not (logged from 2026-11-06 on)
+        "by_rules": {"passa": stats([e for e in log if e.get("regras") is True]),
+                     "falha": stats([e for e in log if e.get("regras") is False])},
         "recent": list(reversed(log[-40:])),
     }

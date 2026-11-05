@@ -277,7 +277,7 @@ export function chartPage(data, upcoming, newer, extras = {}) {
   const portal = !!extras.portal;
   const tabs = (portal ? [["hoje", "🏠 Hoje"]] : []).concat([["corrida", "🏁 Corrida"]])
     .concat(portal && extras.pretrain ? [["pretreino", "⏪ Pré-treino"]] : []).concat([["agentes", "🧾 Agentes"]])
-    .concat(portal ? [["decisao", "⚖️ Decisão"], ["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
+    .concat(portal ? [["decisao", "⚖️ Decisão"], ["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"]] : [])
     .concat(portal ? [] : [["agenda", "⏱️ Agenda"]])  // in the portal the schedule is part of 🩺 Estado
     .concat(portal ? [["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]] : []);  // the portfolio is in the profile (the name, top right)
   const me = extras.user;
@@ -339,8 +339,7 @@ ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pret
 </section>
 ${portal ? `<section data-tab="decisao" hidden><div id="decision"></div></section>
 <section data-tab="propostas" hidden><div id="props"></div></section>
-<section data-tab="noticias" hidden><div id="news"></div></section>
-<section data-tab="oportunidades" hidden><div id="opps"></div></section>` : ""}
+<section data-tab="noticias" hidden><div id="news"></div></section>` : ""}
 <section data-tab="${portal ? "estado" : "agenda"}" hidden>
   ${portal ? '<div id="status"></div><p class="muted small">Horários de Lisboa (salvo indicação), os mesmos do /horario no Discord. Cada tarefa demora alguns minutos a chegar.</p>'
     : '<h2>⏱️ Próximas atualizações</h2><div id="countdowns" class="grid"></div><p class="muted small">Horários de Lisboa, os mesmos do /horario no Discord. Cada tarefa demora alguns minutos a chegar.</p>'}
@@ -1123,7 +1122,7 @@ function restoreView(v) {
 {
   const hash = location.hash.slice(1);  // old #agenda links; #perfil and #carteira moved to /perfil
   if ((hash === "perfil" || hash === "carteira") && WALLET) location.replace("/perfil");
-  const asked = hash === "agenda" && $("status") ? "estado" : hash;
+  const asked = hash === "agenda" && $("status") ? "estado" : hash === "oportunidades" ? "propostas" : hash;  // Oportunidades joined Propostas
   const known = asked && document.querySelector('#tabs .tab[data-tab="' + asked + '"]');
   const start = PREFS && PREFS.start && document.querySelector('#tabs .tab[data-tab="' + PREFS.start + '"]') ? PREFS.start : null;  // ⚙️ Definições
   openTab(known ? asked : start || document.querySelector("#tabs .tab").dataset.tab);
@@ -1447,12 +1446,11 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     table(["Candidato", "Ativo", "Ordem", "Valor", "Porquê"], orders, [3]);
 })();
 
-// ---- proposals ----
+// ---- proposals: the agents' orders and the buy rules (ex-Oportunidades) in one place ----
 (function props() {
   if (!$("props")) return;
-  const P = PROPOSALS;
-  if (!P) { $("props").innerHTML = '<p class="muted">As propostas aparecem depois da próxima liga dos agentes (dias úteis às 07:30).</p>'; return; }
-  const sb = (P.scoreboard || {}).all || {};
+  const P = PROPOSALS, M = MARKET;
+  if (!P && !M) { $("props").innerHTML = '<p class="muted">As propostas aparecem depois da próxima liga dos agentes (dias úteis às 07:30).</p>'; return; }
   const pctOrDash = (x) => x == null ? "—" : fmtNum(x * 100, 0) + "%";
   const sizing = (b, capital, riskPct) => {
     const pl = b.plan, perShare = (pl.entry_max - pl.stop) * pl.fx_eur;
@@ -1462,7 +1460,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     const capped = qty > cap; if (capped) qty = Math.floor(cap * 1000) / 1000;
     return { qty, value: qty * pl.entry_max * pl.fx_eur, risk: qty * perShare, capped };
   };
-  const card = (b) => {
+  const propCard = (b) => {
     const pl = b.plan, rec = b.record || {}, cur = ({ EUR: "€", USD: "$", GBp: "p", CHF: "CHF", SEK: "kr", DKK: "kr", NOK: "kr" })[pl.currency] || pl.currency || "";
     return '<div class="opp"><div class="top"><span class="sym">' + esc(b.symbol) + '</span><span class="muted">' + esc(b.name || "") + (b.sector ? " · " + esc(b.sector) : "") + '</span>' +
       (b.safety != null ? '<span class="score ' + esc((b.level || "").split(" ")[0]) + '">🛡️ ' + b.safety + '/100 · ' + esc(b.level) + '</span>' : "") + '</div>' +
@@ -1482,56 +1480,9 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       (b.earnings ? '<p class="small">📅 Resultados a ' + esc(b.earnings) + '</p>' : '') + (b.news ? '<p class="small muted">📰 ' + esc(b.news) + '</p>' : '') +
       ((b.parts || []).length ? '<details><summary>Score de segurança: como chegou a ' + b.safety + '</summary>' + table(["Critério", "Pontos", "Porquê"], b.parts.map((x) => [esc(x.label), fmtNum(x.points, 1) + " / " + x.max, esc(x.why)]), [1]) + '</details>' : '') + '</div>';
   };
-  const byBucket = (P.scoreboard || {}).by_bucket || {};
-  $("props").innerHTML = '<h2>🧠 Propostas dos agentes para a abertura</h2><p class="muted small">Ordens que os agentes acabaram de decidir no fecho de ' + esc(P.as_of) +
-    ', juntas e pesadas pelo historial de cada um (zona de mercado: <b>' + esc(P.zone) + '</b>). Para estudar e decidir tu: não é recomendação.</p>' +
-    '<div class="panel filters"><label class="small">O teu capital (€) <input id="pp-cap" type="number" min="0" step="100"></label>' +
-    '<label class="small">Risco por operação (%) <input id="pp-risk" type="number" min="0.1" max="5" step="0.1"></label>' +
-    '<span class="muted small">Quantas ações: risco em euros ÷ (entrada − stop), no máximo 20% do capital numa posição. Fica guardado neste aparelho.</span></div>' +
-    '<h2>🟢 Comprar (' + P.buys.length + ')</h2><div class="cards">' + (P.buys.map(card).join("") || '<p class="muted">Hoje nenhum agente quer comprar.</p>') + '</div>' +
-    '<h2>🔴 Os agentes estão a vender (' + P.sells.length + ')</h2>' + table(["Ativo", "Quem vende", "Porquê", "Peso", "Score"], P.sells.map((x) =>
-      ['<b>' + esc(x.symbol) + '</b> <span class="muted">' + esc(x.name || "") + '</span>', x.agents.map((a) => esc(a.emoji + " " + a.name)).join(", "),
-       esc([...new Set(x.agents.map((a) => a.reason).filter(Boolean))].join(" · ")), fmtNum(x.support, 1), x.safety != null ? x.safety + "/100" : "—"]), [3]) +
-    '<h2>📊 Placar das propostas</h2><p class="muted small">Cada proposta de compra é seguida: conta se a ação abriu até ao preço de entrada nas ' + P.method.fill_window +
-    ' sessões seguintes, e depois se tocou primeiro no stop ou no alvo; ao fim de ' + P.method.horizon + ' sessões fecha ao preço do dia.</p>' +
-    '<div class="grid">' + tile("Propostas", sb.proposals ?? 0, (sb.executed ?? 0) + " executadas · " + (sb.open ?? 0) + " abertas") +
-    tile("Taxa de acerto", pctOrDash(sb.win_rate), (sb.targets ?? 0) + " alvos · " + (sb.stops ?? 0) + " stops", cls((sb.win_rate || 0) - 0.5)) +
-    tile("R médio", sb.avg_r == null ? "—" : fmtNum(sb.avg_r, 2) + " R", "ganho por unidade de risco", cls(sb.avg_r)) +
-    tile("Retorno médio", sb.avg_ret == null ? "—" : fmtPct(sb.avg_ret), "por proposta fechada", cls(sb.avg_ret)) + '</div>' +
-    table(["Confiança", "Propostas", "Fechadas", "Acerto", "R médio"], ["alta", "média", "baixa"].map((k) => { const x = byBucket[k] || {};
-      return [k + (k === "alta" ? " (≥40%)" : k === "média" ? " (20-40%)" : " (<20%)"), x.proposals ?? 0, x.closed ?? 0, pctOrDash(x.win_rate), x.avg_r == null ? "—" : fmtNum(x.avg_r, 2)]; }), [1, 2, 3, 4]) +
-    '<details><summary>Últimas propostas e o que lhes aconteceu</summary>' + table(["Data", "Ativo", "Confiança", "Estado", "Compra", "Saída", "Resultado"],
-      ((P.scoreboard || {}).recent || []).map((e) => [esc(e.date), '<b>' + esc(e.symbol) + '</b>', fmtNum(e.confidence, 0) + "%", esc(e.status),
-        e.fill != null ? fmtNum(e.fill) : "—", e.exit != null ? fmtNum(e.exit) : (e.last != null ? fmtNum(e.last) + " (aberta)" : "—"),
-        '<span class="' + cls(e.ret ?? e.ret_open) + '">' + (e.ret != null ? fmtPct(e.ret * 100) + (e.r != null ? " · " + fmtNum(e.r, 1) + " R" : "") : e.ret_open != null ? fmtPct(e.ret_open * 100) : "—") + '</span>']), [2, 4, 5, 6]) + '</details>' +
-    '<h2>⚖️ Peso de cada agente hoje</h2>' + table(["Agente", "Peso", "Porquê", "Historial"], P.weights.map((w) => [esc(w.emoji + " " + w.name), fmtNum(w.weight, 2),
-      esc(w.why.join(" · ") || "—"), w.stats && w.stats.trades ? pctOrDash(w.stats.win_rate) + " acerto em " + w.stats.trades + " vendas" : "—"]), [1]) +
-    '<details class="panel"><summary><b>Como se calcula o peso</b></summary><ul class="small">' + P.rules.map((r) => '<li>' + esc(r) + '</li>').join("") + '</ul></details>';
-  const cap = $("pp-cap"), risk = $("pp-risk");
-  cap.value = store.get("capital", 10000); risk.value = store.get("risk", 1);
-  const drawSizes = () => {
-    store.set("capital", +cap.value); store.set("risk", +risk.value);
-    document.querySelectorAll(".sizing").forEach((el) => {
-      const b = P.buys.find((x) => x.symbol === el.dataset.sym), z = sizing(b, +cap.value, +risk.value);
-      el.innerHTML = z ? '🧮 Para ti: <b>' + fmtNum(z.qty, 3) + ' ações</b> ≈ ' + fmtEur(z.value) + ', arriscando ' + fmtEur(z.risk) + (z.capped ? ' (limitado a 20% do capital)' : '') : "";
-    });
-  };
-  [cap, risk].forEach((el) => el.addEventListener("input", drawSizes));
-  [cap, risk].forEach((el) => el.addEventListener("change", () => {  // signed in: the account keeps them too
-    if (+cap.value >= 0 && +risk.value > 0 && +risk.value <= 5) savePrefs({ capital: +cap.value, risk: +risk.value }).catch(() => {});
-  }));
-  drawSizes();
-})();
-
-// ---- opportunities ----
-(function opps() {
-  if (!$("opps")) return;
-  if (!MARKET) { $("opps").innerHTML = '<p class="muted">As oportunidades aparecem depois da próxima liga dos agentes (dias úteis).</p>'; return; }
-  const lv = (s) => (MARKET.levels.find((l) => s >= l.from) || { name: "" }).name;
   const badge = (r) => '<span class="score ' + esc(r.level.split(" ")[0]) + '">🛡️ ' + r.safety + '/100 · ' + esc(r.level) + '</span>';
-  const W = MARKET.watch || [], R = MARKET.rules || {};
   const signals = (r) => '<span class="score ' + (r.severity >= 3 ? "Baixa" : "Média") + '">⚠️ ' + r.warnings.length + ' sina' + (r.warnings.length === 1 ? "l" : "is") + '</span>';
-  const card = (r, kind) => '<div class="opp' + (kind === "sell" ? " sellcard" : kind === "watch" ? " watchcard" : "") + '"><div class="top"><span class="sym">' + esc(r.symbol) + '</span><span class="muted">' + esc(r.name || "") +
+  const oppCard = (r, kind) => '<div class="opp' + (kind === "sell" ? " sellcard" : kind === "watch" ? " watchcard" : "") + '"><div class="top"><span class="sym">' + esc(r.symbol) + '</span><span class="muted">' + esc(r.name || "") +
     (r.sector ? " · " + esc(r.sector) : "") + '</span>' + (kind === "buy" ? badge(r) : signals(r)) + '</div>' + (kind === "buy" ? '<div class="bar"><i style="width:' + r.safety + '%"></i></div>' : '') +
     '<p class="small">' + fmtNum(r.price) + " " + (({ EUR: "€", USD: "$", GBp: "p", CHF: "CHF", SEK: "kr", DKK: "kr", NOK: "kr" })[r.currency || (r.etf ? "EUR" : "USD")] || r.currency) + ' · dia <span class="' + cls(r.ret_1d) + '">' + fmtPct(r.ret_1d) + '</span> · semana <span class="' + cls(r.ret_1w) + '">' +
     fmtPct(r.ret_1w) + '</span> · 3 meses <span class="' + cls(r.ret_3m) + '">' + fmtPct(r.ret_3m) + '</span> · tendência ' + r.trend_score + '/100</p>' +
@@ -1547,26 +1498,77 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     (kind === "buy" ? '<details><summary>Como chegou a ' + r.safety + ' pontos</summary>' +
       table(["Critério", "Pontos", "Porquê"], r.parts.map((x) => [esc(x.label), fmtNum(x.points, 1) + " / " + x.max, esc(x.why)]), [1]) + '</details>' : '') + '</div>';
   const rules = (list) => list && list.length ? '<details><summary>Regras desta lista</summary><ul class="small">' + list.map((x) => '<li>' + esc(x) + '</li>').join("") + '</ul></details>' : '';
-  $("opps").innerHTML = '<h2>🎯 Oportunidades de compra e venda</h2><p class="muted small">Fecho de ' + esc(MARKET.as_of) + ' · mercado em zona <b>' + esc(MARKET.zone) + '</b> (' +
-    fmtNum(MARKET.stage2_pct, 0) + '% das ações do S&P 500 em tendência de alta) · ideias para estudar, não recomendações: confirma sempre antes de decidir. ' +
-    'Cada ação aparece numa só lista.</p>' +
-    '<details class="panel"><summary><b>🛡️ Como se calcula o score de segurança (0-100)</b></summary><p class="small">Mede quão ordenada e suportada está a ação agora: tendência, volatilidade, distância ao máximo, liquidez, qualidade da empresa, resultados, notícias e mercado. ' +
-    'Não diz quanto vai subir. Níveis: ' + MARKET.levels.map((l) => esc(l.name) + " ≥ " + l.from).join(" · ") + '.</p>' +
-    table(["Critério", "Máx.", "Regra"], MARKET.criteria.map((c) => [esc(c.label), c.max, esc(c.rule)]), [1]) + '</details>' +
-    ((MARKET.sectors || []).length ? '<details class="panel"><summary><b>🏭 Saúde dos setores</b> <span class="muted small">(ETF de cada setor)</span></summary>' +
-      table(["Setor", "ETF", "Face à média de 200 dias", "Força vs S&P 500 (3 meses)", "Ações em tendência de alta"], MARKET.sectors.map((r) => [esc(r.sector), esc(r.etf),
-        r.trend == null ? "—" : '<span class="' + cls(r.trend) + '">' + fmtPct(r.trend) + '</span>', r.rs == null ? "—" : '<span class="' + cls(r.rs) + '">' + fmtPct(r.rs) + '</span>',
-        r.stage2 == null ? "—" : fmtNum(r.stage2, 0) + "%"]), [2, 3, 4]) +
-      '<p class="muted small">Só se propõem compras em setores acima da média de 200 dias. Os agentes podem aprender a exigir também força face ao S&P 500.</p></details>' : '') +
-    '<h2>🟢 Comprar (' + MARKET.buy.length + ')</h2><p class="muted small">Só as que passam em todos os filtros: tendência de alta, um sinal de entrada, não esticadas, sem resultados nem notícias negativas por perto, stop curto e score alto. Poucas e boas; há dias sem nenhuma.</p>' +
-    rules(R.buy) + '<div id="buy" class="cards"></div>' +
-    '<h2>🔴 Vender (' + MARKET.sell.length + ')</h2><p class="muted small">Ações dos agentes ou do ranking cuja tendência quebrou. Ordenadas pelo score, do mais alto para o mais baixo.</p>' + rules(R.sell) +
-    '<div class="cards">' + (MARKET.sell.map((r) => card(r, "sell")).join("") || '<p class="muted">Nenhuma com a tendência quebrada.</p>') + '</div>' +
-    '<h2>🟡 Atenção: não comprar agora (' + W.length + ')</h2><p class="muted small">Ações fortes com um motivo para esperar: resultados à porta, notícias negativas, perderam a média de 50 dias ou estão esticadas. Não são sinais de venda.</p>' + rules(R.watch) +
-    '<div class="cards">' + (W.map((r) => card(r, "watch")).join("") || '<p class="muted">Nenhuma.</p>') + '</div>';
-  const drawBuy = () => { $("buy").innerHTML = MARKET.buy.map((r) => card(r, "buy")).join("") ||
-    '<p class="muted">Hoje nenhuma ação passa em todos os filtros. É normal: as boas oportunidades são raras e esperar também é uma decisão.</p>'; };
-  drawBuy();
+  const buys = P ? P.buys : [], mBuy = M ? M.buy : [], R = (M && M.rules) || {};
+  const passes = (b) => b.regras != null ? b.regras : mBuy.some((r) => r.symbol === b.symbol);  // before the flag existed
+  const both = buys.filter(passes), agentsOnly = buys.filter((b) => !passes(b));
+  const rulesOnly = mBuy.filter((r) => !buys.some((b) => b.symbol === r.symbol));
+  const failNote = (b) => {
+    const why = (b.falhas && b.falhas.length ? b.falhas : b.alerts || []);
+    return '<p class="alert warn">❌ Não passa nas regras' + (why.length ? ': ' + why.map(esc).join(" · ") : '') + '</p>';
+  };
+  const sb = P ? (P.scoreboard || {}) : {}, all = sb.all || {}, byBucket = sb.by_bucket || {}, byRules = sb.by_rules || {};
+  const sbRow = (label, x) => [label, x.proposals ?? 0, x.closed ?? 0, pctOrDash(x.win_rate), x.avg_r == null ? "—" : fmtNum(x.avg_r, 2), x.avg_ret == null ? "—" : fmtPct(x.avg_ret)];
+  const asOf = (P && P.as_of) || (M && M.as_of) || "", zone = (P && P.zone) || (M && M.zone) || "";
+  $("props").innerHTML = '<h2>🧠 Propostas</h2><p class="muted small">Fecho de ' + esc(asOf) + ' · mercado em zona <b>' + esc(zone) + '</b>' +
+    (M ? ' (' + fmtNum(M.stage2_pct, 0) + '% das ações do S&P 500 em tendência de alta)' : '') +
+    '. Duas leituras de cada ação, lado a lado: o que os <b>agentes</b> decidiram para a abertura (pesados pelo historial de cada um) e se passa nas <b>regras de compra</b> ' +
+    '(tendência, sinal de entrada, resultados, notícias, stop e score de segurança). Para estudar e decidir tu: não é recomendação.</p>' +
+    '<div class="panel filters"><label class="small">O teu capital (€) <input id="pp-cap" type="number" min="0" step="100"></label>' +
+    '<label class="small">Risco por operação (%) <input id="pp-risk" type="number" min="0.1" max="5" step="0.1"></label>' +
+    '<span class="muted small">Quantas ações: risco em euros ÷ (entrada − stop), no máximo 20% do capital numa posição. Fica guardado neste aparelho.</span></div>' +
+    '<h2>🟢 Comprar</h2>' +
+    '<h3>✅ Agentes e regras de acordo (' + both.length + ')</h3><div class="cards">' + (both.map(propCard).join("") || '<p class="muted">Hoje nenhuma.</p>') + '</div>' +
+    '<h3>🤖 Só os agentes (' + agentsOnly.length + ')</h3><p class="muted small">Os agentes querem comprar, mas a ação falha alguma regra: o aviso diz qual. Confirma antes de decidir.</p>' +
+    '<div class="cards">' + (agentsOnly.map((b) => propCard(b).replace('<div class="grid">', failNote(b) + '<div class="grid">')).join("") || '<p class="muted">Nenhuma.</p>') + '</div>' +
+    (M ? '<h3>🛡️ Só as regras (' + rulesOnly.length + ')</h3><p class="muted small">Passam em todas as regras de compra, mas nenhum agente as quer hoje. Poucas e boas; há dias sem nenhuma.</p>' + rules(R.buy) +
+      '<div class="cards">' + (rulesOnly.map((r) => oppCard(r, "buy")).join("") || '<p class="muted">Nenhuma.</p>') + '</div>' : '') +
+    '<h2>🔴 A evitar / a vender</h2>' +
+    (P ? '<h3>Os agentes estão a vender (' + P.sells.length + ')</h3>' + table(["Ativo", "Quem vende", "Porquê", "Peso", "Score"], P.sells.map((x) =>
+      ['<b>' + esc(x.symbol) + '</b> <span class="muted">' + esc(x.name || "") + '</span>', x.agents.map((a) => esc(a.emoji + " " + a.name)).join(", "),
+       esc([...new Set(x.agents.map((a) => a.reason).filter(Boolean))].join(" · ")), fmtNum(x.support, 1), x.safety != null ? x.safety + "/100" : "—"]), [3]) : '') +
+    (M ? '<h3>Tendência quebrada (' + M.sell.length + ')</h3><p class="muted small">Ações dos agentes ou do ranking cuja tendência quebrou: quem tem, considerar vender ou apertar o stop.</p>' + rules(R.sell) +
+      '<div class="cards">' + (M.sell.map((r) => oppCard(r, "sell")).join("") || '<p class="muted">Nenhuma.</p>') + '</div>' +
+      '<h3>🟡 Atenção: não comprar agora (' + (M.watch || []).length + ')</h3><p class="muted small">Ações fortes com um motivo para esperar: resultados à porta, notícias negativas, perderam a média de 50 dias ou estão esticadas. Não são sinais de venda.</p>' + rules(R.watch) +
+      '<div class="cards">' + ((M.watch || []).map((r) => oppCard(r, "watch")).join("") || '<p class="muted">Nenhuma.</p>') + '</div>' : '') +
+    (P ? '<h2>📊 Placar das propostas</h2><p class="muted small">Cada proposta de compra é seguida: conta se a ação abriu até ao preço de entrada nas ' + P.method.fill_window +
+      ' sessões seguintes, e depois se tocou primeiro no stop ou no alvo; ao fim de ' + P.method.horizon + ' sessões fecha ao preço do dia.</p>' +
+      '<div class="grid">' + tile("Propostas", all.proposals ?? 0, (all.executed ?? 0) + " executadas · " + (all.open ?? 0) + " abertas") +
+      tile("Taxa de acerto", pctOrDash(all.win_rate), (all.targets ?? 0) + " alvos · " + (all.stops ?? 0) + " stops", cls((all.win_rate || 0) - 0.5)) +
+      tile("R médio", all.avg_r == null ? "—" : fmtNum(all.avg_r, 2) + " R", "ganho por unidade de risco", cls(all.avg_r)) +
+      tile("Retorno médio", all.avg_ret == null ? "—" : fmtPct(all.avg_ret), "por proposta fechada", cls(all.avg_ret)) + '</div>' +
+      '<p class="muted small"><b>As regras acrescentam alguma coisa?</b> As propostas que também passavam nas regras contra as que não passavam (contadas desde 06/11/2026).</p>' +
+      table(["Propostas", "Total", "Fechadas", "Acerto", "R médio", "Retorno médio"], [sbRow("✅ passavam nas regras", byRules.passa || {}), sbRow("🤖 só os agentes", byRules.falha || {})], [1, 2, 3, 4, 5]) +
+      table(["Confiança", "Total", "Fechadas", "Acerto", "R médio", "Retorno médio"], ["alta", "média", "baixa"].map((k) =>
+        sbRow(k + (k === "alta" ? " (≥40%)" : k === "média" ? " (20-40%)" : " (<20%)"), byBucket[k] || {})), [1, 2, 3, 4, 5]) +
+      '<details><summary>Últimas propostas e o que lhes aconteceu</summary>' + table(["Data", "Ativo", "Confiança", "Regras", "Estado", "Compra", "Saída", "Resultado"],
+        (sb.recent || []).map((e) => [esc(e.date), '<b>' + esc(e.symbol) + '</b>', fmtNum(e.confidence, 0) + "%", e.regras == null ? "—" : e.regras ? "✅" : "❌", esc(e.status),
+          e.fill != null ? fmtNum(e.fill) : "—", e.exit != null ? fmtNum(e.exit) : (e.last != null ? fmtNum(e.last) + " (aberta)" : "—"),
+          '<span class="' + cls(e.ret ?? e.ret_open) + '">' + (e.ret != null ? fmtPct(e.ret * 100) + (e.r != null ? " · " + fmtNum(e.r, 1) + " R" : "") : e.ret_open != null ? fmtPct(e.ret_open * 100) : "—") + '</span>']), [2, 5, 6, 7]) + '</details>' +
+      '<h2>⚖️ Peso de cada agente hoje</h2>' + table(["Agente", "Peso", "Porquê", "Historial"], P.weights.map((w) => [esc(w.emoji + " " + w.name), fmtNum(w.weight, 2),
+        esc(w.why.join(" · ") || "—"), w.stats && w.stats.trades ? pctOrDash(w.stats.win_rate) + " acerto em " + w.stats.trades + " vendas" : "—"]), [1]) +
+      '<details class="panel"><summary><b>Como se calcula o peso</b></summary><ul class="small">' + P.rules.map((r) => '<li>' + esc(r) + '</li>').join("") + '</ul></details>' : '') +
+    (M ? '<details class="panel"><summary><b>🛡️ Como se calcula o score de segurança (0-100)</b></summary><p class="small">Mede quão ordenada e suportada está a ação agora: tendência, volatilidade, distância ao máximo, liquidez, qualidade da empresa, resultados, notícias e mercado. ' +
+      'Não diz quanto vai subir. Níveis: ' + M.levels.map((l) => esc(l.name) + " ≥ " + l.from).join(" · ") + '.</p>' +
+      table(["Critério", "Máx.", "Regra"], M.criteria.map((c) => [esc(c.label), c.max, esc(c.rule)]), [1]) + '</details>' +
+      ((M.sectors || []).length ? '<details class="panel"><summary><b>🏭 Saúde dos setores</b> <span class="muted small">(ETF de cada setor)</span></summary>' +
+        table(["Setor", "ETF", "Face à média de 200 dias", "Força vs S&P 500 (3 meses)", "Ações em tendência de alta"], M.sectors.map((r) => [esc(r.sector), esc(r.etf),
+          r.trend == null ? "—" : '<span class="' + cls(r.trend) + '">' + fmtPct(r.trend) + '</span>', r.rs == null ? "—" : '<span class="' + cls(r.rs) + '">' + fmtPct(r.rs) + '</span>',
+          r.stage2 == null ? "—" : fmtNum(r.stage2, 0) + "%"]), [2, 3, 4]) +
+        '<p class="muted small">Só se propõem compras em setores acima da média de 200 dias.</p></details>' : '') : '');
+  const cap = $("pp-cap"), risk = $("pp-risk");
+  cap.value = store.get("capital", 10000); risk.value = store.get("risk", 1);
+  const drawSizes = () => {
+    store.set("capital", +cap.value); store.set("risk", +risk.value);
+    document.querySelectorAll(".sizing").forEach((el) => {
+      const b = buys.find((x) => x.symbol === el.dataset.sym), z = b && sizing(b, +cap.value, +risk.value);
+      el.innerHTML = z ? '🧮 Para ti: <b>' + fmtNum(z.qty, 3) + ' ações</b> ≈ ' + fmtEur(z.value) + ', arriscando ' + fmtEur(z.risk) + (z.capped ? ' (limitado a 20% do capital)' : '') : "";
+    });
+  };
+  [cap, risk].forEach((el) => el.addEventListener("input", drawSizes));
+  [cap, risk].forEach((el) => el.addEventListener("change", () => {  // signed in: the account keeps them too
+    if (+cap.value >= 0 && +risk.value > 0 && +risk.value <= 5) savePrefs({ capital: +cap.value, risk: +risk.value }).catch(() => {});
+  }));
+  drawSizes();
 })();
 
 // ---- race ----
@@ -1773,7 +1775,7 @@ async function savePrefs(fields) {
     if (mk.length) html += '<div class="panel"><h3>🛡️ Score de segurança</h3>' + mk.map(([r, kind]) =>
       '<p><span class="score ' + esc((r.level || "").split(" ")[0]) + '">🛡️ ' + r.safety + '/100 · ' + esc(r.level) + '</span> ' + (kind === "buy" ? "🟢 oportunidade de compra" : kind === "sell" ? "🔴 sinais de venda" : "🟡 atenção: não comprar agora") +
       ' · ' + fmtNum(r.price) + ' · 3 meses <span class="' + cls(r.ret_3m) + '">' + fmtPct(r.ret_3m) + '</span></p><p>' + (kind === "buy" ? r.reasons : r.warnings).map((x) => '<span class="tag">' + esc(x) + '</span>').join("") + '</p>' +
-      (kind === "buy" && r.stop ? '<p class="small">🛑 Stop sugerido ' + fmtNum(r.stop) + '</p>' : '')).join("") + '<p class="small"><a href="#oportunidades" data-go="oportunidades">Ver em Oportunidades →</a></p></div>';
+      (kind === "buy" && r.stop ? '<p class="small">🛑 Stop sugerido ' + fmtNum(r.stop) + '</p>' : '')).join("") + '<p class="small"><a href="#propostas" data-go="propostas">Ver em Propostas →</a></p></div>';
     if (pb.length || ps.length) html += '<div class="panel"><h3>🧠 Propostas dos agentes</h3>' + pb.map((b) => '<p>🟢 <b>Comprar</b> · confiança ' + fmtNum(b.confidence, 0) + '% · entrada até ' + fmtNum(b.plan.entry_max) +
       ' · stop ' + fmtNum(b.plan.stop) + ' · alvo ' + fmtNum(b.plan.target) + '</p><p>' + b.agents.map((a) => '<span class="tag">' + esc(a.emoji + " " + a.name) + '</span>').join("") + '</p>').join("") +
       ps.map((x) => '<p>🔴 <b>A vender</b>: ' + x.agents.map((a) => esc(a.emoji + " " + a.name)).join(", ") + '</p>').join("") + '<p class="small"><a href="#propostas" data-go="propostas">Ver em Propostas →</a></p></div>';
@@ -1818,7 +1820,7 @@ async function savePrefs(fields) {
       when: "Em cada ronda, " + d + ", de 10 em 10 min das 08:05 às 20:55: cada agente decide com os preços do momento nas bolsas abertas (Europa 08:00–16:30, EUA 14:30–21:00) e a ronda-sombra do motor Rust repete-a. Às 07:30 o fecho diário com as sessões completas da véspera. Ao fim de semana não muda." },
     { k: "📰 Notícias", iso: NEWS && NEWS.updated, max: 8 + weekendSlack, wf: "news.yml", next: sched("noticias"),
       when: D + " às 12:00, 16:00 e 20:30: o Claude lê as notícias das ações seguidas, os 8-K da SEC e o risco geopolítico; os agentes usam-nas para vetar compras." },
-    { k: "🎯 Oportunidades e contexto", iso: when(MARKET), max: 30 + weekendSlack, wf: "agents.yml", title: /daily/, next: sched("agentes"),
+    { k: "🛡️ Regras de compra e contexto", iso: when(MARKET), max: 30 + weekendSlack, wf: "agents.yml", title: /daily/, next: sched("agentes"),
       when: "Na liga diária (" + d + ", 07:30), com os fechos da véspera: VIX, crédito, juros, dólar, petróleo, ouro, setores, VCP e rankings." },
     { k: "🧠 Propostas", iso: when(PROPOSALS), max: 30 + weekendSlack, wf: "agents.yml", title: /daily/, next: sched("agentes"),
       when: "Na liga diária (07:30): o que os agentes querem comprar ou vender na abertura, com entrada, stop, alvo e score." },
@@ -1887,7 +1889,7 @@ async function savePrefs(fields) {
   if (!$("guide-open")) return;
   const steps = [
     ["🏠 Hoje", "O resumo do dia: o mercado, as melhores propostas dos agentes e a tua carteira. Começa sempre aqui."],
-    ["🧠 Propostas e 🎯 Oportunidades", "O que os agentes (estratégias simuladas, treinadas em 20 anos de mercado) querem comprar ou vender, com plano (entrada, stop, alvo) e um score de segurança explicado. São ideias para estudar, não ordens."],
+    ["🧠 Propostas", "O que os agentes (estratégias simuladas, treinadas em 20 anos de mercado) querem comprar ou vender, com plano (entrada, stop, alvo) e um score de segurança explicado. São ideias para estudar, não ordens."],
     ["👤 O teu perfil e a carteira", "Carrega no teu nome (canto superior direito): escolhes como os outros membros te veem e tens lá a tua carteira. Importa o histórico da XTB e acompanha tudo em tempo quase real. Podes pedir uma análise ao Claude. Usa a 🔎 pesquisa para ver tudo sobre um ticker."],
   ];
   let i = 0;
