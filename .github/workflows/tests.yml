@@ -4,14 +4,13 @@ name: Testes
 # The skills' tests under skills/ are upstream's and some need files that are not copied here.
 # A commit of main that passes moves the branch `estavel` to it: the agents (agents.yml, started by the Worker on that
 # branch) only ever run tested code, workflow and scripts alike. Daily too, for changes of the private recipe.
+# Scheduled by the Cloudflare Worker (worker.js): GitHub's own cron ran hours late or not at all.
 on:
   pull_request:
   push:
     branches: [main]
     paths: ["engine/**", "scripts/**", "tests/**", "data/**", "pyproject.toml", "uv.lock", ".github/workflows/agents.yml",
             ".github/workflows/tests.yml"]
-  schedule:
-    - cron: "13 5 * * *"
   workflow_dispatch:
 
 permissions:

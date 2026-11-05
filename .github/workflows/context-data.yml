@@ -5,9 +5,8 @@ name: Dados de contexto e fundamentos
 # data/fundamentals/ with the companies' SEC filings (EDGAR, point in time) and data/earnings/ with their
 # past earnings release dates (8-K item 2.02), for the backtest's earnings rule. The pre-training and the
 # daily runs read these files. Weekly (Sunday, 03:17 UTC), before the Sunday re-training, or by hand.
+# Scheduled by the Cloudflare Worker (worker.js): GitHub's own cron ran hours late or not at all.
 on:
-  schedule:
-    - cron: "17 3 * * 0"
   workflow_dispatch:
     inputs:
       so_fundamentos:

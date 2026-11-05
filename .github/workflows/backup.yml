@@ -5,9 +5,8 @@ run-name: "Cópia de segurança das carteiras"
 # is public, so artifacts are too: the copy is always encrypted with BACKUP_KEY, and the job
 # fails without that secret. The Worker also keeps 14 daily copies inside D1.
 # Restore: download the artifact, decrypt, gunzip.
+# Scheduled by the Cloudflare Worker (worker.js): GitHub's own cron ran hours late or not at all.
 on:
-  schedule:
-    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:

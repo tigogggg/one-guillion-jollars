@@ -52,6 +52,12 @@ const DEFAULT_SCHEDULE = {
   semanal: { dia: "sab", hora: "10:00" },
   treino: "06:00", // Sundays, after the weekly market data (context-data.yml): re-train the agents on the last 20 years
   visao: "05:41", // Mondays and Thursdays: the Visionário's 18-month view (GitHub's own cron skipped runs)
+  // GitHub's own cron ran these hours late or not at all (Nov 2026): the Worker starts them too
+  copia: "03:17", // every day: encrypted off-site copy of the members' data
+  testes: "05:13", // every day: the tests, which also promote main to the branch estavel the agents run
+  contexto: "03:17", // Sundays, before the re-training: the slow market context, SEC fundamentals, earnings dates
+  arquivo: "02:23", // the 1st: the past month's intraday archive becomes one encrypted file
+  renovacao: "06:37", // the 1st, before the daily league: the league's monthly renewal (jury)
 };
 const VISION_DAYS = ["seg", "qui"];
 const DAYS = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
@@ -67,6 +73,11 @@ const WORKFLOWS = {
   semanal: "weekly-summary.yml",
   treino: "pretrain.yml",
   visao: "visao.yml",
+  copia: "backup.yml",
+  testes: "tests.yml",
+  contexto: "context-data.yml",
+  arquivo: "arquivo-mensal.yml",
+  renovacao: "juri.yml",
 };
 // The agents' rounds: "HH:MM-HH:MM/N" (every N minutes from the first time to the last) or a list of times.
 function roundTimes(spec) {
@@ -85,7 +96,7 @@ function roundLabel(spec) {
   const every = Math.max(+m[3], 5);
   return `das ${m[1]} às ${m[2]}, de ${every} em ${every} minutos`;
 }
-const JOB_INPUTS = { ronda: { mode: "stops" } };
+const JOB_INPUTS = { ronda: { mode: "stops" }, renovacao: { renovar: "true", forcar: "true", backtest: "true" } };
 const LATE_LIMIT_MIN = 20; // still start a job this many minutes after its time (missed cron ticks)
 const MAX_ALERT_TIMES = 6;
 const MAX_FOLLOWS = 20;
@@ -329,6 +340,13 @@ async function runSchedule(env, ctx, now) {
     if (now.day === schedule.semanal.dia) jobs.push(["semanal", schedule.semanal.hora]);
     if (now.day === "dom") jobs.push(["treino", schedule.treino]);
     if (VISION_DAYS.includes(now.day)) jobs.push(["visao", schedule.visao]);
+    jobs.push(["copia", schedule.copia]);
+    jobs.push(["testes", schedule.testes]);
+    if (now.day === "dom") jobs.push(["contexto", schedule.contexto]);
+    if (now.date.endsWith("-01")) {
+      jobs.push(["arquivo", schedule.arquivo]);
+      jobs.push(["renovacao", schedule.renovacao]);
+    }
 
     for (const [job, time] of jobs) {
       const late = now.minutes - toMinutes(time);
@@ -421,6 +439,7 @@ async function scheduleCommand(env, sub) {
     `🔧 Verificação do estado do bot: **${schedule.estado}** (dias úteis, no canal 🔧-estado)`,
     `🧠 Re-treino dos agentes (últimos 20 anos): **ao domingo às ${schedule.treino}**`,
     `🔭 Visão a 18 meses (Visionário): **segunda e quinta às ${schedule.visao}** (e quando há um choque grave)`,
+    `🗂️ Dados de contexto: **domingo às ${schedule.contexto}** · renovação da liga: **dia 1 às ${schedule.renovacao}**`,
     "-# As análises arrancam até 5 minutos depois da hora marcada e demoram alguns minutos a chegar.",
   ].join("\n");
 }

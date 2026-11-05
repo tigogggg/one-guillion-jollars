@@ -6,9 +6,8 @@ run-name: "Arquivo mensal ${{ inputs.mes || 'do mês passado' }}"
 # days only) become one encrypted file, a release asset of this repo (assets do not count in a repo's size), and
 # the month leaves the branch, which starts over without history. The repo is public: the file is always encrypted
 # with BACKUP_KEY. Getting a month back: see scripts/market_archive.py.
+# Scheduled by the Cloudflare Worker (worker.js): GitHub's own cron ran hours late or not at all.
 on:
-  schedule:
-    - cron: "23 2 1 * *"
   workflow_dispatch:
     inputs:
       mes:

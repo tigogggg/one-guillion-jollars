@@ -4,9 +4,8 @@ name: Júri de domingo
 # Six specialist jurors grade the pre-trained agents; the top 5 form the Super Agente, the last leaves the league, a year
 # on the bench switches a strategy off (scripts/jury.py). Dispatched after the last profile's pre-training (Sundays) or
 # by hand. Decisions at most once a week. This repo is public: results go to the private repo and Discord, never here.
+# The 1st of each month the Cloudflare Worker starts it with renovar (GitHub's own cron was unreliable).
 on:
-  schedule:
-    - cron: "37 6 1 * *"  # the 1st of each month, before the daily round: the league's renewal
   workflow_dispatch:
     inputs:
       renovar:

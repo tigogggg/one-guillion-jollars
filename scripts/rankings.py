@@ -88,7 +88,7 @@ UCITS_ETFS = [
     ("2B76.DE", "iShares Automação & Robótica"),
     ("USPY.DE", "L&G Cibersegurança"),
     ("DFEN.DE", "VanEck Defesa"),
-    ("NUCL.DE", "VanEck Urânio e Nuclear"),
+    ("NUKL.DE", "VanEck Urânio e Nuclear"),
     ("IQQH.DE", "iShares Energia Limpa Global"),
     ("IS3Q.DE", "iShares MSCI World Quality"),
     ("IS3R.DE", "iShares MSCI World Momentum"),
