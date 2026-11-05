@@ -313,11 +313,11 @@ address (Workers rate limiting: sign-in 20/min, portfolio changes 60/min, pages
 sessions on every device, export the operations (CSV) or everything (JSON) and
 delete the portfolio with everything linked to it.
 
-**Portal extras.** A search box finds everything the portal knows about a
+**Portal extras.** A search box (in the top bar, under the title) finds everything the portal knows about a
 ticker (safety score, the agents' proposals and holdings, results date, news)
 and the member's own position when their portfolio was opened on that device;
-🩺 Estado shows when each part was last updated; a 3-step guide opens on the
-first visit (📖 Guia reopens it). Scripts and styles are served once from
+🩺 Estado shows when each part was last updated; the footer says when the league data is from
+and that it is a simulation. Scripts and styles are served once from
 `/static/<name>-<hash>` and cached for a year, so pages are small.
 
 **Opportunities.** Every stock lands in at most one list: 🔴 Vender (the

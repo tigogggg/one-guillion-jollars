@@ -292,9 +292,9 @@ export function memberFace(me, big = false) {
 }
 
 // The site's top bar, on the portal and the profile: the title and the logo go home, the name opens /perfil.
-export function siteTopbar(me, home = "/") {
+export function siteTopbar(me, home = "/", under = "") {
   return `<div class="topbar">
-  <h1><a class="home" href="${esc(home)}">One Guillion Jollars</a></h1>
+  <div class="brand"><h1><a class="home" href="${esc(home)}">One Guillion Jollars</a></h1>${under}</div>
   <a class="home logo-link" href="${esc(home)}" aria-label="Página principal"><img class="logo" src="/logo-256.png?v=1" alt="" width="108" height="108"></a>
   <div class="userbar">${me
     ? `<a class="me" href="/perfil" title="O meu perfil">${memberFace(me)}<b class="me-name">${esc(me.name)}</b></a><a class="btn alt" href="/sair">SAIR</a>`
@@ -316,15 +316,12 @@ export function chartPage(data, upcoming, newer, extras = {}) {
   const body = `
 ${banner}
 <header>
-  ${portal ? siteTopbar(me, extras.home) : `<div class="topbar"><h1>${esc(data.title)}</h1></div>`}
-  <p class="muted">${esc(portal ? data.title + " · " + (data.subtitle || "") : data.subtitle || "")}</p>
-  <p class="muted small">Dados da liga de <span id="updated"></span> (hora de Lisboa) · simulação com dinheiro fictício e preços reais · ferramenta educativa, não é recomendação de compra</p>
+  ${portal ? siteTopbar(me, extras.home, `<form id="search" class="search" role="search" autocomplete="off">
+    <input id="q" type="search" list="q-list" placeholder="Procurar um ticker (ex.: NVDA, VUSA)" aria-label="Procurar um ticker: notícias, score, agentes e a tua posição" title="Notícias, score, agentes e a tua posição">
+    <datalist id="q-list"></datalist><button class="search-go" type="submit" aria-label="Procurar" title="Procurar">🔎</button>
+  </form>`) : `<div class="topbar"><h1>${esc(data.title)}</h1></div>
+  <p class="muted">${esc(data.subtitle || "")}</p>`}
 </header>
-${portal ? `<form id="search" class="search" role="search" autocomplete="off">
-  <input id="q" type="search" list="q-list" placeholder="🔎 Procurar um ticker: notícias, score, agentes e a tua posição (ex.: NVDA, VUSA)" aria-label="Procurar ticker">
-  <datalist id="q-list"></datalist><button class="btn" type="submit">PROCURAR</button>
-  <button class="btn alt" type="button" id="guide-open" title="Guia rápido">📖 GUIA</button>
-</form>` : ""}
 <nav class="tabs" id="tabs">${tabs.map(([k, label], i) => `<button class="tab${i ? "" : " on"}" data-tab="${k}">${label}</button>`).join("")}</nav>
 ${portal ? `<section data-tab="hoje"><div id="today"></div></section>
 <section data-tab="dashboard" hidden><div id="dash" class="dash"></div></section>` : ""}
@@ -379,6 +376,11 @@ ${portal ? `<section data-tab="decisao" hidden><div id="decision"></div></sectio
 </section>
 ${portal ? `<section data-tab="ajuda" hidden><div id="glossary"></div></section>` : ""}
 ${portal ? `<section data-tab="pesquisa" hidden><div id="q-out"></div></section>` : ""}
+<footer class="site-foot">
+  <p>📊 Dados da liga de <span id="updated"></span> (hora de Lisboa)</p>
+  <p class="muted">Simulação com dinheiro fictício e preços reais · ferramenta educativa, não é recomendação de compra</p>
+  ${portal ? '<p class="muted small">One Guillion Jollars</p>' : ""}
+</footer>
 <script>
 const DATA = ${safeJson(data)};
 const PORTAL_VERSION = ${safeJson(extras.version || null)};
@@ -447,7 +449,8 @@ a.home { color:inherit; text-decoration:none; }
   .totals-col { display:grid; grid-template-columns:1fr 1fr; order:-1; }
 }
 .topbar .userbar { justify-self:end; }
-@media (max-width:640px) { .topbar { grid-template-columns:1fr auto; } .topbar .logo { width:3.5em; height:3.5em; } .topbar .userbar { grid-column:1 / -1; justify-self:start; } }
+@media (max-width:640px) { .topbar { grid-template-columns:1fr auto; } .topbar .logo { width:3.5em; height:3.5em; } .topbar .userbar { grid-column:1 / -1; justify-self:start; }
+  .topbar .brand { display:contents; } .topbar .search { grid-column:1 / -1; grid-row:3; width:100%; } }
 h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem !important; line-height:1.6; }
 .marquee { overflow:hidden; white-space:nowrap; border:2px solid var(--accent); border-radius:6px; background:#12002a; box-shadow:0 0 12px rgba(255,46,136,.5); margin:8px 0; }
 .marquee span { display:inline-block; padding:8px 0 8px 100%; font-family:var(--pixel); font-size:.75rem; color:var(--gold); animation:scroll 14s linear infinite; }
@@ -567,11 +570,17 @@ details.chap[open] > summary { color:var(--neon); }
 .userbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; font-size:.9rem; }
 .userbar .btn { text-decoration:none; display:inline-block; }
 body.embed .tabs { position:static !important; } body.embed main { padding-top:4px; padding-bottom:12px; } body.embed .embed-hide { display:none !important; }
-.search { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 10px; } .search input { flex:1; min-width:220px; background:var(--card); color:var(--fg); border:2px solid var(--neon); border-radius:6px; padding:9px 11px; font:inherit; }
+.brand { display:flex; flex-direction:column; gap:10px; min-width:0; }
+.search { position:relative; display:flex; width:min(100%, 340px); margin:0; }
+.search input { flex:1; min-width:0; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:999px; padding:7px 40px 7px 14px; font:inherit; font-size:.88rem; transition:border-color .15s, box-shadow .15s; }
+.search input:focus { outline:none; border-color:var(--neon); box-shadow:0 0 8px rgba(0,229,255,.45); }
+.search input::-webkit-search-cancel-button { display:none; }
+.search-go { position:absolute; right:4px; top:50%; transform:translateY(-50%); width:30px; height:30px; border:0; border-radius:50%; background:transparent; color:var(--fg); cursor:pointer; font-size:.95rem; }
+.search-go:hover { background:var(--line); }
+.site-foot { margin:40px 0 0; padding:18px 0 6px; border-top:1px solid var(--line); text-align:center; font-size:.85rem; }
+.site-foot p { margin:4px 0; }
 .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; } .dot.ok { background:var(--up); box-shadow:0 0 6px var(--up); } .dot.old { background:var(--gold); } .dot.bad { background:var(--down); } .dot.run { background:var(--neon); box-shadow:0 0 6px var(--neon); }
 td .wrap { display:block; white-space:normal; min-width:280px; max-width:560px; line-height:1.35; }
-#guide { position:fixed; inset:0; z-index:80; background:rgba(5,3,20,.78); display:flex; align-items:center; justify-content:center; padding:16px; }
-#guide[hidden] { display:none; } #guide .panel { max-width:520px; width:100%; } #guide .steps { font-family:var(--pixel); font-size:.55rem; color:var(--muted); }
 .alert { border-radius:6px; padding:6px 10px; font-size:.85rem; margin:6px 0; } .alert.down { background:rgba(255,77,109,.14); border:1px solid var(--down); } .alert.warn { background:rgba(255,225,77,.10); border:1px solid var(--gold); }
 .opp.sellcard { border-color:rgba(255,77,109,.55); } .opp.watchcard { border-color:rgba(255,225,77,.45); }
 .row-btns { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
@@ -2058,32 +2067,6 @@ async function savePrefs(fields) {
   draw();
   setInterval(() => { if (!$("status").closest("section").hidden) tick(); }, 1000);
   setInterval(() => { if (!$("status").closest("section").hidden) draw(); }, 60000);
-})();
-
-// ---- quick guide on the first visit ----
-(function guide() {
-  if (!$("guide-open")) return;
-  const steps = [
-    ["🏠 Hoje", "O resumo do dia: o mercado, as melhores propostas dos agentes e a tua carteira. Começa sempre aqui."],
-    ["📊 Dashboard", "Tudo num relance: o S&P 500, a tua carteira hoje, o sentimento do mercado e o petróleo; a carteira, a liga, o pré-treino (20, 10, 5 anos…), as notícias e as propostas."],
-    ["🧠 Propostas", "O que os agentes (estratégias simuladas, treinadas em 20 anos de mercado) querem comprar ou vender, com plano (entrada, stop, alvo) e um score de segurança explicado. São ideias para estudar, não ordens."],
-    ["👤 O teu perfil e a carteira", "Carrega no teu nome (canto superior direito): escolhes como os outros membros te veem e tens lá a tua carteira. Importa o histórico da XTB e acompanha tudo em tempo quase real. Podes pedir uma análise ao Claude. Usa a 🔎 pesquisa para ver tudo sobre um ticker."],
-  ];
-  let i = 0;
-  const box = document.body.appendChild(Object.assign(document.createElement("div"), { id: "guide", hidden: true }));
-  const draw = () => {
-    box.innerHTML = '<div class="panel"><p class="steps">PASSO ' + (i + 1) + ' DE ' + steps.length + '</p><h2>' + esc(steps[i][0]) + '</h2><p>' + esc(steps[i][1]) + '</p>' +
-      '<p class="row-btns"><button class="btn" id="g-next">' + (i < steps.length - 1 ? "SEGUINTE" : "COMEÇAR") + '</button><button class="btn alt" id="g-skip">SALTAR</button></p></div>';
-    $("g-next").onclick = () => { if (i < steps.length - 1) { i++; draw(); } else close(); };
-    $("g-skip").onclick = close;
-  };
-  const close = () => { box.hidden = true; try { localStorage.setItem("guia-visto", "1"); } catch (e) {} };
-  const open = () => { i = 0; draw(); box.hidden = false; };
-  $("guide-open").onclick = open;
-  box.addEventListener("click", (e) => { if (e.target === box) close(); });
-  let seen = false;
-  try { seen = localStorage.getItem("guia-visto") === "1"; } catch (e) { seen = true; }
-  if (!seen) open();
 })();
 `;
 STATIC_PATHS.extra = staticAsset("portal-extra", EXTRA, "js");
