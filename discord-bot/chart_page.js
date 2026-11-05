@@ -6,6 +6,8 @@
 // detailed card per agent (holdings, orders, trades, stats, strategy) and counts
 // down to the next scheduled runs, from the same schedule /horario edits.
 
+import { I18N_JS } from "./i18n.js";
+
 const TIMEZONE = "Europe/Lisbon";
 const PLOTLY = "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js";
 const DAYS = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
@@ -245,6 +247,7 @@ export function page(title, body, head = "", opts = {}) {
 <title>${esc(title)}</title>
 <link rel="icon" type="image/png" href="/favicon.png?v=2">
 <link rel="stylesheet" href="${STATIC_PATHS.css}">
+<script src="${STATIC_PATHS.i18n}"></script>
 ${head}
 </head>
 <body${opts.embed ? ' class="embed"' : ""}><main>${body}</main></body>
@@ -514,6 +517,10 @@ details.chap > summary { cursor:pointer; padding:8px 2px; font-weight:700; font-
 details.chap[open] > summary { color:var(--neon); }
 @media (max-width:820px) { .agent-pick { grid-template-columns:1fr; } .agent-list { position:static; max-height:42vh; } }
 .panel { background:var(--card); border:2px solid var(--neon); box-shadow:0 0 12px rgba(0,229,255,.25); border-radius:10px; padding:14px; margin-top:12px; }
+.lang-pick { display:inline-flex; border:1px solid var(--line, #2e2763); border-radius:6px; overflow:hidden; }
+.lang-pick button { background:transparent; color:inherit; border:0; padding:5px 8px; font:inherit; font-size:.75rem; cursor:pointer; opacity:.65; }
+.lang-pick button.on { background:var(--accent, #ff2e88); color:#fff; opacity:1; }
+.lang-pick.floating { position:fixed; top:10px; right:10px; z-index:60; background:#17123a; }
 .userbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; font-size:.9rem; }
 .userbar .btn { text-decoration:none; display:inline-block; }
 body.embed .tabs { position:static !important; } body.embed main { padding-top:4px; padding-bottom:12px; } body.embed .embed-hide { display:none !important; }
@@ -1666,6 +1673,7 @@ if (PRETRAIN && $("pt-race")) {
 `;
 
 STATIC_PATHS.css = staticAsset("style", CSS, "css");
+STATIC_PATHS.i18n = staticAsset("i18n", I18N_JS, "js");
 STATIC_PATHS.portal = staticAsset("portal", CLIENT, "js");
 
 // Search, status and guide: a separate script, so they work even if a section above fails on odd data.
