@@ -2677,7 +2677,7 @@ def react(cfg: dict, port: dict, mkt: Market, params: dict, now: datetime, live:
 
 
 def reactive_round(config: dict, state: dict, mkt: Market, now: datetime,
-                   live: bool = True) -> tuple[list[tuple[dict, dict]], list[str]]:
+                   live: bool = True, skip: set[str] | frozenset = frozenset()) -> tuple[list[tuple[dict, dict]], list[str]]:
     """An intraday round (every 30 minutes during the sessions), with the market up to now (load_market(live=True)).
     Every agent: pending orders whose market opened today fill at that open, stops and targets reached so far are
     executed. Reactive agents then decide again with the prices of this moment (react). Daily twins only do the
@@ -2692,7 +2692,7 @@ def reactive_round(config: dict, state: dict, mkt: Market, now: datetime,
             mkt.league[cfg["id"]] = (cfg, state["agents"][cfg["id"]])
     for cfg in order:
         port = state["agents"].get(cfg["id"])
-        if not port:
+        if not port or cfg["id"] in skip:  # skip: already done by the Rust engine (engine.live_round)
             continue
         params = port.setdefault("params", dict(cfg["params"]))
         cancelled = list(port.get("cancelled", []))
@@ -2758,16 +2758,38 @@ def main() -> int:
                             for s, d in json.loads(earnings_cache.read_text()).items()}
         except (OSError, ValueError):
             pass
-        shadow_before = json.loads(json.dumps(state, default=str)) if os.environ.get("OGJ_SHADOW", "1") != "0" else None
-        moves, avoided = reactive_round(config, state, mkt, now)
-        if shadow_before is not None:  # phase 4b: the same round in the Rust engine, compared (never changes the agents)
-            try:
-                import engine
+        # Phase 4c: the Rust engine trades every agent whose strategy it runs; Python the rest (live-only and meta
+        # strategies, which read the others' portfolios: after them). OGJ_LIVE_ENGINE=python goes back to Python.
+        import engine
 
-                r = engine.shadow_round(config, shadow_before, state, mkt, now)
-                print(f"Ronda-sombra (motor Rust): {r}", flush=True)
+        snapshot = json.loads(json.dumps(state, default=str))
+        rust_ids, moves = set(), []
+        if os.environ.get("OGJ_LIVE_ENGINE", "rust") != "python":
+            try:
+                rust_ids, moves = engine.live_round(config, state, mkt, now)
+            except Exception as e:  # noqa: BLE001 - the round goes on in Python
+                print(f"WARN: ronda no motor Rust falhou, a ronda segue em Python: {e!r}", file=sys.stderr)
+                state.clear()
+                state.update(json.loads(json.dumps(snapshot)))
+                rust_ids, moves = set(), []
+        from zoneinfo import ZoneInfo
+
+        clock = now.astimezone(ZoneInfo("Europe/Lisbon")).strftime("%H:%M")
+        for _, t in moves:
+            t["hora"] = clock
+        py_moves, avoided = reactive_round(config, state, mkt, now, skip=rust_ids)
+        moves += py_moves
+        if rust_ids and os.environ.get("OGJ_SHADOW", "1") != "0":  # the Python reference in the shadow, compared
+            try:
+                ref = json.loads(json.dumps(snapshot))
+                only = {c["id"] for c in config["agents"]} - rust_ids
+                reactive_round(config, ref, mkt, now, skip=only)
+                print(f"Ronda-sombra (Python): {engine.compare_round(rust_ids, ref, state, mkt.as_of)}", flush=True)
             except Exception as e:  # noqa: BLE001
                 print(f"WARN: ronda-sombra: {e!r}", file=sys.stderr)
+            for cfg in active_agents(config):  # the shadow registered its copies: the real portfolios again
+                if cfg["id"] in state["agents"]:
+                    mkt.league[cfg["id"]] = (cfg, state["agents"][cfg["id"]])
         try:
             PRICE_CACHE.mkdir(parents=True, exist_ok=True)
             earnings_cache.write_text(json.dumps({s: (d.isoformat() if d else None) for s, d in mkt.earnings.items()}))

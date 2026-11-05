@@ -48,7 +48,12 @@ scripts/pretrain.py ──► scripts/engine.py ──► ogj_engine (Rust: engi
      the private repo (`agents/sombra/<day>.jsonl`). The test replays a round with real-looking portfolios (reactivity
      levels, a daily twin, news veto, VCP list, earnings) with no difference. Goal: a week of real rounds without
      differences. OGJ_SHADOW=0 turns it off.
-   - **4c — switch:** the rounds trade with the engine; the Python copy of the engine is deleted.
+   - **4c — switch (Nov 2026, done for the rounds):** the rounds trade with the engine (`engine.live_round`, written
+     back to the state by `engine.apply_live`) for every strategy it runs; Python does the live-only and meta strategies
+     after them, and replays the engine's agents in the shadow from the same state (`engine.compare_round`, differences in
+     `agents/sombra/<day>.jsonl`). On an engine error the round falls back to Python; `OGJ_LIVE_ENGINE=python` forces it.
+     Still Python: the daily run (`run_day`: daily twins, frozen candidates, lifecycle) and the live-only strategies; the
+     Python day loop stays as the tests' reference until those move too.
 
 ## Insights (signals)
 

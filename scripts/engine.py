@@ -425,6 +425,116 @@ def _python_view(port: dict, ix: dict[str, int]) -> dict:
     }
 
 
+def _iso(n: int | None) -> str | None:
+    return None if n is None else from_day(n).isoformat()
+
+
+def _round_data(mkt, ports: list[dict], now):
+    """The round's symbols, their index and the engine's data for a market with today's session under way."""
+    import copy
+
+    held = {s for p in ports for s in list(p["positions"]) + [o["symbol"] for o in p["pending"]]}
+    m = copy.copy(mkt)
+    symbols = sorted(set(m.stocks) | set(m.etfs) | held | {s for s, df in (m.hist or {}).items() if df is not None and len(df)})
+    ix = {s: i for i, s in enumerate(symbols)}
+    part_open = np.full((1, len(symbols)), np.nan)
+    part_low = np.full((1, len(symbols)), np.nan)
+    for s, i in ix.items():
+        df = m.hist.get(s)
+        if df is not None and len(df) and df.index[-1].date() == m.as_of:
+            part_open[0, i], part_low[0, i] = float(df["Open"].iloc[-1]), float(df["Low"].iloc[-1])
+    data = build([m], symbols=symbols, slots={"partial": [True], "part_open": part_open, "part_low": part_low, "now": [now]})
+    return symbols, ix, data
+
+
+def apply_live(port: dict, rust: dict, trades: list, symbols: list[str]) -> list[dict]:
+    """Write the engine's round back into the live portfolio (the fields it trades with), keeping what only Python
+    keeps (a position's or an order's other fields, an order's justification); returns the round's trades as the
+    Python round records them (agents.buy / agents.sell)."""
+    old_pos, old_pend = port["positions"], port["pending"]
+    port["cash"] = rust["cash"]
+    positions = {}
+    for s, qty, entry, entry_date, cost, stop, tp, checked in rust["positions"]:
+        sym = symbols[s]
+        p = dict(old_pos.get(sym) or {})
+        p.update(qty=qty, entry=entry, entry_date=_iso(entry_date), cost_eur=cost, stop=stop, tp=tp, checked=_iso(checked))
+        positions[sym] = p
+    port["positions"] = positions
+    olds = {(o["side"], o["symbol"], o.get("created")): o for o in old_pend}
+    pending = []
+    for buy, s, eur_, stop, tp, fraction, reason, ref, gap_max, created in rust["pending"]:
+        side, sym, made = ("buy" if buy else "sell"), symbols[s], _iso(created)
+        o = dict(olds.get((side, sym, made)) or {})
+        o.update(side=side, symbol=sym, reason=reason, fraction=fraction, created=made)
+        if buy:
+            o.update(eur=eur_, stop=stop, tp=tp, ref=ref, gap_max=gap_max)
+        pending.append(o)
+    port["pending"] = pending
+    port["realized"] = {str(y): round(g, 2) for y, g in rust["realized"]}
+    port["taxed"] = [str(y) for y in rust["taxed"]]
+    port["last_rebalance"] = _iso(rust["last_rebalance"])
+    port["brake_until"], port["brake_peak"] = _iso(rust["brake_until"]), rust["brake_peak"]
+    done = []
+    for day, side, s, qty, price, eur_, pnl, reason in trades:
+        if s is None or side not in (0, 1):  # nothing else is traded in a round
+            continue
+        sym, on = symbols[s], _iso(day)
+        if side == 0:
+            t = {"date": on, "side": "compra", "symbol": sym, "qty": round(qty, 6), "price": round(price, 4),
+                 "eur": round(eur_, 2), "pnl_eur": 0.0, "reason": reason}
+            ctx = next((o.get("ctx") for o in old_pend if o["side"] == "buy" and o["symbol"] == sym and o.get("ctx")), None)
+        else:
+            cost = eur_ - pnl
+            entry_date = (old_pos.get(sym) or {}).get("entry_date")
+            t = {"date": on, "side": "venda", "symbol": sym, "qty": round(qty, 6), "price": round(price, 4),
+                 "eur": round(eur_, 2), "pnl_eur": round(pnl, 2), "reason": reason,
+                 "ret": round(eur_ / cost - 1, 4) if cost else 0.0,
+                 "held": (from_day(day) - date.fromisoformat(entry_date)).days if entry_date else None}
+            ctx = None
+        if ctx:
+            t["ctx"] = ctx
+        done.append(t)
+    port["trades"] = (port.get("trades", []) + done)[-agents.TRADES_KEPT:]
+    return done
+
+
+def live_round(config: dict, state: dict, mkt, now) -> tuple[set[str], list[tuple[dict, dict]]]:
+    """Phase 4c: the round of every agent whose strategy the engine runs, in the engine, written back to the state.
+    Returns the agents it did (Python does the rest: live-only and meta strategies) and their trades."""
+    cfgs = [c for c in agents.active_agents(config) if c["id"] in state["agents"] and enabled(c["strategy"])]
+    if not cfgs:
+        return set(), []
+    ports = [state["agents"][c["id"]] for c in cfgs]
+    for c, p in zip(cfgs, ports):
+        p.setdefault("params", dict(c["params"]))
+    symbols, ix, data = _round_data(mkt, ports, now)
+    batch = ogj_engine.Batch.from_state([c["strategy"] for c in cfgs], [zone_params(c["strategy"], p["params"]) for c, p in zip(cfgs, ports)],
+                                        [port_to_engine(p, ix, mkt.as_of) for p in ports], [agents.mode_of(c) == agents.REACTIVE for c in cfgs])
+    batch.live_round(data, 0)
+    moves = []
+    for c, p, (pj, tj) in zip(cfgs, ports, batch.export()):
+        moves += [(c, t) for t in apply_live(p, json.loads(pj), json.loads(tj), symbols)]
+    return {c["id"] for c in cfgs}, moves
+
+
+def compare_round(ids: set[str], python_state: dict, state: dict, day) -> dict:
+    """The Python reference's round against the engine's, on the fields the engine trades with; differences are
+    written to the private repo (agents/sombra/<day>.jsonl)."""
+    symbols = sorted({s for i in ids for st in (python_state, state) for s in
+                      list(st["agents"][i]["positions"]) + [o["symbol"] for o in st["agents"][i]["pending"]]})
+    ix = {s: k for k, s in enumerate(symbols)}
+    diffs = []
+    for i in sorted(ids):
+        a, b = _python_view(python_state["agents"][i], ix), _python_view(state["agents"][i], ix)
+        for k in ("cash", "positions", "pending", "last_rebalance"):
+            if json.dumps(a[k]) != json.dumps(b[k]):
+                diffs.append({"agent": i, "field": k, "python": a[k], "rust": b[k]})
+    SHADOW_DIR.mkdir(parents=True, exist_ok=True)
+    with (SHADOW_DIR / f"{day.isoformat()}.jsonl").open("a") as f:
+        f.write(json.dumps({"agents": len(ids), "diffs": diffs, "motor": "rust"}) + "\n")
+    return {"agents": len(ids), "diffs": len(diffs)}
+
+
 def shadow_round(config: dict, before: dict, after: dict, mkt, now) -> dict:
     """The round Python just did, again in the engine from the portfolios as they were before it; every difference is
     written to the private repo (agents/sombra/<day>.jsonl). Never changes the agents. Returns counts."""

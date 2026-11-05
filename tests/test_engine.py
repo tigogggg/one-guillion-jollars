@@ -342,3 +342,54 @@ def test_the_tematico_trades_exactly_like_python(markets, monkeypatch):
     compare("tematico", {**base, "temas": 2, "por_tema": 1, "cada": 7, "esgotado_max": 0, "nucleo": 0.0, "stop_pct": 0.1},
             themed, monkeypatch, min_trades=10)
     assert any(t[7].startswith("tema: ") and t[7] != "tema: " for t in rust_run("tematico", base, themed)[1])
+
+
+def test_the_engine_trades_the_live_round_like_python(markets, monkeypatch, tmp_path):
+    """Phase 4c: the round done by the engine (engine.live_round, written back to the state) leaves the same cash,
+    positions, orders and trades as the Python round."""
+    import copy
+    from datetime import datetime, timezone
+
+    import earnings as E
+
+    k = 400
+    past, today = markets[:k], markets[k]
+    names = ("foguetao", "sniper", "pescador", "quant", "abutre", "kamikaze", "guardiao", "rotador")
+    config, state = {"agents": []}, {"agents": {}}
+    for i, s in enumerate(names):
+        params = {**{x: agents.COMMON[x] for x in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES[s][2]}
+        if i % 3 == 1:
+            params.update(reatividade=1, espera_min=30, esticado_max=0.02)
+        port = pretrain.simulate(s, params, past, keep_port=True)["port"]
+        port["params"] = params
+        config["agents"].append({"id": s, "name": s, "emoji": "🤖", "strategy": s, "capital": 1000, "params": params})
+        state["agents"][s] = port
+    day = today.as_of
+    hist = {}
+    for s, df in today.hist.items():
+        cut = df[df.index.date <= day].copy()
+        if len(cut) and cut.index[-1].date() == day:
+            cut.iloc[-1, cut.columns.get_loc("Close")] = cut["Open"].iloc[-1] * 1.004
+            cut.iloc[-1, cut.columns.get_loc("High")] = max(cut["Open"].iloc[-1], cut["Close"].iloc[-1])
+        hist[s] = cut
+    live = copy.copy(today)
+    live.hist, live.closes, live.earnings_dates, live.earnings = hist, None, None, {}
+    live.news, live.vcp, live.league = {"US03": {"score": -5}}, {"US11"}, {}
+    monkeypatch.setattr(E, "next_earnings", lambda s, d: None)
+    monkeypatch.setattr(engine, "SHADOW_DIR", tmp_path)
+    now = datetime(day.year, day.month, day.day, 20, 0, tzinfo=timezone.utc)
+    py = json_copy(state)
+    py_moves, _ = agents.reactive_round(config, py, live, now)
+    ids, rs_moves = engine.live_round(config, state, live, now)
+    assert ids == set(names) and rs_moves
+    for i in names:
+        a, b = py["agents"][i], state["agents"][i]
+        assert abs(a["cash"] - b["cash"]) < 1e-9, i
+        assert set(a["positions"]) == set(b["positions"]), i
+        for sym in a["positions"]:
+            for f in ("qty", "entry", "cost_eur", "stop", "tp", "entry_date", "checked"):
+                assert a["positions"][sym].get(f) == b["positions"][sym].get(f), (i, sym, f)
+        strip = lambda ts: [{k: v for k, v in t.items() if k not in ("ctx", "hora")} for t in ts]  # noqa: E731
+        assert strip(a["trades"]) == strip(b["trades"]), i
+        assert [(o["side"], o["symbol"]) for o in a["pending"]] == [(o["side"], o["symbol"]) for o in b["pending"]], i
+    assert engine.compare_round(ids, py, state, day)["diffs"] == 0
