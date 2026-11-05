@@ -35,7 +35,7 @@ SEPARATE = ("sector", "industry", "name", "stage2", "trend_score")  # kept apart
 # Strategies newly ported to the engine (the live-only ones): they still trade in Python, while every round also runs
 # them in the engine from the same state and writes the differences (shadow_round, agents/sombra); once a stretch of
 # real rounds matches, a strategy leaves this set and trades in the engine.
-ENGINE_SHADOW = {"jornalista", "catalisador", "cetico", "visionario", "joalheiro"}
+ENGINE_SHADOW = {"jornalista", "catalisador", "cetico", "visionario", "joalheiro", "conselho", "maestro", "super"}
 
 
 def enabled(strategy: str) -> bool:
@@ -414,10 +414,27 @@ def _day(iso: str | None) -> int | None:
     return day_num(date.fromisoformat(iso[:10])) if iso else None
 
 
-def port_to_engine(port: dict, ix: dict[str, int], today: date) -> str:
-    """A live portfolio as the engine reads it (engine/src/portjson.rs)."""
+def league_for(cfg: dict, mkt, params: dict) -> list[dict] | None:
+    """What a meta-agent reads of the others (agents.peers / the fusion's members), as the engine reads it."""
+    if cfg["strategy"] in ("conselho", "maestro"):
+        return [{"cfg": c, "port": o, "score": agents.regime_score(mkt, c, o, params["janela"]) if cfg["strategy"] == "maestro" else None,
+                 "weight": 0.0} for c, o in agents.peers(mkt, cfg)]
+    if cfg["strategy"] == "super":
+        return [{"cfg": mkt.league[a][0], "port": mkt.league[a][1], "score": None, "weight": w}
+                for a, w in (cfg.get("membros") or {}).items() if a in mkt.league and w > 0]
+    return None
+
+
+def port_to_engine(port: dict, ix: dict[str, int], today: date, league: list[dict] | None = None) -> str:
+    """A live portfolio as the engine reads it (engine/src/portjson.rs); a meta-agent's also with the league."""
     t = today.isoformat()
-    return json.dumps({
+    extra = {"league": [{
+        "id": x["cfg"]["id"], "name": x["cfg"]["name"], "score": x["score"], "weight": x["weight"], "cash": x["port"]["cash"],
+        "positions": [[ix[s], p["qty"], p["entry"], _day(p.get("entry_date")), p["cost_eur"], p.get("stop"), p.get("tp"),
+                       _day(p.get("checked"))] for s, p in x["port"]["positions"].items()],
+        "buys": [ix[o["symbol"]] for o in x["port"]["pending"] if o["side"] == "buy" and o["symbol"] in ix],
+    } for x in league]} if league is not None else {}
+    return json.dumps({**extra,
         "cash": port["cash"], "deposits": port["deposits"],
         "positions": [[ix[s], p["qty"], p["entry"], _day(p.get("entry_date")), p["cost_eur"], p.get("stop"), p.get("tp"),
                        _day(p.get("checked"))] for s, p in port["positions"].items()],
@@ -544,16 +561,26 @@ def live_round(config: dict, state: dict, mkt, now) -> tuple[set[str], list[tupl
     cfgs = [c for c in agents.active_agents(config) if c["id"] in state["agents"] and enabled(c["strategy"])]
     if not cfgs:
         return set(), []
-    ports = [state["agents"][c["id"]] for c in cfgs]
-    for c, p in zip(cfgs, ports):
-        p.setdefault("params", dict(c["params"]))
-    symbols, ix, data = _round_data(mkt, ports, now)
-    batch = ogj_engine.Batch.from_state([c["strategy"] for c in cfgs], [zone_params(c["strategy"], p["params"]) for c, p in zip(cfgs, ports)],
-                                        [port_to_engine(p, ix, mkt.as_of) for p in ports], [agents.mode_of(c) == agents.REACTIVE for c in cfgs])
-    batch.live_round(data, 0)
+    for c in cfgs:
+        state["agents"][c["id"]].setdefault("params", dict(c["params"]))
+    every = list(state["agents"].values())
+    symbols, ix, data = _round_data(mkt, every, now)
     moves = []
-    for c, p, (pj, tj) in zip(cfgs, ports, batch.export()):
-        moves += [(c, t) for t in apply_live(p, json.loads(pj), json.loads(tj), symbols)]
+    # the meta-agents decide after the others, from their portfolios as this round left them (as in Python)
+    for group in ([c for c in cfgs if c["strategy"] not in agents.META], [c for c in cfgs if c["strategy"] in agents.META]):
+        if not group:
+            continue
+        for c in agents.active_agents(config):
+            if c["id"] in state["agents"]:
+                mkt.league[c["id"]] = (c, state["agents"][c["id"]])
+        ports = [state["agents"][c["id"]] for c in group]
+        leagues = [league_for(c, mkt, p["params"]) for c, p in zip(group, ports)]
+        batch = ogj_engine.Batch.from_state([c["strategy"] for c in group], [zone_params(c["strategy"], p["params"]) for c, p in zip(group, ports)],
+                                            [port_to_engine(p, ix, mkt.as_of, lg) for p, lg in zip(ports, leagues)],
+                                            [agents.mode_of(c) == agents.REACTIVE for c in group])
+        batch.live_round(data, 0)
+        for c, p, (pj, tj) in zip(group, ports, batch.export()):
+            moves += [(c, t) for t in apply_live(p, json.loads(pj), json.loads(tj), symbols)]
     return {c["id"] for c in cfgs}, moves
 
 
@@ -587,7 +614,8 @@ def shadow_round(config: dict, before: dict, after: dict, mkt, now, only: set[st
             and (only is None or c["strategy"] in only)]
     if not cfgs:
         return {"agents": 0, "diffs": 0}
-    held = {s for c in cfgs for s in list(before["agents"][c["id"]]["positions"]) + [o["symbol"] for o in before["agents"][c["id"]]["pending"]]}
+    held = {s for st in (before, after) for p in st["agents"].values()
+            for s in list(p.get("positions", {})) + [o["symbol"] for o in p.get("pending", [])]}
     m = copy.copy(mkt)
     symbols = sorted(set(m.stocks) | set(m.etfs) | held | {s for s, df in (m.hist or {}).items() if df is not None and len(df)})
     ix = {s: i for i, s in enumerate(symbols)}
@@ -599,8 +627,10 @@ def shadow_round(config: dict, before: dict, after: dict, mkt, now, only: set[st
             part_open[0, i], part_low[0, i] = float(df["Open"].iloc[-1]), float(df["Low"].iloc[-1])
     data = build([m], symbols=symbols, slots={"partial": [True], "part_open": part_open, "part_low": part_low, "now": [now]})
     ports = [before["agents"][c["id"]] for c in cfgs]
+    leagues = [league_for(c, m, p.get("params", c["params"])) for c, p in zip(cfgs, ports)]  # the others as they are now
     batch = ogj_engine.Batch.from_state([c["strategy"] for c in cfgs], [zone_params(c["strategy"], p.get("params", c["params"])) for c, p in zip(cfgs, ports)],
-                                        [port_to_engine(p, ix, m.as_of) for p in ports], [agents.mode_of(c) == agents.REACTIVE for c in cfgs])
+                                        [port_to_engine(p, ix, m.as_of, lg) for p, lg in zip(ports, leagues)],
+                                        [agents.mode_of(c) == agents.REACTIVE for c in cfgs])
     batch.live_round(data, 0)
     diffs = []
     for c, (pj, _) in zip(cfgs, batch.export()):

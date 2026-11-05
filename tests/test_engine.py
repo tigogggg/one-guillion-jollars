@@ -490,3 +490,48 @@ def test_the_view_and_ranking_strategies_match_python_in_the_engine(markets, mon
     assert r["agents"] == 2 and diffs == []
     for s in ("visionario", "joalheiro"):  # both acted
         assert state["agents"][s]["pending"] or state["agents"][s]["positions"], s
+
+
+def test_the_meta_agents_match_python_in_the_engine(markets, monkeypatch, tmp_path):
+    """Conselho, Maestro and a fusion ported to the engine: they read the other agents' portfolios as the round left
+    them; the same round in Python and in the engine (shadow_round) leaves the same cash, positions and orders."""
+    import copy
+    import json
+    from datetime import datetime, timezone
+
+    import earnings as E
+
+    if "conselho" not in engine.ogj_engine.SUPPORTED:
+        pytest.skip("a receita privada ainda não tem os meta-agentes")
+    k = 400
+    past, today = markets[:k], markets[k]
+    day = today.as_of
+    live = copy.copy(today)
+    live.hist = {s: df[df.index.date <= day] for s, df in today.hist.items()}
+    live.closes, live.earnings_dates, live.earnings, live.vcp, live.league, live.news = None, None, {}, set(), {}, {}
+    live.priors = {}
+    monkeypatch.setattr(E, "next_earnings", lambda s, d: None)
+    monkeypatch.setattr(engine, "SHADOW_DIR", tmp_path)
+    config, state = {"agents": []}, {"agents": {}}
+    for s in ("foguetao", "quant", "pescador", "sniper", "abutre"):
+        params = {**{x: agents.COMMON[x] for x in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES[s][2]}
+        port = pretrain.simulate(s, params, past[-120:], keep_port=True)["port"]
+        port["params"] = params
+        config["agents"].append({"id": s, "name": s.title(), "emoji": "🤖", "strategy": s, "capital": 1000, "params": params})
+        state["agents"][s] = port
+    for s, extra in (("conselho", {}), ("maestro", {}), ("super", {"membros": {"foguetao": 0.4, "quant": 0.35, "pescador": 0.25}})):
+        params = {**{x: agents.COMMON[x] for x in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES[s][2]}
+        if s == "conselho":
+            params["min_votos"] = 2
+        port = agents.new_portfolio(1000, past[-30].as_of)
+        port["params"] = params
+        config["agents"].append({"id": s, "name": s.title(), "emoji": "🧬", "strategy": s, "capital": 1000, "params": params, **extra})
+        state["agents"][s] = port
+    now = datetime(day.year, day.month, day.day, 20, 0, tzinfo=timezone.utc)
+    before = json_copy(state)
+    agents.reactive_round(config, state, live, now)
+    r = engine.shadow_round(config, before, state, live, now, only=engine.ENGINE_SHADOW)
+    diffs = json.loads((tmp_path / f"{day.isoformat()}.jsonl").read_text().splitlines()[-1])["diffs"]
+    assert r["agents"] == 3 and diffs == []
+    acted = {s: len(state["agents"][s]["pending"]) + len(state["agents"][s]["positions"]) for s in ("conselho", "maestro", "super")}
+    assert acted["super"] and acted["conselho"]  # they acted (the Maestro only when a leader beats the index)

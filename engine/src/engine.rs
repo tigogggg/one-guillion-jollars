@@ -138,6 +138,20 @@ pub struct Port {
     pub trades: Vec<Trade>,
     /// The benchmark's close at the last history entry (score_day's reference, so a run can continue on new data).
     pub last_bench: f64,
+    /// The other agents a meta-agent reads (Conselho, Maestro, the fusions), as they are when it decides (live only).
+    pub league: Vec<Peer>,
+}
+
+/// Another agent of the league as a meta-agent sees it: its portfolio (cash and positions, valued at the round's
+/// prices), its buy orders, its record in the current market zone (Maestro) and its weight (a fusion's member).
+#[derive(Clone, Default)]
+pub struct Peer {
+    pub id: String,
+    pub name: String,
+    pub score: Option<f64>,
+    pub weight: f64,
+    pub port: Port,
+    pub buys: Vec<usize>,
 }
 
 impl Port {

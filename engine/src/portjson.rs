@@ -3,7 +3,7 @@
 
 use serde_json::{json, Value};
 
-use crate::engine::{Order, Port, Pos, Trade};
+use crate::engine::{Order, Peer, Port, Pos, Trade};
 
 fn f(v: &Value) -> f64 {
     v.as_f64().unwrap_or(f64::NAN)
@@ -52,6 +52,21 @@ pub fn read(text: &str) -> Result<Port, String> {
                               price: 0.0, eur: 0.0, pnl: 0.0, reason: String::new(), ret: None, held: None });
     }
     p.last_bench = v["last_bench"].as_f64().unwrap_or(f64::NAN);
+    for x in v["league"].as_array().into_iter().flatten() {  // a meta-agent's view of the others (scripts/engine.py)
+        let mut port = Port::new(f(&x["cash"]));
+        for a in x["positions"].as_array().into_iter().flatten() {
+            let a = a.as_array().ok_or("posição inválida")?;
+            port.positions.insert(a[0].as_u64().ok_or("símbolo")? as usize, Pos {
+                qty: f(&a[1]), entry: f(&a[2]), entry_date: oi(&a[3]).unwrap_or(0), cost_eur: f(&a[4]), stop: of(&a[5]),
+                tp: of(&a[6]), checked: oi(&a[7]).unwrap_or(0),
+            });
+        }
+        p.league.push(Peer {
+            id: x["id"].as_str().unwrap_or("").to_string(), name: x["name"].as_str().unwrap_or("").to_string(),
+            score: of(&x["score"]), weight: x["weight"].as_f64().unwrap_or(0.0), port,
+            buys: x["buys"].as_array().into_iter().flatten().filter_map(|s| s.as_u64().map(|s| s as usize)).collect(),
+        });
+    }
     Ok(p)
 }
 
