@@ -535,6 +535,28 @@ def test_rounds_download_the_year_once_a_day_and_add_the_latest_days(tmp_path, m
     assert calls == ["1y", "5d", "5d"]
 
 
+def test_after_europe_closes_the_rounds_keep_its_final_bar(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    year = frame([1, 2, 3, 4], [1, 2, 3, 4], [1, 2, 3, 4], [1, 2, 3, 4])
+    today = frame([4, 5], [4, 5], [4, 5], [4, 3.5])  # today the stock fell
+    asked = []
+
+    def fake(tickers, period="1y"):
+        asked.append((period, list(tickers)))
+        return {"AAA.DE": year if period == "1y" else today.iloc[-1:]}
+
+    monkeypatch.setattr(agents, "download_history", fake)
+    monkeypatch.setattr(agents, "PRICE_CACHE", tmp_path)
+    evening = datetime(2026, 10, 30, 20, 30, tzinfo=timezone.utc)  # Xetra closed hours ago, New York open
+    out = agents.round_history(["AAA.DE"], evening)
+    assert ("5d", ["AAA.DE"]) in asked and out["AAA.DE"]["Close"].iloc[-1] == 3.5  # today's close, not yesterday's
+    asked.clear()
+    morning = datetime(2026, 10, 30, 6, 0, tzinfo=timezone.utc)  # before Xetra opens: the cached year only
+    agents.round_history(["AAA.DE"], morning)
+    assert asked == []
+
+
 def test_orders_without_data_wait_and_then_expire():
     hist = {"AAA.DE": frame([10, 10], [10, 10], [10, 10], [10, 10])}
     port = new_portfolio(1000, DATES[0].date())

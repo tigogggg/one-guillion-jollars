@@ -658,7 +658,10 @@ def round_history(tickers: list[str], now: datetime) -> dict[str, pd.DataFrame]:
                 old.unlink()
         if len(base) >= 0.95 * len(tickers):  # a download with holes is used, not kept for the rest of the day
             path.write_bytes(pickle.dumps(base))
-    live_now = [t for t in tickers if session_live(t, now)]  # only the markets in session: about half the download
+    # every market whose session started today, closed ones included: after Europe closes its stocks keep today's
+    # final bar (without it they were valued at yesterday's close all evening). Before a market opens, the cached year.
+    live_now = [t for t in tickers if session_live(t, now) or (now.astimezone(ZoneInfo("Europe/Lisbon")).weekday() < 5
+                                                               and session_started(t, now))]
     fresh = download_history(live_now, period="5d") if live_now else {}
     out = {}
     for t in tickers:
