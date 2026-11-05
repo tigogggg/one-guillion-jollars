@@ -31,6 +31,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Dados dos agentes (repositório privado; o arquivo de notícias é guardado lá)
+        id: dados
+        continue-on-error: true  # GitHub refused the deploy key for a moment once (5 Nov, 16:00): a second try below
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          path: agents
+      - name: Esperar um minuto antes de tentar de novo
+        if: ${{ steps.dados.outcome == 'failure' }}
+        run: sleep 60
+      - name: Dados dos agentes (segunda tentativa)
+        if: ${{ steps.dados.outcome == 'failure' }}
         uses: actions/checkout@v4
         with:
           repository: tigogggg/one-guillion-jollars-dados
