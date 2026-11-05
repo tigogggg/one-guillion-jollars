@@ -218,6 +218,10 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
     const error = await follow(env, data, body);
     return error ? fail({ error }) : json(await snapshot(env, data));
   }
+  if (action === "copy") {
+    const error = await setCopy(env, data, body);
+    return error ? fail({ error }) : json(await snapshot(env, data));
+  }
   if (action === "display_name") {
     const out = await setDisplayName(env, tok, data, body.name);
     return out.error ? fail(out) : json({ ok: true, display_name: out.data.display_name || "", name: out.data.name || "" });
@@ -293,6 +297,7 @@ async function deleteEverything(env, tok, data) {
   if (data.google?.sub) await env.CONFIG.delete(`login-google:${data.google.sub}`);
   if (data.display_name) await env.CONFIG.delete(`display-name:${nameKey(data.display_name)}`);
   if (owner) await env.CONFIG.delete(`follows:${owner}`);
+  if (owner) await env.CONFIG.delete(`copiar:${owner}`);
   for (const a of data.analyses || []) {
     await env.CONFIG.delete(`analysis-res:${a.rid}`);
     await env.CONFIG.delete(`analysis-req:${a.rid}`);
@@ -320,6 +325,21 @@ async function follow(env, data, body) {
   }
   if (list.length) await env.CONFIG.put(key, JSON.stringify(list));
   else await env.CONFIG.delete(key);
+  return null;
+}
+
+// The agent the member follows (KV copiar:<discord id>): scripts/copy_alerts.py sends them a private message on
+// Discord each time it buys or sells. An empty agent stops it.
+async function setCopy(env, data, body) {
+  if (!data.owner) return "Carteira sem dono no Discord.";
+  const key = `copiar:${data.owner}`;
+  const id = String(body.agent || "").trim();
+  if (!id) { await env.CONFIG.delete(key); return null; }
+  const list = (await env.CONFIG.get("portal:agentes", "json")) || [];
+  if (!list.some((a) => a.id === id)) return "Esse agente não está na liga.";
+  const valor = body.valor === "" || body.valor == null ? null : Number(body.valor);
+  if (valor != null && !(valor >= 0 && valor <= 10000000)) return "Valor inválido.";
+  await env.CONFIG.put(key, JSON.stringify({ agente: id, valor_eur: valor || null, desde: new Date().toISOString().slice(0, 10) }));
   return null;
 }
 
@@ -588,7 +608,9 @@ async function snapshot(env, data) {
     return { symbol: t, name: q?.name || "", price: q?.price ?? null, currency: q?.currency || "", change: q?.prev ? q.price / q.prev - 1 : null,
              news: news?.scores?.[t] ?? null, proposed: (proposals?.buys || []).some((b) => b.symbol === t) };
   }));
-  return { name: data.name, display_name: data.display_name || "", tx: data.tx, quotes, fx, verdicts, follows, accounts: data.accounts || {}, profile: data.profile || null,
+  const [copy, agentList] = await Promise.all([data.owner ? env.CONFIG.get(`copiar:${data.owner}`, "json") : null,
+    env.CONFIG.get("portal:agentes", "json")]);
+  return { name: data.name, display_name: data.display_name || "", tx: data.tx, quotes, fx, verdicts, follows, copy: copy || null, agent_list: agentList || [], accounts: data.accounts || {}, profile: data.profile || null,
            dividends: data.dividends || [], settings: data.settings || { capital: 10000, risk: 1 },
            proposals: proposals ? { as_of: proposals.as_of, zone: proposals.zone, buys: proposals.buys.slice(0, 12) } : null, at: Date.now() };
 }
@@ -876,10 +898,10 @@ function portfolioPage(data, tok, opts = {}) {
     <p class="muted">O CSV abre no Excel; o JSON tem tudo (operações, contas, dividendos, perfil).</p></div>
   <h2>🛡️ Privacidade</h2>
   <div class="panel small prose">
-    <p>Guardamos: as operações, contas, dividendos, perfil e definições que puseste aqui, o teu id e nome do Discord, o email da conta Google se a associaste, a lista do /seguir e as análises pedidas ao Claude. Nada disto é mostrado a outros membros.</p>
+    <p>Guardamos: as operações, contas, dividendos, perfil e definições que puseste aqui, o teu id e nome do Discord, o email da conta Google se a associaste, a lista do /seguir, o agente que segues (e o valor que lhe dedicas) e as análises pedidas ao Claude. Nada disto é mostrado a outros membros.</p>
     <p>As análises do Claude enviam os dados da carteira para a Anthropic (sem o teu nome). As cópias de segurança diárias são apagadas ao fim de 14 dias.</p>
     <p><button class="btn" id="delete-all" type="button" style="background:#b3122e;border-bottom-color:#5a0917">APAGAR A MINHA CARTEIRA</button></p>
-    <p class="muted">Apaga tudo de imediato: carteira, histórico de alterações, ligação ao Discord e Google, /seguir e análises. Não dá para desfazer (exporta antes).</p>
+    <p class="muted">Apaga tudo de imediato: carteira, histórico de alterações, ligação ao Discord e Google, /seguir, agente seguido e análises. Não dá para desfazer (exporta antes).</p>
   </div>
 </section>
 <section data-tab="resumo"${opts.profile ? " hidden" : ""}>
@@ -935,6 +957,9 @@ function portfolioPage(data, tok, opts = {}) {
   <div id="import-preview"></div>
 </section>
 <section data-tab="seguir" hidden>
+  <h2>🤖 Agente a seguir</h2>
+  <p class="muted small">Recebes uma mensagem privada no Discord sempre que este agente compra ou vende, na ronda em que decide (de 10 em 10 minutos com a bolsa aberta; os agentes diários, com as ordens para a abertura seguinte). Cada aviso diz o tamanho em % da carteira do agente e, se puseres o valor que dedicas, quanto seria em euros. Não é recomendação: decides tu e executas na tua corretora. O Discord tem de aceitar mensagens privadas de membros do servidor.</p>
+  <form id="copy-form" class="panel filters"><select name="agent" id="copy-agent"></select><input name="valor" type="number" min="0" step="50" placeholder="Valor que dedicas (€, opcional)"><button class="btn" type="submit">GUARDAR</button><span id="copy-msg" class="small"></span></form>
   <h2>👀 Ações que segues</h2>
   <p class="muted small">A mesma lista do <code>/seguir</code> no Discord: recebes uma mensagem privada quando uma destas ações rompe com volume ou mexe 5% ou mais no dia.</p>
   <form id="follow-form" class="panel filters"><input name="symbol" placeholder="Ticker, ex.: NVDA" required autocapitalize="characters"><button class="btn" type="submit">SEGUIR</button><span id="follow-msg" class="small"></span></form>
@@ -1395,7 +1420,28 @@ $("import-form").file.addEventListener("change", async (e) => {
 try { localStorage.setItem("carteira", JSON.stringify(BASE)); } catch (e) {}  // the portal's "Hoje" shows it
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 
+function renderCopy() {
+  const sel = $("copy-agent");
+  if (!sel || document.activeElement === sel) return;
+  const cur = SNAP.copy || {};
+  const agents = (SNAP.agent_list || []).slice().sort((a, b) => (b.congelado - a.congelado) || a.name.localeCompare(b.name));
+  sel.innerHTML = '<option value="">— nenhum (sem avisos) —</option>' + agents.map((a) => '<option value="' + esc(a.id) + '"' + (a.id === cur.agente ? " selected" : "") + '>' +
+    esc(a.emoji + " " + a.name) + (a.congelado ? " · candidato fixo" : "") + (a.perfil && a.perfil !== "equilibrado" ? " · " + esc(a.perfil) : "") + '</option>').join("");
+  const v = $("copy-form").valor;
+  if (document.activeElement !== v) v.value = cur.valor_eur || "";
+  $("copy-msg").textContent = cur.agente ? "A seguir desde " + (cur.desde || "") : "";
+  $("copy-msg").className = "small muted";
+}
+$("copy-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const r = await fetch(BASE + "/data", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "copy", agent: e.target.agent.value, valor: e.target.valor.value }) });
+  const out = await r.json();
+  if (!r.ok) { $("copy-msg").textContent = "⚠️ " + out.error; $("copy-msg").className = "small down"; return; }
+  SNAP = out; render(); $("copy-msg").textContent = e.target.agent.value ? "✅ Guardado: vais receber os avisos." : "Avisos desligados.";
+});
 function renderFollows() {
+  renderCopy();
   const f = SNAP.follows || [];
   $("follows").innerHTML = f.length ? table(["Ação", "Preço", "Hoje", "Notícias (36 h)", "Proposta hoje", ""], f.map((x) => ['<b>' + esc(x.symbol) + '</b> <span class="muted">' + esc(x.name) + '</span>',
     x.price != null ? nf(x.price) + " " + esc(x.currency) : "—", '<span class="' + cls(x.change) + '">' + pct(x.change) + '</span>',

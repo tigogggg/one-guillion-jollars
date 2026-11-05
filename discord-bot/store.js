@@ -12,7 +12,7 @@
 
 const KEEP_VERSIONS = 30;
 const KEEP_BACKUP_DAYS = 14;
-const BACKUP_PREFIXES = ["portfolio-user:", "login-google:", "follows:"];
+const BACKUP_PREFIXES = ["portfolio-user:", "login-google:", "follows:", "copiar:"];
 
 let schemaReady = null;
 

@@ -14,7 +14,7 @@ Reply to him in **pt-PT**, short and clear; commit messages in English.
   exposure, investment growth; used by the Estratega), SEC fundamentals point-in-time (`fundamentals.py`), opportunities (`opportunities.py`),
   proposals (`proposals.py`), news + Claude geopolitics + SEC 8-Ks (`news.py`), US House members' disclosed trades
   (`congress.py`), Claude agent review (`agent_review.py`),
-  platform update notes (`updates.py`), Claude usage per call kept in `agents/lab/uso_claude` (`claude_usage.py`; local summary: `uv run python scripts/claude_usage.py`), evolution history (`evolution.py`), local training (`train_local.py`).
+  platform update notes (`updates.py`), Interactive Brokers (`ibkr.py`, `docs/IBKR.md`: an agent's weights followed by a paper/real account through the local Client Portal Gateway, and a virtual IBKR account per agent under test, config `ibkr`), private Discord messages to the members who follow an agent in their profile (`copy_alerts.py`, KV `copiar:<discord id>`), Claude usage per call kept in `agents/lab/uso_claude` (`claude_usage.py`; local summary: `uv run python scripts/claude_usage.py`), evolution history (`evolution.py`), local training (`train_local.py`).
 - The recipe is private (`agents/receita/`, see below): the strategies (`estrategias.py`, run inside `agents.py`'s
   namespace, so `agents.s_quant`, `agents.STRATEGIES` work as before; the Rust copy `engine/strategies.rs`, built in by
   `engine/build.rs`) and Claude's prompts (`prompts/<name>.md`, read with `agents.recipe_prompt`). Change strategies and

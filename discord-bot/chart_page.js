@@ -908,7 +908,7 @@ function liveHtml(a) {
         esc(p.name || p.sector || ""), fmtNum(p.qty, 4),
         fmtNum(p.entry) + " " + p.currency, (p.price == null ? "—" : fmtNum(p.price) + " " + p.currency), fmtEur(p.cost_eur), fmtEur(p.value_eur),
         '<span class="' + cls(p.pnl_eur) + '">' + fmtEur(p.pnl_eur) + '</span>', '<span class="' + cls(p.pnl_pct) + '">' + fmtPct(p.pnl_pct) + '</span>',
-        fmtNum(p.weight, 1) + "%", p.stop ? fmtNum(p.stop) : "—", p.tp ? fmtNum(p.tp) : "—", esc(p.entry_date || ""), esc(p.earnings || "—")]),
+        fmtNum(p.weight, 1) + "%", p.stop ? fmtNum(p.stop) : "—", p.tp ? fmtNum(p.tp) : "—", esc(p.since || p.entry_date || ""), esc(p.earnings || "—")]),
       [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) +
     '<p class="muted small">Custo médio e preço na moeda do ativo, com custos incluídos; valores em euros ao câmbio do dia.</p>' +
     '<h3>⏳ Ordens para a próxima abertura</h3>' +
@@ -919,16 +919,16 @@ function liveHtml(a) {
     ((a.history || []).map((l) => {
       const icon = l.status === "aberta" ? "🟡" : l.result > 0 ? "✅" : "🔴";
       const last = l.sells.length ? l.sells[l.sells.length - 1].reason : "";
-      return '<details class="lot"><summary>' + icon + ' <b>' + esc(l.symbol) + '</b> · ' + esc(l.opened) + ' → ' + esc(l.closed || "aberta") +
+      return '<details class="lot"><summary>' + icon + ' <b>' + esc(l.symbol) + '</b> · ' + esc(l.opened_at || l.opened) + ' → ' + esc(l.closed_at || l.closed || "aberta") +
         (l.status === "fechada" ? ' · <span class="' + cls(l.result) + '">' + fmtEur(l.result) + (l.result_pct != null ? " (" + fmtPct(l.result_pct) + ")" : "") + '</span>' + (l.days != null ? ' · ' + l.days + ' dias' : '') + (last ? ' · ' + esc(last) : '') : ' · ' + fmtEur(l.invested) + ' investidos') +
-        '</summary>' + l.buys.concat(l.sells).sort((x, y) => x.date.localeCompare(y.date)).map((t) =>
-          '<div class="trade ' + (t.side === "compra" ? "b" : "s") + '"><b>' + (t.side === "compra" ? "🟢 Compra" : "🔴 Venda") + '</b> · ' + esc(t.date) + ' · ' + fmtNum(t.qty, 4) + ' a ' + fmtNum(t.price) +
+        '</summary>' + l.buys.concat(l.sells).sort((x, y) => (x.date + (x.hora || "")).localeCompare(y.date + (y.hora || ""))).map((t) =>
+          '<div class="trade ' + (t.side === "compra" ? "b" : "s") + '"><b>' + (t.side === "compra" ? "🟢 Compra" : "🔴 Venda") + '</b> · ' + esc(t.date + (t.hora ? " " + t.hora : "")) + ' · ' + fmtNum(t.qty, 4) + ' a ' + fmtNum(t.price) +
           ' · ' + fmtEur(t.eur) + (t.side === "venda" ? ' · <span class="' + cls(t.pnl_eur) + '">' + fmtEur(t.pnl_eur) + '</span>' + (t.held != null ? ' em ' + t.held + ' dias' : '') : '') +
           '<p class="small why">' + esc(t.why || t.reason || "") + '</p></div>').join("") + '</details>';
     }).join("") || '<p class="muted">Ainda sem operações.</p>') +
     '<details><summary>Todas as operações em lista (' + a.trades.length + ')</summary>' +
     table(["Data", "Tipo", "Ativo", "Qtd.", "Preço", "Valor", "Resultado", "Motivo"],
-      a.trades.map((t) => [esc(t.date), t.side === "compra" ? "🟢 compra" : t.side === "venda" ? "🔴 venda" : "🧾 " + esc(t.side), '<b>' + esc(t.symbol) + '</b>',
+      a.trades.map((t) => [esc(t.date + (t.hora ? " " + t.hora : "")), t.side === "compra" ? "🟢 compra" : t.side === "venda" ? "🔴 venda" : "🧾 " + esc(t.side), '<b>' + esc(t.symbol) + '</b>',
         t.qty ? fmtNum(t.qty, 4) : "—", t.price ? fmtNum(t.price) : "—", fmtEur(t.eur),
         t.side === "compra" ? "—" : '<span class="' + cls(t.pnl_eur) + '">' + fmtEur(t.pnl_eur) + '</span>', esc(t.reason || "")]), [3, 4, 5, 6]) + '</details>' +
     (realized.length ? '<h3>🧾 Mais-valias realizadas por ano</h3>' + table(["Ano", "Mais-valias"], realized.map(([y, v]) => [esc(y), '<span class="' + cls(v) + '">' + fmtEur(v) + '</span>']), [1]) : "") +
@@ -1431,6 +1431,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     pctOrDash(c.liquido), pctOrDash(c.indice_liquido),
     '<span class="' + cls(c.diferenca_liquida || 0) + '">' + pctOrDash(c.diferenca_liquida) + '</span>',
     fmtPct(-(c.queda_max || 0) * 100) + ' <span class="muted small">(índice ' + fmtPct(-(c.indice_queda_max || 0) * 100) + ')</span>',
+    c.ibkr ? '<span class="' + cls(c.ibkr.retorno) + '">' + pctOrDash(c.ibkr.retorno) + '</span><br><span class="muted small">' + c.ibkr.ordens + ' ordens · ' + fmtEur(c.ibkr.custos_eur) + ' de custos</span>' : "—",
     esc(c.veredicto)]);
   const orders = (D.ordens || []).map((o) => [esc(o.emoji + " " + o.agent), '<b>' + esc(o.symbol) + '</b>',
     o.side === "buy" ? "comprar" : "vender" + (o.fraction < 0.999 ? " " + fmtNum(o.fraction * 100, 0) + "%" : ""),
@@ -1438,7 +1439,9 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
   $("decision").innerHTML = '<h2>⚖️ Vale a pena pôr dinheiro real?</h2><p class="muted small">Três candidatos congelados durante um ano ' +
     '(parâmetros fixos, sem treino nem júri), medidos ao vivo contra o S&P 500 como numa conta real: o que sobra depois de vender tudo hoje ' +
     'e pagar o imposto. Dados de ' + esc(D.as_of) + '.</p><div class="panel"><p><b>Regra:</b> ' + esc(D.regra) + '</p></div>' +
-    table(["Candidato", "Depois de impostos", "S&P 500 (idem)", "Diferença", "Queda máxima", "Veredicto"], rows, [1, 2, 3]) +
+    table(["Candidato", "Depois de impostos", "S&P 500 (idem)", "Diferença", "Queda máxima", "Na IBKR (simulada)", "Veredicto"], rows, [1, 2, 3]) +
+    '<p class="muted small">Na IBKR (simulada): o mesmo candidato numa conta de ' + fmtEur(D.capital_real) + ' na Interactive Brokers, com as regras de lá ' +
+    '(ações inteiras, ordem mínima, comissões e câmbio da IBKR), antes de impostos. A diferença para o agente é o que se perde a passar para uma conta real.</p>' +
     '<h2>📝 Ordens de hoje, à escala da tua conta (' + fmtEur(D.capital_real) + ')</h2><p class="muted small">O que cada candidato vai fazer ' +
     'na abertura, se o seguisses com a conta real. Só para replicar à mão se um dia algum cumprir a regra: nada é enviado a nenhuma corretora.</p>' +
     table(["Candidato", "Ativo", "Ordem", "Valor", "Porquê"], orders, [3]);

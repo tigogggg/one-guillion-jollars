@@ -163,6 +163,30 @@ def kv_put(key: str, value, ttl_days: int | None = None) -> bool:
         return False
 
 
+def load_prefix(prefix: str) -> dict[str, object]:
+    """{key without the prefix: JSON value} of every KV key with this prefix (all pages); empty without credentials."""
+    try:
+        kv = _kv()
+        if kv is None:
+            return {}
+        values, headers = kv
+        base = values.rsplit("/values", 1)[0]
+        out, cursor = {}, None
+        while True:
+            params = {"prefix": prefix, **({"cursor": cursor} if cursor else {})}
+            page = requests.get(f"{base}/keys", headers=headers, params=params, timeout=30).json()
+            for k in page["result"]:
+                value = requests.get(f"{values}/{quote(k['name'], safe='')}", headers=headers, timeout=30)
+                if value.status_code == 200:
+                    out[k["name"][len(prefix):]] = json.loads(value.text)
+            cursor = (page.get("result_info") or {}).get("cursor")
+            if not cursor:
+                return out
+    except (requests.RequestException, KeyError, StopIteration, ValueError) as e:
+        print(f"WARN: KV {prefix}*: {e}", file=sys.stderr)
+        return {}
+
+
 def load_follows() -> dict[str, list[str]]:
     """{discord user id: [tickers]}; empty without Cloudflare credentials."""
     token, account = os.environ.get("CLOUDFLARE_API_TOKEN"), os.environ.get("CLOUDFLARE_ACCOUNT_ID")

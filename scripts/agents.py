@@ -622,6 +622,15 @@ def session_live(symbol: str, now: datetime) -> bool:
     return t.weekday() < 5 and opens <= (t.hour, t.minute) <= closes
 
 
+def open_clock(symbol: str, day: date) -> str:
+    """When the symbol's exchange opens that day, in Lisbon time ("14:30"): the time of a fill at the open."""
+    from zoneinfo import ZoneInfo
+
+    zone, opens = ("America/New_York", (9, 30)) if is_us(symbol) else ("Europe/Berlin", (9, 0))
+    at = datetime(day.year, day.month, day.day, *opens, tzinfo=ZoneInfo(zone))
+    return at.astimezone(ZoneInfo("Europe/Lisbon")).strftime("%H:%M")
+
+
 def round_history(tickers: list[str], now: datetime) -> dict[str, pd.DataFrame]:
     """A year of daily bars for the rounds: the year is downloaded once a day and kept (PRICE_CACHE); each round
     then only fetches the last 5 days, which carry today's bar so far, and puts them on top."""
@@ -1892,7 +1901,10 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
         port = state["agents"][cfg["id"]]
         params = port.setdefault("params", dict(cfg["params"]))
         cancelled = list(port.get("cancelled", []))
-        for t in fill_pending(port, mkt) + check_exits(port, mkt) + [x for x in [pay_taxes(port, mkt)] if x]:
+        filled = fill_pending(port, mkt)
+        for t in filled:  # filled at the session's open price: that is when, in Lisbon time
+            t.setdefault("hora", open_clock(t["symbol"], date.fromisoformat(t["date"])))
+        for t in filled + check_exits(port, mkt) + [x for x in [pay_taxes(port, mkt)] if x]:
             moves.append((cfg, t))
         gone = [c for c in port.get("cancelled", []) if c not in cancelled]
         if gone:
@@ -2265,6 +2277,11 @@ def strategy_info(cfg: dict, params: dict) -> dict:
     }
 
 
+def _when(trade: dict) -> str:
+    """A trade's date with its Lisbon time when the round recorded one ("2026-11-03 14:20")."""
+    return trade["date"] + (" " + trade["hora"] if trade.get("hora") else "")
+
+
 def position_history(trades: list[dict], strategy: str, params: dict, kept: int = 60) -> list[dict]:
     """The trades grouped into positions (first buy to last sell), newest first, each trade with its justification."""
     lots, open_lot = [], {}
@@ -2274,8 +2291,8 @@ def position_history(trades: list[dict], strategy: str, params: dict, kept: int 
         t = {**t, "why": strategy_docs.justify(strategy, params, t)}
         lot = open_lot.get(t["symbol"])
         if lot is None:
-            lot = {"symbol": t["symbol"], "opened": t["date"], "closed": None, "buys": [], "sells": [], "qty": 0.0,
-                   "invested": 0.0, "result": 0.0, "partial": t["side"] == "venda"}
+            lot = {"symbol": t["symbol"], "opened": t["date"], "opened_at": _when(t), "closed": None, "closed_at": None,
+                   "buys": [], "sells": [], "qty": 0.0, "invested": 0.0, "result": 0.0, "partial": t["side"] == "venda"}
             open_lot[t["symbol"]] = lot
             lots.append(lot)
         if t["side"] == "compra":
@@ -2287,7 +2304,7 @@ def position_history(trades: list[dict], strategy: str, params: dict, kept: int 
             lot["qty"] -= t["qty"]
             lot["result"] += t["pnl_eur"]
             if lot["qty"] <= 1e-6:
-                lot["closed"] = t["date"]
+                lot["closed"], lot["closed_at"] = t["date"], _when(t)
                 open_lot.pop(t["symbol"], None)
     for lot in lots:
         lot["status"] = "fechada" if lot["closed"] else "aberta"
@@ -2330,6 +2347,8 @@ def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
         for row in positions:
             buy_t = why_open.get(row["symbol"], {})
             row["reason"], row["why"] = buy_t.get("reason", ""), buy_t.get("why", "")
+            lot = next((x for x in history if x["symbol"] == row["symbol"] and x["status"] == "aberta"), None)
+            row["since"] = lot["opened_at"] if lot and lot["opened"] == row["entry_date"] else row["entry_date"]
         stats = live_stats(port)
         hist = port["history"]
         peak, max_dd = 0.0, 0.0
@@ -2462,6 +2481,18 @@ def reply_target() -> dict:
     return {}
 
 
+def publish_agent_list(config: dict) -> None:
+    """The agents a member can follow in the profile (portal:agentes, read by the Worker): the active league."""
+    rows = [{"id": c["id"], "name": c["name"], "emoji": c["emoji"], "perfil": profile_of(c), "modo": mode_of(c),
+             "congelado": bool(c.get("congelado"))} for c in active_agents(config)]
+    try:
+        import discord_bot
+
+        discord_bot.kv_put("portal:agentes", rows)
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN: lista de agentes: {e!r}", file=sys.stderr)
+
+
 def publish_calendar(config: dict, state: dict, mkt: Market, extra: set[str] = frozenset()) -> None:
     """The portal's calendar: macro events for 14 days and results dates of the followed stocks for 21 days."""
     import macro
@@ -2588,6 +2619,13 @@ def frozen_report(config: dict, state: dict, mkt: Market) -> dict:
             row["indice_liquido"] = round(cmp[1] - TAX_RATE * max(cmp[1], 0.0), 4)
             row["diferenca_liquida"] = round(row["liquido"] - row["indice_liquido"], 4)
             row["sessoes"] = cmp[2]
+        try:  # the same agent in a virtual IBKR account (whole shares, IBKR's costs and order rules)
+            import ibkr
+
+            if (v := ibkr.virtual_summary(cfg["id"])):
+                row["ibkr"] = v
+        except Exception:  # noqa: BLE001
+            pass
         out["agents"][cfg["id"]] = row
     try:
         FROZEN_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -2955,11 +2993,25 @@ def main() -> int:
         except OSError:
             pass
         changed = json.dumps(state, sort_keys=True, default=str) != before
+        if changed:  # the agents under test, as if traded at Interactive Brokers (scripts/ibkr.py)
+            try:
+                import ibkr
+
+                ibkr.virtual_round(config, state, mkt, now)
+            except Exception as e:  # noqa: BLE001
+                print(f"WARN: IBKR simulada: {e!r}", file=sys.stderr)
         print(f"Ronda: decisões feitas em {(datetime.now(timezone.utc) - now).total_seconds():.0f} s desde o início")
         if not changed and not twins:
             return 0
         save(config, state)
         archive(config, state)
+        if moves and not a.dry_run:  # the members who follow an agent hear of its trades in the round it decides
+            try:
+                import copy_alerts
+
+                copy_alerts.notify_round(config, snapshot, state, moves, mkt, clock)
+            except Exception as e:  # noqa: BLE001
+                print(f"WARN: avisos a quem segue: {e!r}", file=sys.stderr)
         try:  # the portal at the prices of this moment
             league(config, state, mkt, f"🤖 Liga dos agentes · {mkt.as_of.isoformat()} às {now.astimezone(timezone.utc):%H:%M} UTC")
         except Exception as e:
@@ -2976,6 +3028,7 @@ def main() -> int:
         embeds, _ = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}")
         print(f"Portal atualizado: {embeds[0].get('url', 'sem credenciais da Cloudflare')}")
         publish_calendar(config, state, mkt)
+        publish_agent_list(config)
         holders: dict[str, list[str]] = {}
         for cfg in active_agents(config):
             for sym in (state["agents"].get(cfg["id"]) or {}).get("positions", {}):
@@ -2998,8 +3051,21 @@ def main() -> int:
             except Exception as e:  # noqa: BLE001 - never stops the day
                 print(f"WARN: dividendos: {e!r}", file=sys.stderr)
             moves, training, avoided, events = run_day(config, state, mkt)
+            try:  # the agents under test, as if traded at Interactive Brokers (scripts/ibkr.py)
+                import ibkr
+
+                ibkr.virtual_round(config, state, mkt)
+            except Exception as e:  # noqa: BLE001
+                print(f"WARN: IBKR simulada: {e!r}", file=sys.stderr)
             save(config, state)  # bankruptcies retire agents and add their replacements
             decision_page(config, state, mkt, frozen_report(config, state, mkt))
+            if not a.dry_run:
+                try:  # the orders for the next open, to the members who follow each agent
+                    import copy_alerts
+
+                    copy_alerts.notify_orders(config, state, mkt)
+                except Exception as e:  # noqa: BLE001
+                    print(f"WARN: avisos a quem segue: {e!r}", file=sys.stderr)
             archive(config, state, mkt)
             embeds, files = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}",
                                    moves, training, avoided, events)
@@ -3039,6 +3105,7 @@ def main() -> int:
             props["scoreboard"] = proposals.scoreboard(proposals.update_log(props, mkt))
             interactive.publish_section("proposals", props)
             publish_calendar(config, state, mkt, {b["symbol"] for b in props["buys"]})
+            publish_agent_list(config)
             portal = interactive.portal_url()
             if portal:
                 buttons.append(("🏟️ Abrir o portal", portal))

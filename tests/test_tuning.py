@@ -164,6 +164,28 @@ def test_position_history_groups_trades_and_justifies_them():
     assert "tocou no stop" in aaa["sells"][0]["why"] and "mínimo do dia 11.80" in aaa["sells"][0]["why"]
 
 
+def test_position_history_keeps_open_and_close_times():
+    trades = [
+        {"date": "2026-11-03", "side": "compra", "symbol": "DB1.DE", "qty": 1, "price": 315, "eur": 315, "pnl_eur": 0,
+         "reason": "x", "hora": "09:40"},
+        {"date": "2026-11-05", "side": "venda", "symbol": "DB1.DE", "qty": 1, "price": 330, "eur": 330, "pnl_eur": 15,
+         "reason": "alvo", "hora": "15:10"},
+        {"date": "2026-11-05", "side": "compra", "symbol": "REP.MC", "qty": 1, "price": 30, "eur": 30, "pnl_eur": 0, "reason": "x"},
+    ]
+    rep, db1 = agents.position_history(trades, "foguetao", {"n": 5, "stop_pct": 0.1, "cada": 5})
+    assert db1["opened_at"] == "2026-11-03 09:40" and db1["closed_at"] == "2026-11-05 15:10"
+    assert rep["opened_at"] == "2026-11-05" and rep["closed_at"] is None  # no time recorded: the date alone
+
+
+def test_a_fill_at_the_open_is_stamped_with_the_exchange_opening_in_lisbon():
+    from datetime import date
+
+    assert agents.open_clock("AAPL", date(2026, 11, 5)) == "14:30"
+    assert agents.open_clock("SAP.DE", date(2026, 11, 5)) == "08:00"
+    assert agents.open_clock("SAP.DE", date(2026, 7, 1)) == "08:00"  # both in summer time
+    assert agents.open_clock("AAPL", date(2026, 10, 27)) == "13:30"  # Europe already back, New York not yet
+
+
 def test_a_broken_bar_does_not_fill_the_order():
     idx = pd.bdate_range("2026-10-01", periods=3)
     df = pd.DataFrame({"Open": [10.0, 0.0, 11.0], "High": [10.5, 0.0, 11.5], "Low": [9.5, 0.0, 10.5], "Close": [10.0, float("nan"), 11.0],

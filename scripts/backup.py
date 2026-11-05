@@ -21,7 +21,7 @@ import requests
 
 from discord_bot import KV_TITLE
 
-PREFIXES = ["portfolio:", "portfolio-user:", "login-google:", "follows:", "schedule", "portal:token", "discord:ids"]
+PREFIXES = ["portfolio:", "portfolio-user:", "login-google:", "follows:", "copiar:", "schedule", "portal:token", "discord:ids"]
 D1_NAME = "ogj"
 
 
