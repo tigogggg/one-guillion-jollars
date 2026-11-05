@@ -203,7 +203,7 @@ the message with a fresh one (new times, new link).
 breadth gauge, the market context (VIX, policy uncertainty, credit spread,
 dollar, S&P 500 trend), the 3 best proposals, the viewer's own portfolio
 summary (the browser remembers the `/carteira` link once opened on that
-device), the important news, the league podium and the next runs. Terms
+device), the important news, the league podium and the next runs. "📊 Dashboard" puts everything at a glance: four tiles (the S&P 500 (SPY) today, the member's portfolio today, or a stock picked at random from the day's proposals when there is no portfolio yet, the market sentiment (zone, VIX, Stage 2) and Brent crude today; live Yahoo quotes fetched by the Worker, `dashboardQuotes`), then the portfolio, the league, the pre-training (the 5 best and the Indexador over 20, 15, 10, 5, 3 or 1 years, every line from 0% at the start of the interval; the browser remembers the choice), the news and the proposals. Terms
 underlined in dotted lines open a definition (also listed in "❓ Glossário").
 The agents tab can compare two agents side by side, with both curves. On
 phones the tabs move to a bottom bar. The portal and each portfolio can be

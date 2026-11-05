@@ -130,9 +130,38 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
                            display: session.data.display_name || "", since: session.data.created || null, google: !!session.data.google,
                            wallet: `/c/${session.tok}` } : null;
   const version = await portalVersion(env);
-  const runs = await workflowRuns(env);
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution, decision, version, runs, home,
+  const [runs, quotes] = await Promise.all([workflowRuns(env), dashboardQuotes(session, proposals)]);
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution, decision, version, runs, home, quotes,
                                                                        manifest: token === null ? "/manifest.webmanifest" : `/p/${token}/manifest.webmanifest` }));
+}
+
+// 📊 Dashboard: the S&P 500 (SPY) and Brent crude today, and, for whoever has no portfolio yet, one stock picked at
+// random (a proposal of the day, else a large company). Yahoo's chart API, cached a minute at Cloudflare's edge.
+const DASH_STOCKS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "JPM", "V", "KO", "COST", "JNJ"];
+async function quoteNow(symbol) {
+  try {
+    const resp = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=5d&interval=1d`,
+                             { headers: { "User-Agent": "Mozilla/5.0 (OGJ portal)" }, cf: { cacheTtl: 60, cacheEverything: true } });
+    if (!resp.ok) return null;
+    const r = (await resp.json())?.chart?.result?.[0];
+    const m = r?.meta;
+    if (!m || m.regularMarketPrice == null) return null;
+    const closes = (r.indicators?.quote?.[0]?.close || []).filter((x) => x != null);  // the day before the last close
+    const prev = closes.length >= 2 ? closes[closes.length - 2] : m.chartPreviousClose ?? null;
+    return { symbol, price: m.regularMarketPrice, prev, currency: m.currency || "USD", name: m.shortName || m.longName || "",
+             time: (m.regularMarketTime || 0) * 1000 };
+  } catch {
+    return null;
+  }
+}
+
+async function dashboardQuotes(session, proposals) {
+  const hasWallet = !!(session && (session.data.tx || []).length);
+  const pool = (proposals?.buys || []).map((b) => b.symbol).filter(Boolean);
+  const list = pool.length ? pool : DASH_STOCKS;
+  const random = hasWallet ? null : list[Math.floor(Math.random() * list.length)];
+  const [spy, oil, stock] = await Promise.all([quoteNow("SPY"), quoteNow("BZ=F"), random ? quoteNow(random) : null]);
+  return { spy, oil, stock, wallet: hasWallet };
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +307,7 @@ export function chartPage(data, upcoming, newer, extras = {}) {
     ? `<a class="banner" href="/g/${esc(newer)}">🔄 Há uma versão mais recente deste gráfico · abrir</a>`
     : "";
   const portal = !!extras.portal;
-  const tabs = (portal ? [["hoje", "🏠 Hoje"]] : []).concat([["corrida", "🏁 Corrida"]])
+  const tabs = (portal ? [["hoje", "🏠 Hoje"], ["dashboard", "📊 Dashboard"]] : []).concat([["corrida", "🏁 Corrida"]])
     .concat(portal && extras.pretrain ? [["pretreino", "⏪ Pré-treino"]] : []).concat([["agentes", "🧾 Agentes"]])
     .concat(portal ? [["decisao", "⚖️ Decisão"], ["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"]] : [])
     .concat(portal ? [] : [["agenda", "⏱️ Agenda"]])  // in the portal the schedule is part of 🩺 Estado
@@ -297,7 +326,8 @@ ${portal ? `<form id="search" class="search" role="search" autocomplete="off">
   <button class="btn alt" type="button" id="guide-open" title="Guia rápido">📖 GUIA</button>
 </form>` : ""}
 <nav class="tabs" id="tabs">${tabs.map(([k, label], i) => `<button class="tab${i ? "" : " on"}" data-tab="${k}">${label}</button>`).join("")}</nav>
-${portal ? `<section data-tab="hoje"><div id="today"></div></section>` : ""}
+${portal ? `<section data-tab="hoje"><div id="today"></div></section>
+<section data-tab="dashboard" hidden><div id="dash" class="dash"></div></section>` : ""}
 <section class="race" id="race" data-tab="corrida"${portal ? " hidden" : ""}>
   <div class="marquee"><span>🏁 Grande Prémio dos Agentes 🏁</span></div>
   <div class="hud">
@@ -368,6 +398,7 @@ const PRETRAIN = ${safeJson(extras.pretrain || null)};
 const RUNS = ${safeJson(extras.runs || null)};
 const GEO = ${safeJson(extras.geo || null)};
 const EVOLUTION = ${safeJson(extras.evolution || null)};
+const QUOTES = ${safeJson(extras.quotes || null)};
 </script>
 <script src="${STATIC_PATHS.portal}"></script>
 ${portal ? `<script src="${STATIC_PATHS.extra}"></script>` : ""}`;
@@ -493,6 +524,18 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .tile .v { color:#fff; }
 .tile .k { color:var(--muted); font-size:.8rem; } .tile .v { font-size:1.15rem; font-weight:600; font-variant-numeric:tabular-nums; }
 .tile .s { color:var(--muted); font-size:.78rem; }
+.dash-top { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin-top:12px; }
+.dash-top .tile .v { font-size:1.45rem; } .dash .tile .v.up { color:var(--up); } .dash .tile .v.down { color:var(--down); } .dash .tile .v.gold { color:var(--gold); }
+.dash-row { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); gap:12px; margin-top:12px; align-items:start; }
+.dash-col { display:grid; gap:12px; min-width:0; }
+.dcard { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; min-width:0; }
+.dcard .dh { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.dcard .dh h3 { margin:0; } .dcard .dh a { font-size:.82rem; }
+.drow { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 0; border-top:1px solid var(--line); font-size:.9rem; }
+.dh + .drow, .chips + .dash-chart + .drow { border-top:0; } .drow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dash .grid { margin-bottom:8px; } .dash .chips { margin-bottom:6px; } .dash .chips .chip { padding:3px 10px; font-size:.8rem; }
+.dash-chart { height:260px; }
+@media (max-width:900px) { .dash-top { grid-template-columns:1fr 1fr; } .dash-row { grid-template-columns:1fr; } }
 .chart { width:100%; height:62vh; min-height:340px; background:var(--card); border:2px solid var(--line); border-radius:8px; }
 .range-custom { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 6px; font-size:12px; color:var(--muted, #b5bac1); }
 .range-custom input { background:#1e1f22; color:inherit; border:1px solid var(--line); border-radius:4px; padding:2px 6px; font:inherit; color-scheme:dark; }
@@ -1017,6 +1060,7 @@ function openTab(name) {
   document.querySelectorAll("section[data-tab]").forEach((sec) => { sec.hidden = sec.dataset.tab !== name; });
   if (name === "corrida" && window.Plotly) Plotly.Plots.resize("chart");
   if (name === "pretreino" && window.Plotly && $("pt-chart")) Plotly.Plots.resize("pt-chart");
+  if (name === "dashboard" && window.Plotly && $("dash-pt-chart") && $("dash-pt-chart").data) Plotly.Plots.resize("dash-pt-chart");
   try { history.replaceState(null, "", "#" + name); } catch (e) {}
 }
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
@@ -1326,6 +1370,124 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
   }).catch(() => {});
 })();
 
+
+// ---- 📊 dashboard: the market, the member's portfolio, the league, the pre-training, the news and the proposals ----
+(function dashboard() {
+  if (!$("dash")) return;
+  const Q = QUOTES || {}, M = MARKET || {}, c = M.context || {}, P = PROPOSALS;
+  const dayPct = (q) => q && q.prev ? (q.price / q.prev - 1) * 100 : null;
+  const money = (x, cur) => fmtNum(x) + " " + (({ EUR: "€", USD: "$", GBp: "p" })[cur] || cur || "");
+  const go = (t, label) => '<a href="#' + t + '" class="go" data-t="' + t + '">' + label + ' →</a>';
+  const zone = M.zone || (P && P.zone) || "—";
+  const zoneCls = { Alta: "up", Neutra: "gold", Cautelosa: "gold", Queda: "down" }[zone] || "";
+  const vixWord = c.vix == null ? "" : c.vix > 30 ? "mercado com medo" : c.vix > 20 ? "mercado nervoso" : "mercado calmo";
+  const spy = Q.spy, oil = Q.oil, stock = Q.stock;
+  const walletOn = !!(Q.wallet && WALLET);
+  const stockTile = () => stock ? tile("🎲 " + esc(stock.symbol) + " hoje (ao acaso)", fmtPct(dayPct(stock)), esc(stock.name) + " · " + money(stock.price, stock.currency), cls(dayPct(stock)))
+    : tile("🎲 Uma ação ao acaso", "—", "sem cotação agora");
+  const top = '<div class="dash-top">' +
+    tile("📈 S&P 500 (SPY) hoje", fmtPct(dayPct(spy)), spy ? money(spy.price, spy.currency) + (c.spy_trend != null ? " · " + fmtPct(c.spy_trend * 100) + " vs média 200d" : "") : "sem cotação agora", cls(dayPct(spy))) +
+    '<div id="dash-wallet-tile">' + (walletOn ? tile("💼 A tua carteira hoje", "…", "a carregar") : stockTile()) + '</div>' +
+    tile("🧭 Sentimento do mercado", esc(zone), (c.vix != null ? "VIX " + fmtNum(c.vix, 0) + " · " + vixWord : "") + (M.stage2_pct != null ? " · " + fmtNum(M.stage2_pct, 0) + "% em Stage 2" : ""), zoneCls) +
+    tile("🛢️ Petróleo (Brent) hoje", fmtPct(dayPct(oil)), (oil ? money(oil.price, oil.currency) : "sem cotação agora") + (c.oil_chg != null ? " · 3 meses " + fmtPct(c.oil_chg * 100) : ""), cls(dayPct(oil))) + '</div>';
+  const wallet = '<div class="dcard"><div class="dh"><h3>💼 A tua carteira</h3>' + (WALLET ? '<a href="/perfil#resumo">Abrir no perfil →</a>' : '') + '</div><div id="dash-wallet">' +
+    (walletOn ? '<p class="muted small">A carregar…</p>' : WALLET ? '<p class="muted">Ainda não tens movimentos. Importa o extrato da corretora ou adiciona uma compra no <a href="/perfil#importar">perfil</a> e o resumo aparece aqui.</p>'
+      : '<p class="muted"><a href="/entrar">Entra com o Discord ou o Google</a> para veres aqui a tua carteira.</p>') + '</div></div>';
+  const leaders = agents.slice().sort((a, b) => headline(b) - headline(a));
+  const league = '<div class="dcard"><div class="dh"><h3>🏁 Liga dos agentes</h3>' + go("corrida", "Corrida") + '</div>' +
+    (leaders.slice(0, 6).map((a, i) => '<div class="drow"><span class="nm">' + (i + 1) + ' · <a href="#" class="dash-agent" data-n="' + esc(a.name) + '">' + esc(a.emoji + " " + a.name) + '</a></span><span class="' + cls(headline(a)) + '">' + fmtPct(headline(a)) + '</span></div>').join("") ||
+      '<p class="muted">Ainda sem agentes.</p>') +
+    (leaders.length ? '<p class="muted small">' + leaders.length + ' agentes na liga · dados de ' + esc(lisbon(Date.parse(DATA.updated), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) + '</p>' : '') + '</div>';
+  const pretrain = '<div class="dcard"><div class="dh"><h3>⏪ Pré-treino</h3>' + (PRETRAIN ? go("pretreino", "Pré-treino") : '') + '</div><div id="dash-pt">' +
+    (PRETRAIN ? '' : '<p class="muted">O pré-treino aparece aqui depois da próxima execução.</p>') + '</div></div>';
+  const items = ((NEWS || {}).items || []).filter((i) => (i.importancia || 0) >= 2).slice(0, 5);
+  const news = '<div class="dcard"><div class="dh"><h3>📰 Notícias</h3>' + go("noticias", "Todas") + '</div>' +
+    (items.map((i) => '<div class="drow"><span class="nm" title="' + esc(i.resumo || i.title) + '"><b class="' + (i.sentimento > 0 ? "up" : i.sentimento < 0 ? "down" : "") + '">' + esc(i.symbol) + '</b> ' + esc(i.resumo || i.title) + '</span></div>').join("") ||
+      '<p class="muted">Sem notícias importantes.</p>') + '</div>';
+  const buys = P ? (P.buys || []).filter((b) => !b.conflict).slice(0, 4) : [], sells = P ? (P.sells || []).slice(0, 2) : [];
+  const props = '<div class="dcard"><div class="dh"><h3>🧠 Propostas de hoje</h3>' + go("propostas", "Ver") + '</div>' +
+    (buys.map((b) => '<div class="drow"><span class="nm"><b>' + esc(b.symbol) + '</b> <span class="muted small">' + esc(b.name || "") + '</span></span><span><span class="up">comprar</span>' + (b.safety != null ? ' <span class="muted small">🛡️ ' + b.safety + '</span>' : '') + '</span></div>').join("") +
+     sells.map((x) => '<div class="drow"><span class="nm"><b>' + esc(x.symbol) + '</b></span><span class="down">vender</span></div>').join("") || '<p class="muted">Sem propostas hoje.</p>') + '</div>';
+  $("dash").innerHTML = '<h2>📊 Dashboard</h2>' + top + '<div class="dash-row">' + wallet + league + '</div>' +
+    '<div class="dash-row">' + pretrain + '<div class="dash-col">' + news + props + '</div></div>';
+  $("dash").addEventListener("click", (e) => {
+    const a = e.target.closest(".go");
+    if (a) { e.preventDefault(); openTab(a.dataset.t); window.scrollTo(0, 0); return; }
+    const ag = e.target.closest(".dash-agent");
+    if (ag) { e.preventDefault(); const i = agents.findIndex((x) => x.name === ag.dataset.n); if (i >= 0) { openTab("agentes"); show(i, true); } }
+  });
+
+  // the pre-training over the chosen years (20 by default), every line from 0% at the start of the interval
+  if (PRETRAIN) {
+    const series = (PRETRAIN.series || []).filter((s) => s.x.length);
+    const first = series.reduce((m, s) => (s.x[0] < m ? s.x[0] : m), "9999"), last = series.reduce((m, s) => (s.x[s.x.length - 1] > m ? s.x[s.x.length - 1] : m), "");
+    const span = last ? (Date.parse(last) - Date.parse(first)) / 3.156e10 : 0;
+    const spans = [20, 15, 10, 5, 3, 1].filter((y) => y <= Math.round(span));
+    if (!spans.length) spans.push(Math.max(1, Math.round(span)));
+    let years = store.get("dash-pt-years", spans[0]);
+    if (spans.indexOf(years) < 0) years = spans[0];
+    const ptByName = Object.fromEntries((PRETRAIN.agents || []).map((a) => [a.name, a]));
+    const colours = ["#39ff88", "#00e5ff", "#ffe14d", "#ff2e88", "#9b84ee"];
+    const draw = () => {
+      const from = new Date(Date.parse(last) - years * 3.156e10).toISOString().slice(0, 10);
+      const cut = series.map((s) => {
+        let i = 0;
+        while (i < s.x.length - 1 && String(s.x[i]).slice(0, 10) < from) i++;
+        const base = 1 + s.y[i] / 100;
+        const y = s.y.slice(i).map((v) => ((1 + v / 100) / base - 1) * 100);
+        return { name: s.name, x: s.x.slice(i), y, ret: y[y.length - 1] };
+      });
+      const bench = cut.find((s) => s.name === "Indexador");
+      const best = cut.filter((s) => s.name !== "Indexador").sort((a, b) => b.ret - a.ret).slice(0, 5);
+      $("dash-pt").innerHTML = '<div class="chips">' + spans.map((y) => '<button class="chip' + (y === years ? ' on' : '') + '" data-y="' + y + '">' + y + (y === 1 ? ' ano' : ' anos') + '</button>').join("") + '</div>' +
+        '<div id="dash-pt-chart" class="dash-chart"></div>' +
+        best.map((s, i) => { const a = ptByName[s.name]; return '<div class="drow"><span class="nm"><span style="color:' + colours[i] + '">━</span> ' + esc((a ? a.emoji + " " : "") + s.name) + '</span><span class="' + cls(s.ret) + '">' + fmtPct(s.ret, 0) + '</span></div>'; }).join("") +
+        (bench ? '<div class="drow"><span class="nm muted">┅ 🐢 Indexador (S&P 500)</span><span class="' + cls(bench.ret) + '">' + fmtPct(bench.ret, 0) + '</span></div>' : '') +
+        '<p class="muted small">Os 5 melhores ' + (years === 1 ? 'no último ano' : 'nos últimos ' + years + ' anos') + ' da simulação, com custos e impostos' +
+        (PRETRAIN.updated ? ' · treino de ' + esc(lisbon(Date.parse(PRETRAIN.updated), { day: "2-digit", month: "2-digit", year: "numeric" })) : '') + '.</p>';
+      if (window.Plotly) Plotly.newPlot("dash-pt-chart", best.map((s, i) => ({ x: s.x, y: s.y, name: s.name, type: "scatter", mode: "lines", line: { color: colours[i], width: 2 } }))
+        .concat(bench ? [{ x: bench.x, y: bench.y, name: "Indexador", type: "scatter", mode: "lines", line: { color: "#9b96c9", width: 1.5, dash: "dot" } }] : []),
+        { paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 11 }, margin: { l: 48, r: 8, t: 8, b: 26 }, hovermode: "x unified", showlegend: false,
+          yaxis: { ticksuffix: "%", gridcolor: "#2e2763" }, xaxis: { gridcolor: "#2e2763" } }, { responsive: true, displaylogo: false, displayModeBar: false });
+      else $("dash-pt-chart").style.display = "none";
+    };
+    $("dash-pt").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-y]");
+      if (!b) return;
+      years = +b.dataset.y;
+      store.set("dash-pt-years", years);
+      draw();
+    });
+    draw();
+  }
+
+  // the member's portfolio: the same data as the profile (/c/<token>/data)
+  if (walletOn) fetch(WALLET + "/data", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((w) => {
+    if (!w || !(w.tx || []).length) { $("dash-wallet-tile").innerHTML = stockTile(); $("dash-wallet").innerHTML = '<p class="muted">Ainda não tens movimentos.</p>'; return; }
+    let value = 0, cost = 0, day = 0;
+    const pos = {};
+    for (const t of w.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq)) {
+      const p = pos[t.symbol] ||= { qty: 0, cost: 0, cur: t.currency };
+      if (t.side === "buy") { p.qty += t.qty; p.cost += t.qty * t.price + t.fee; } else { const avg = p.qty ? p.cost / p.qty : 0; p.cost -= avg * t.qty; p.qty -= t.qty; }
+    }
+    const rows = [];
+    for (const [sym, p] of Object.entries(pos)) {
+      const q = w.quotes[sym], fx = w.fx[p.cur];
+      if (!q || fx == null || p.qty <= 1e-9) continue;
+      const v = p.qty * q.price * fx, d = p.qty * (q.price - (q.prev ?? q.price)) * fx;
+      value += v; cost += p.cost * fx; day += d;
+      rows.push({ sym, qty: p.qty, v, pct: q.prev ? (q.price / q.prev - 1) * 100 : null });
+    }
+    const dayP = value - day ? day / (value - day) * 100 : null;
+    $("dash-wallet-tile").innerHTML = tile("💼 A tua carteira hoje", fmtPct(dayP), fmtEur(day) + " · valor total " + fmtEur(value), cls(day));
+    const sells = Object.entries(w.verdicts || {}).filter(([k, v]) => k !== "rules" && v.verdict === "Vender").map(([k]) => k);
+    rows.sort((a, b) => b.v - a.v);
+    $("dash-wallet").innerHTML = '<div class="grid">' + tile("Valor", fmtEur(value)) + tile("Ganho", fmtEur(value - cost), fmtPct(cost ? (value / cost - 1) * 100 : null), cls(value - cost)) +
+      tile("Hoje", fmtEur(day), fmtPct(dayP), cls(day)) + tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up") + '</div>' +
+      rows.slice(0, 6).map((r) => '<div class="drow"><span class="nm"><b>' + esc(r.sym) + '</b> <span class="muted small">' + fmtNum(r.qty, r.qty % 1 ? 2 : 0) + ' · ' + fmtEur(r.v) + '</span></span><span class="' + cls(r.pct) + '">' + fmtPct(r.pct) + '</span></div>').join("") +
+      (rows.length > 6 ? '<p class="muted small">+ ' + (rows.length - 6) + ' posições no perfil</p>' : '');
+  }).catch(() => { $("dash-wallet").innerHTML = '<p class="muted">Não consegui ler a carteira agora.</p>'; });
+})();
 
 // ---- news ----
 (function news() {
@@ -1903,6 +2065,7 @@ async function savePrefs(fields) {
   if (!$("guide-open")) return;
   const steps = [
     ["🏠 Hoje", "O resumo do dia: o mercado, as melhores propostas dos agentes e a tua carteira. Começa sempre aqui."],
+    ["📊 Dashboard", "Tudo num relance: o S&P 500, a tua carteira hoje, o sentimento do mercado e o petróleo; a carteira, a liga, o pré-treino (20, 10, 5 anos…), as notícias e as propostas."],
     ["🧠 Propostas", "O que os agentes (estratégias simuladas, treinadas em 20 anos de mercado) querem comprar ou vender, com plano (entrada, stop, alvo) e um score de segurança explicado. São ideias para estudar, não ordens."],
     ["👤 O teu perfil e a carteira", "Carrega no teu nome (canto superior direito): escolhes como os outros membros te veem e tens lá a tua carteira. Importa o histórico da XTB e acompanha tudo em tempo quase real. Podes pedir uma análise ao Claude. Usa a 🔎 pesquisa para ver tudo sobre um ticker."],
   ];
