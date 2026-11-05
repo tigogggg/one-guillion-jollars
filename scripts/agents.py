@@ -608,6 +608,20 @@ def live_bars(hist: dict[str, pd.DataFrame], now: datetime) -> dict[str, pd.Data
 PRICE_CACHE = Path(__file__).resolve().parents[1] / "state" / "prices"  # kept between rounds by actions/cache
 
 
+def session_live(symbol: str, now: datetime) -> bool:
+    """Whether a round can see new prices of this symbol now: its exchange is open (or closed less than 45 minutes
+    ago, for the final bar). Before New York opens, a US stock's last bar is yesterday's (in the day's cached year);
+    after Europe closes, a European one's bar no longer moves. Currencies trade all day."""
+    from zoneinfo import ZoneInfo
+
+    if symbol.endswith("=X"):
+        return True
+    zone, opens, closes = (("America/New_York", (9, 25), (16, 45)) if is_us(symbol)
+                           else ("Europe/Berlin", (8, 55), (18, 15)))
+    t = now.astimezone(ZoneInfo(zone))
+    return t.weekday() < 5 and opens <= (t.hour, t.minute) <= closes
+
+
 def round_history(tickers: list[str], now: datetime) -> dict[str, pd.DataFrame]:
     """A year of daily bars for the rounds: the year is downloaded once a day and kept (PRICE_CACHE); each round
     then only fetches the last 5 days, which carry today's bar so far, and puts them on top."""
@@ -635,7 +649,8 @@ def round_history(tickers: list[str], now: datetime) -> dict[str, pd.DataFrame]:
                 old.unlink()
         if len(base) >= 0.95 * len(tickers):  # a download with holes is used, not kept for the rest of the day
             path.write_bytes(pickle.dumps(base))
-    fresh = download_history(tickers, period="5d")
+    live_now = [t for t in tickers if session_live(t, now)]  # only the markets in session: about half the download
+    fresh = download_history(live_now, period="5d") if live_now else {}
     out = {}
     for t in tickers:
         b, f = base.get(t), fresh.get(t)

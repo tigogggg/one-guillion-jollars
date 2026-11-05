@@ -434,3 +434,16 @@ def test_every_change_of_an_agent_is_archived_once(monkeypatch, tmp_path):
     assert market_archive.changes({"agents": []}, state) == 0  # never twice
     rows = [json.loads(x) for x in (tmp_path / "evolucao" / "2026-11.jsonl").read_text().splitlines()]
     assert {r["kind"] for r in rows} == {"mudanca", "dividendo", "pontos"}
+
+
+def test_a_round_only_downloads_the_markets_in_session():
+    from datetime import datetime, timezone
+
+    import agents
+
+    morning = datetime(2026, 11, 5, 9, 0, tzinfo=timezone.utc)  # Lisbon 09:00: Europe open, New York not yet
+    evening = datetime(2026, 11, 5, 19, 0, tzinfo=timezone.utc)  # Europe closed, New York open
+    assert agents.session_live("SAP.DE", morning) and not agents.session_live("AAPL", morning)
+    assert agents.session_live("AAPL", evening) and not agents.session_live("SAP.DE", evening)
+    assert agents.session_live("EURUSD=X", evening)
+    assert not agents.session_live("AAPL", datetime(2026, 11, 7, 19, 0, tzinfo=timezone.utc))  # Saturday
