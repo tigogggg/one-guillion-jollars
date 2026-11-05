@@ -557,6 +557,22 @@ def test_after_europe_closes_the_rounds_keep_its_final_bar(tmp_path, monkeypatch
     assert asked == []
 
 
+def test_the_daily_run_rebuilds_a_european_day_yahoo_has_not_published_yet():
+    hist = {"AAA.DE": frame([1, 2], [1, 2], [1, 2], [1, 2]), "SPY": frame([1, 2, 3], [1, 2, 3], [1, 2, 3], [1, 2, 3])}
+    as_of = DATES[2].date()
+    asked = []
+
+    def fetch(symbols, day):
+        asked.append((symbols, day))
+        return {"AAA.DE": {"Open": 2.1, "High": 2.4, "Low": 1.9, "Close": 2.2, "Volume": 5e5}}
+
+    out = agents.fill_last_day(hist, as_of, fetch)
+    assert asked == [(["AAA.DE"], as_of)]  # only the late non-US one
+    assert out["AAA.DE"].index[-1].date() == as_of and out["AAA.DE"]["Close"].iloc[-1] == 2.2
+    assert out["SPY"] is hist["SPY"]
+    assert agents.fill_last_day(out, as_of, fetch) is out and len(asked) == 1  # nothing late: nothing asked
+
+
 def test_orders_without_data_wait_and_then_expire():
     hist = {"AAA.DE": frame([10, 10], [10, 10], [10, 10], [10, 10])}
     port = new_portfolio(1000, DATES[0].date())

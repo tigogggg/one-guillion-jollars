@@ -510,6 +510,60 @@ def complete_bars(hist: dict[str, pd.DataFrame], now: datetime, until: date | No
     return out
 
 
+def intraday_day_bars(symbols: list[str], day: date) -> dict[str, dict]:
+    """That day's daily bar of each symbol rebuilt from Yahoo's 30-minute bars (open, high, low, close, volume)."""
+    import yfinance as yf
+
+    out = {}
+    for i in range(0, len(symbols), 100):
+        chunk = symbols[i: i + 100]
+        try:
+            df = yf.download(chunk, period="5d", interval="30m", group_by="ticker", auto_adjust=True, threads=True,
+                             progress=False)
+        except Exception as e:  # noqa: BLE001
+            print(f"WARN: barras de 30 min: {e!r}", file=sys.stderr)
+            continue
+        if df is None or df.empty:
+            continue
+        have = set(df.columns.get_level_values(0))
+        for sym in chunk:
+            if sym not in have:
+                continue
+            sub = df[sym].dropna(subset=["Close"])
+            if not len(sub):
+                continue
+            from zoneinfo import ZoneInfo
+
+            tz = EXCHANGE_CLOSE.get(exchange_of(sym), ("Europe/Lisbon",))[0]
+            idx = sub.index.tz_convert(ZoneInfo(tz)) if sub.index.tz is not None else sub.index
+            sub = sub[[ts.date() == day for ts in idx]]
+            if len(sub):
+                out[sym] = {"Open": float(sub["Open"].iloc[0]), "High": float(sub["High"].max()),
+                            "Low": float(sub["Low"].min()), "Close": float(sub["Close"].iloc[-1]),
+                            "Volume": float(sub["Volume"].sum())}
+    return out
+
+
+def fill_last_day(hist: dict[str, pd.DataFrame], as_of: date, fetch=None) -> dict[str, pd.DataFrame]:
+    """The daily run happens before Europe opens, when Yahoo's daily history of European listings still lacks the
+    previous session (it appears around their open): without it, their prices were a day late. Each non-US symbol
+    whose last bar is older than the decision day gets that day's bar rebuilt from its 30-minute bars."""
+    late = [s for s, df in hist.items() if len(df) and exchange_of(s) not in ("", "=X") and df.index[-1].date() < as_of]
+    if not late:
+        return hist
+    bars = (fetch or intraday_day_bars)(late, as_of)
+    out = dict(hist)
+    for sym, bar in bars.items():
+        df = hist[sym]
+        at = pd.Timestamp(as_of)
+        if df.index.tz is not None:
+            at = at.tz_localize(df.index.tz)
+        row = pd.DataFrame([{c: bar.get(c, float("nan")) for c in df.columns}], index=pd.DatetimeIndex([at], name=df.index.name))
+        out[sym] = pd.concat([df.astype(float), row.astype(float)])
+    print(f"Dia {as_of.isoformat()} refeito com barras de 30 min: {len(bars)} de {len(late)} títulos fora dos EUA", flush=True)
+    return out
+
+
 EUROPE_PATH = Path(__file__).resolve().parents[1] / "data" / "universe" / "europe.csv"
 EU_LIQUID_SHARE = 0.75  # European stocks in play: the most traded 75% of the list (60-day traded value in euros)
 LIQUIDITY_DAYS = 60
@@ -729,8 +783,8 @@ def load_market(now: datetime | None = None, live: bool = False) -> Market:
             raise RuntimeError("Sem dados do Yahoo Finance (SPY).")
         # The decision day: the last full US session. Nothing later is seen, in any market (as in the backtest).
         as_of = stock_hist["SPY"].index[-1].date()
-        stock_hist = complete_bars(stock_hist, now, as_of)
-        etf_hist = complete_bars(download_history([t for t, _ in UCITS_ETFS]), now, as_of)
+        stock_hist = fill_last_day(complete_bars(stock_hist, now, as_of), as_of)
+        etf_hist = fill_last_day(complete_bars(download_history([t for t, _ in UCITS_ETFS]), now, as_of), as_of)
         fx_hist = complete_bars(download_history(list(FX_SYMBOLS.values())), now, as_of)
     if "EURUSD=X" not in fx_hist:
         raise RuntimeError("Sem dados do Yahoo Finance (EUR/USD).")
