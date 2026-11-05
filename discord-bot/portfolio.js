@@ -191,7 +191,7 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
     return resp;
   }
   if (rest === "/data" && request.method === "GET") return json(await snapshot(env, data));
-  if (rest === "/history" && request.method === "GET") return json(await history(env, data));
+  if (rest === "/history" && request.method === "GET") return json(await history(env, data, new URL(request.url).searchParams.get("escala") === "hora"));
   if (rest === "/analysis" && request.method === "GET") return json(await analysisStatus(env, data));
   if (rest === "/versions" && request.method === "GET") return json({ versions: await listVersions(env, tok), current: cur.version });
   if (rest === "/export" && request.method === "GET") {
@@ -804,16 +804,19 @@ async function judge(data, quotes, fx, proposals, news) {
   return out;
 }
 
-async function history(env, data) {
+// Each symbol's closes since the first purchase: daily, or hourly over the last month (hourly: times in Lisbon,
+// "2026-11-05 14:30", so a purchase dated that day counts from its first hour).
+const LISBON_TIME = new Intl.DateTimeFormat("sv-SE", { timeZone: "Europe/Lisbon", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+async function history(env, data, hourly = false) {
   if (!data.tx.length) return { series: {}, fx: {} };
   const first = data.tx.reduce((m, t) => (t.date < m ? t.date : m), data.tx[0].date);
   const p1 = Math.floor(Date.parse(first + "T00:00:00Z") / 1000) - 7 * 86400;
   const p2 = (Math.floor(Date.now() / 864e5) + 2) * 86400;  // whole days, so the shared copy is reused all day
-  const params = `period1=${p1}&period2=${p2}&interval=1d`;
+  const params = hourly ? "range=1mo&interval=60m" : `period1=${p1}&period2=${p2}&interval=1d`;
   const grab = async (sym) => {
-    const r = await yahooCached(sym, params, 6 * 3600);
+    const r = await yahooCached(sym, params, hourly ? 900 : 6 * 3600);
     const ts = r?.timestamp || [], cl = r?.indicators?.quote?.[0]?.close || [];
-    return { t: ts.map((x) => new Date(x * 1000).toISOString().slice(0, 10)), c: cl };
+    return { t: ts.map((x) => hourly ? LISBON_TIME.format(new Date(x * 1000)) : new Date(x * 1000).toISOString().slice(0, 10)), c: cl };
   };
   const symbols = [...new Set(data.tx.map((t) => t.symbol))];
   const currencies = [...new Set(data.tx.map((t) => t.currency))].filter((c) => c && c !== "EUR");
@@ -821,7 +824,10 @@ async function history(env, data) {
     Promise.all(symbols.map(async (s) => [s, await grab(s)])),
     Promise.all(currencies.map(async (c) => [c, await grab(`EUR${c === "GBp" || c === "GBX" ? "GBP" : c}=X`)])),
   ]);
-  return { series: Object.fromEntries(series), fx: Object.fromEntries(fxs) };
+  // the money invested converts each purchase at its own day's rate, older than the hourly month too
+  const foreign = data.tx.filter((t) => t.currency && t.currency !== "EUR");
+  const fxDay = hourly && foreign.length ? (await history(env, { tx: foreign }, false)).fx : null;  // daily copy, cached
+  return { series: Object.fromEntries(series), fx: Object.fromEntries(fxs), ...(fxDay ? { fx_dia: fxDay } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -918,7 +924,7 @@ function portfolioPage(data, tok, opts = {}) {
 <section data-tab="resumo"${opts.profile ? " hidden" : ""}>
   <div class="resumo-layout">
     <div class="resumo-main">
-      <h2>📈 Evolução</h2>
+      <h2>📈 Evolução <span class="scale-pick"><button type="button" class="btn ghost on" data-scale="dia">Diária</button><button type="button" class="btn ghost" data-scale="hora">Horária</button></span></h2>
       <div id="chart" class="chart"></div>
       <p class="muted small" id="chart-note">Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.</p>
     </div>
@@ -941,7 +947,7 @@ function portfolioPage(data, tok, opts = {}) {
         <option value="casa">Comprar casa / grande despesa</option><option value="rendimento">Rendimento regular (dividendos)</option><option value="preservar">Preservar o capital</option><option value="outro">Outro</option></select></label>
       <label>Queda que aguentas sem vender (%) <input name="max_drawdown_pct" type="number" min="0" max="100" placeholder="ex.: 20"></label>
       <label>Entradas mensais (€) <input name="monthly_eur" type="number" min="0" step="10"></label>
-      <label>Fundo de emergência fora da XTB (meses de despesas) <input name="emergency_months" type="number" min="0" max="120"></label>
+      <label>Fundo de emergência (meses de despesas) <input name="emergency_months" type="number" min="0" max="120"></label>
       <label>Experiência <select name="experience"><option value="">—</option><option value="iniciante">Iniciante</option><option value="intermedio">Intermédio</option><option value="avancado">Avançado</option></select></label>
       <label>ETFs: prefiro <select name="etf_preference"><option value="">—</option><option value="acumulacao">Acumulação</option><option value="distribuicao">Distribuição</option><option value="indiferente">Indiferente</option></select></label>
       <label>Outros investimentos (imobiliário, PPR, depósitos…) <input name="other" maxlength="300"></label>
@@ -1013,7 +1019,8 @@ const PROFILE = ${opts.profile ? "true" : "false"};
   return page(opts.profile ? `Perfil de ${me.name}` : `Carteira de ${data.name || "membro"}`, body, `${opts.embed ? '<base target="_top">' : ""}<link rel="manifest" href="/c/${tok}/manifest.webmanifest"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png?v=1gj">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
-<style>.form { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; align-items:end; }
+<style>.scale-pick { float:right; display:flex; gap:6px; } .scale-pick .btn { background:#3a2f86; border-bottom-color:#1d1650; padding:6px 10px; } .scale-pick .btn.on { background:var(--accent); border-bottom-color:#a3004f; }
+.form { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; align-items:end; }
 .form label { display:grid; gap:4px; font-size:.85rem; color:var(--muted); }
 .form input, .form select { background:#0b0820; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px; font:inherit; }
 .del { background:none; border:1px solid var(--down); color:var(--down); border-radius:4px; cursor:pointer; padding:2px 6px; }
@@ -1608,18 +1615,33 @@ async function load() {
   } catch (e) {}
 }
 
+let SCALE = "dia";
+try { SCALE = localStorage.getItem("ogj-escala") === "hora" ? "hora" : "dia"; } catch (e) {}
+document.querySelectorAll(".scale-pick [data-scale]").forEach((b) => {
+  b.classList.toggle("on", b.dataset.scale === SCALE);
+  b.addEventListener("click", () => {
+    SCALE = b.dataset.scale;
+    try { localStorage.setItem("ogj-escala", SCALE); } catch (e) {}
+    document.querySelectorAll(".scale-pick [data-scale]").forEach((x) => x.classList.toggle("on", x === b));
+    drawHistory();
+  });
+});
 async function drawHistory() {
   if (!window.Plotly || !SNAP || !SNAP.tx.length) { $("chart").innerHTML = '<p class="muted" style="padding:16px">Adiciona a primeira compra para ver a evolução.</p>'; return; }
-  const h = await (await fetch(BASE + "/history", { cache: "no-store" })).json();
+  const hourly = SCALE === "hora";
+  $("chart-note").textContent = hourly
+    ? "Valor da carteira em euros vs. dinheiro investido, hora a hora no último mês (hora de Lisboa; noites e fins de semana escondidos)."
+    : "Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.";
+  const h = await (await fetch(BASE + "/history" + (hourly ? "?escala=hora" : ""), { cache: "no-store" })).json();
   const days = [...new Set(Object.values(h.series).flatMap((s) => s.t))].filter((d) => d >= SNAP.tx.reduce((m, t) => t.date < m ? t.date : m, "9999")).sort();
   const lastBefore = (s, d) => { if (!s) return null; let v = null; for (let i = 0; i < s.t.length && s.t[i] <= d; i++) if (s.c[i] != null) v = s.c[i]; return v; };
-  const fxOn = (cur, d) => cur === "EUR" ? 1 : (() => { const r = lastBefore(h.fx[cur], d); return r ? (cur === "GBp" || cur === "GBX" ? 0.01 : 1) / r : null; })();
+  const fxOn = (cur, d, table = h.fx) => cur === "EUR" ? 1 : (() => { const r = lastBefore(table[cur], d); return r ? (cur === "GBp" || cur === "GBX" ? 0.01 : 1) / r : null; })();
   const tx = SNAP.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq);
   const value = [], invested = [];
   for (const d of days) {
     const held = {}; let inv = 0;
     for (const t of tx) { if (t.date > d) break; held[t.symbol] = (held[t.symbol] || 0) + (t.side === "buy" ? t.qty : -t.qty);
-      const fx = fxOn(t.currency, t.date) ?? 1; inv += (t.side === "buy" ? t.qty * t.price + t.fee : -(t.qty * t.price - t.fee)) * fx; }
+      const fx = fxOn(t.currency, t.date, h.fx_dia || h.fx) ?? fxOn(t.currency, d) ?? 1; inv += (t.side === "buy" ? t.qty * t.price + t.fee : -(t.qty * t.price - t.fee)) * fx; }
     let v = 0;
     for (const [sym, q] of Object.entries(held)) { if (q <= 1e-9) continue; const t = tx.find((x) => x.symbol === sym);
       const px = lastBefore(h.series[sym], d), fx = fxOn(t.currency, d); if (px != null && fx != null) v += q * px * fx; }
@@ -1629,7 +1651,8 @@ async function drawHistory() {
     { x: days, y: value, name: "Valor da carteira", type: "scatter", mode: "lines", line: { color: "#00e5ff", width: 2 }, hovertemplate: "%{y:,.2f} €<extra>Valor</extra>" },
     { x: days, y: invested, name: "Dinheiro investido", type: "scatter", mode: "lines", line: { color: "#ffe14d", width: 1.5, dash: "dash" }, hovertemplate: "%{y:,.2f} €<extra>Investido</extra>" },
   ], { paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff" }, margin: { l: 60, r: 12, t: 12, b: 40 }, hovermode: "x unified",
-       xaxis: { gridcolor: "#2e2763" }, yaxis: { gridcolor: "#2e2763", ticksuffix: " €" }, legend: { orientation: "h", y: -0.15 } },
+       xaxis: { gridcolor: "#2e2763", ...(hourly ? { rangebreaks: [{ bounds: ["sat", "mon"] }, { pattern: "hour", bounds: [21.5, 7.5] }], hoverformat: "%d/%m %H:%M" } : {}) },
+       yaxis: { gridcolor: "#2e2763", ticksuffix: " €" }, legend: { orientation: "h", y: -0.15 } },
      { responsive: true, displaylogo: false });
 }
 
