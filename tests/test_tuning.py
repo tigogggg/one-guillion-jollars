@@ -470,3 +470,18 @@ def test_the_decision_page_scales_the_orders_to_the_real_account(monkeypatch):
     page = agents.decision_page(config, state, mkt, frozen)
     assert page["ordens"][0]["eur"] == 1500.0 and published["decisao"] is page
     assert page["candidatos"][0]["veredicto"] == "a cumprir a regra"
+
+
+def test_the_friday_card_sums_up_the_week(monkeypatch):
+    from datetime import date
+
+    import health
+
+    runs = [{"status": "completed", "conclusion": "success", "display_title": "Agentes: stops {}",
+             "run_started_at": "2026-11-06T10:00:00Z", "updated_at": f"2026-11-06T10:0{m}:00Z"} for m in (1, 2, 3)]
+    runs.append({"status": "completed", "conclusion": "failure", "display_title": "Agentes: daily {}",
+                 "run_started_at": "2026-11-06T07:30:00Z", "updated_at": "2026-11-06T07:33:00Z"})
+    monkeypatch.setattr(health, "runs_since", lambda wf, since, pages=1: runs if wf == "agents.yml" else [])
+    card = health.weekly_card(date(2026, 11, 6))
+    text = str(card)
+    assert "Rondas: 3" in text and "mediana 2.0 min" in text and "agents.yml: 1 de 4" in text

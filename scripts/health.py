@@ -18,6 +18,7 @@ import io
 import os
 import sys
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
@@ -54,14 +55,21 @@ ORANGE = 0xF0B232
 
 def runs_today(workflow: str, today: date) -> list[dict] | None:
     """Today's (Lisbon) runs of a workflow (main, or estavel where the agents run), or None when the API is unreachable."""
+    runs = runs_since(workflow, today - timedelta(days=1), pages=3)
+    return None if runs is None else [
+        r for r in runs if datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")).astimezone(LISBON).date() == today]
+
+
+def runs_since(workflow: str, since: date, pages: int = 3) -> list[dict] | None:
+    """A workflow's runs created since that day, or None when the API is unreachable."""
     repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")
     if not repo or not token:
         return None
     runs = []
     try:
-        for page in (1, 2, 3):  # agents.yml runs ~80 times a weekday (league and rounds)
+        for page in range(1, pages + 1):  # agents.yml runs ~80 times a weekday (league and rounds)
             resp = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs",
-                                params={"created": f">={today - timedelta(days=1)}", "per_page": 100,
+                                params={"created": f">={since}", "per_page": 100,
                                         "page": page},
                                 headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
                                 timeout=30)
@@ -73,8 +81,55 @@ def runs_today(workflow: str, today: date) -> list[dict] | None:
     except (requests.RequestException, ValueError, KeyError) as e:
         print(f"WARN: GitHub {workflow}: {e}", file=sys.stderr)
         return None
-    return [r for r in runs
-            if datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")).astimezone(LISBON).date() == today]
+    return runs
+
+
+WEEKLY_WORKFLOWS = ["agents.yml", "news.yml", "discord-daily.yml", "opportunity-alerts.yml", "pretrain.yml", "juri.yml",
+                    "visao.yml", "backup.yml", "tests.yml", "context-data.yml"]
+
+
+def weekly_card(today: date) -> dict:
+    """Fridays: the week of the system in one card (failures, how long a round takes, Claude's use, the private data's
+    size), to see a trend before it becomes a problem."""
+    since = today - timedelta(days=7)
+    lines, failures = [], []
+    for wf in WEEKLY_WORKFLOWS:
+        runs = runs_since(wf, since, pages=6 if wf == "agents.yml" else 1)
+        if runs is None:
+            lines.append(f"❔ {wf}: sem acesso ao GitHub")
+            continue
+        done = [r for r in runs if r["status"] == "completed"]
+        bad = [r for r in done if r["conclusion"] not in ("success", "skipped", "cancelled")]
+        if bad:
+            failures.append(f"{wf}: {len(bad)} de {len(done)}")
+        if wf == "agents.yml":
+            secs = sorted((datetime.fromisoformat(r["updated_at"].replace("Z", "+00:00"))
+                           - datetime.fromisoformat(r["run_started_at"].replace("Z", "+00:00"))).total_seconds()
+                          for r in done if str(r.get("display_title", "")).startswith("Agentes: stops") and r.get("run_started_at"))
+            if secs:
+                lines.append(f"⏱️ Rondas: {len(secs)} · duração mediana {secs[len(secs) // 2] / 60:.1f} min "
+                             f"(a mais lenta {secs[-1] / 60:.1f} min)")
+    fields = [("Corridas da semana", "\n".join(lines) or "—"),
+              ("Falhas", "\n".join(f"❌ {f}" for f in failures) or "✅ nenhuma")]
+    try:
+        import claude_usage
+
+        month = claude_usage.summary(1)
+        for m, rows in month.items():
+            calls = sum(int(r["chamadas"]) for r in rows.values())
+            tokens = sum(r[k] for r in rows.values() for k in claude_usage.TOKENS)
+            usd = sum(r["custo_usd"] for r in rows.values())
+            top = max(rows.items(), key=lambda kv: kv[1]["custo_usd"])[0] if rows else "—"
+            fields.append(("🤖 Claude este mês", f"{calls} chamadas · {tokens / 1e6:.1f} M tokens · ~{usd:.2f} USD "
+                                                 f"equivalentes na API · quem mais gasta: {top}"))
+    except Exception as e:  # noqa: BLE001 - without the private checkout there is no usage to show
+        print(f"WARN: uso do Claude: {e!r}", file=sys.stderr)
+    agents_dir = Path(__file__).resolve().parents[1] / "agents"
+    if agents_dir.is_dir():
+        size = sum(f.stat().st_size for f in agents_dir.rglob("*") if f.is_file() and ".git" not in f.parts)
+        fields.append(("💾 Dados privados", f"{size / 1e6:.0f} MB nos ficheiros (o histórico do git comprime-os)"))
+    return embed(f"🗓️ Semana do sistema · até {today:%d/%m}", "", color=GREEN if not failures else ORANGE, fields=fields,
+                 footer="Resumo automático às sextas-feiras.")
 
 
 def job_line(name: str, runs: list[dict] | None, minimum: int) -> tuple[bool, str]:
@@ -135,12 +190,13 @@ def main() -> int:
     jobs = [job_line(name, named(runs_today(wf, today), prefix), n) for wf, name, n, prefix in expected]
     data = [data_line(name, last_data_date(url, col), today) for name, url, col in DATA_SOURCES]
     card = build_card(today, jobs, data)
+    cards = [card] + ([weekly_card(today)] if today.weekday() == 4 else [])
     where = route("estado")
     if args.dry_run or where.get("kind") not in ("estado", "testes"):  # never fall back to the webhook's channel
         if not args.dry_run:
             print("Sem canal 🔧-estado em discord/channels.json (stand-by): só mostro o resultado.", file=sys.stderr)
-        return send([card], dry_run=True)
-    return send([card], **where)
+        return send(cards, dry_run=True)
+    return send(cards, **where)
 
 
 if __name__ == "__main__":

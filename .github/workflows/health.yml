@@ -23,6 +23,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
+      - name: "Dados privados (só leitura, para o resumo de sexta)"
+        uses: actions/checkout@v4
+        with:
+          repository: tigogggg/one-guillion-jollars-dados
+          ssh-key: ${{ secrets.DADOS_DEPLOY_KEY }}
+          persist-credentials: false
+          path: agents
       - name: Verificar
         env:
           GITHUB_TOKEN: ${{ github.token }}
