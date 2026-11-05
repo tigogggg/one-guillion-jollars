@@ -564,7 +564,7 @@ function left(ms) {
   const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
   return (d ? d + " d " : "") + (d || h ? h + " h " : "") + m + " min " + String(sec).padStart(2, "0") + " s";
 }
-// A job's times of day: evenly spaced ones as "de 10 em 10 min, 08:05–20:55", a few as a list.
+// A job's times of day: evenly spaced ones as "de 10 em 10 min, 08:05–21:15", a few as a list.
 function timesText(times) {
   const mins = times.map((t) => +t.slice(0, 2) * 60 + +t.slice(3, 5));
   const step = mins[1] - mins[0];
@@ -1822,10 +1822,16 @@ async function savePrefs(fields) {
   };
   const sched = (...keys) => () => { const at = Math.min(...UPCOMING.filter((j) => keys.includes(j.key)).map((j) => j.at)); return isFinite(at) ? at : null; };
   const d = "dias úteis (seg–sex, hora de Lisboa)", D = "Dias úteis (seg–sex, hora de Lisboa)";
+  const roundJob = UPCOMING.find((j) => j.key === "ronda"), rt = (roundJob && roundJob.times) || [];
+  const every = rt.length > 1 ? (+rt[1].slice(0, 2) * 60 + +rt[1].slice(3)) - (+rt[0].slice(0, 2) * 60 + +rt[0].slice(3)) : null;
+  const roundsText = rt.length ? (every ? "de " + every + " em " + every + " min das " + rt[0] + " às " + rt[rt.length - 1] : "às " + rt.join(" · ")) : "de 10 em 10 min";
   // part, its data's last update (null: the job's last run), hours before late, workflow (+ run title), next run, condition
   const rows = [
+    { k: "📈 Preços do mercado", iso: DATA.updated, max: 30 + weekendSlack, wf: "agents.yml", title: /stops/, next: sched("ronda"),
+      when: "Preços novos " + roundsText + " (" + d + "), do Yahoo Finance: Europa 08:00–16:30 e EUA 14:30–21:00 (as rondas logo a seguir ao fecho guardam o preço final do dia). " +
+        "Algumas bolsas chegam com até 15 min de atraso. Fora destas horas e ao fim de semana ficam os últimos fechos." },
     { k: "🏁 Liga dos agentes", iso: DATA.updated, max: 30 + weekendSlack, wf: "agents.yml", next: sched("ronda", "agentes"),
-      when: "Em cada ronda, " + d + ", de 10 em 10 min das 08:05 às 20:55: cada agente decide com os preços do momento nas bolsas abertas (Europa 08:00–16:30, EUA 14:30–21:00) e a ronda-sombra do motor Rust repete-a. Às 07:30 o fecho diário com as sessões completas da véspera. Ao fim de semana não muda." },
+      when: "Em cada ronda, " + d + ", " + roundsText + ": cada agente decide com os preços do momento nas bolsas abertas (Europa 08:00–16:30, EUA 14:30–21:00) e a ronda-sombra do motor Rust repete-a. Às 07:30 o fecho diário com as sessões completas da véspera. Ao fim de semana não muda." },
     { k: "📰 Notícias", iso: NEWS && NEWS.updated, max: 8 + weekendSlack, wf: "news.yml", next: sched("noticias"),
       when: D + " às 12:00, 16:00 e 20:30: o Claude lê as notícias das ações seguidas, os 8-K da SEC e o risco geopolítico; os agentes usam-nas para vetar compras." },
     { k: "🛡️ Regras de compra e contexto", iso: when(MARKET), max: 30 + weekendSlack, wf: "agents.yml", title: /daily/, next: sched("agentes"),

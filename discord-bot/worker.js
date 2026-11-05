@@ -40,11 +40,12 @@ const WORKFLOW_COMMANDS = new Set(["acao", "etf", "mercado", "limites"]);
 const TIMEZONE = "Europe/Lisbon";
 // v2 (Nov 2026): tips and agents before the European open, so the agents' orders fill at that day's opens.
 // v3: the rounds became every 10 minutes ("08:05-20:55/10") instead of four fixed times.
-const SCHEDULE_VERSION = 3;
+// v4: the rounds go on to 21:15, after the US close, so the evening values carry the day's final US prices.
+const SCHEDULE_VERSION = 4;
 const DEFAULT_SCHEDULE = {
   dicas: "07:00",
   agentes: "07:30", // before Xetra/Euronext/LSE open at 08:00 Lisbon, with the last full sessions
-  ronda: "08:05-20:55/10", // reactive rounds: the agents decide and trade at the prices of that moment
+  ronda: "08:05-21:15/10", // reactive rounds: the agents decide and trade at the prices of that moment
   alertas: ["15:40", "17:40", "19:40"],
   acompanhamento: "22:30", // after the US close: how each alert did 5 and 20 sessions later
   estado: "23:00", // health check, after every other weekday job
@@ -410,7 +411,7 @@ async function scheduleCommand(env, sub) {
     const list = spec.split(",").filter(Boolean);
     if (roundTimes(spec).length) schedule.ronda = spec;
     else if (list.length && list.length <= 60 && list.every(isTime)) schedule.ronda = [...new Set(list.map(normaliseTime))].sort();
-    else return "⚠️ Usa `08:05-20:55/10` (de 10 em 10 minutos, mínimo 5) ou uma lista de horas separadas por vírgulas.";
+    else return "⚠️ Usa `08:05-21:15/10` (de 10 em 10 minutos, mínimo 5) ou uma lista de horas separadas por vírgulas.";
   } else if (action === "alertas" || action === "noticias") {
     const times = (args.horas || "").split(/[,\s]+/).filter(Boolean);
     if (!times.length || times.length > MAX_ALERT_TIMES || !times.every(isTime)) {
@@ -451,6 +452,7 @@ async function getSchedule(env) {
     delete saved.agentes;
   }
   if ((saved.v || 1) < 3) delete saved.ronda;  // saved before the reactive rounds: take the new rounds
+  if ((saved.v || 1) < 4 && saved.ronda === "08:05-20:55/10") delete saved.ronda;  // the old default: now past the US close
   return { ...structuredClone(DEFAULT_SCHEDULE), ...saved };
 }
 
