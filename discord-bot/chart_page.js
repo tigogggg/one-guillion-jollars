@@ -130,7 +130,7 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
                            display: session.data.display_name || "", since: session.data.created || null, google: !!session.data.google,
                            wallet: `/c/${session.tok}` } : null;
   const version = await portalVersion(env);
-  const [runs, quotes] = await Promise.all([workflowRuns(env), dashboardQuotes(session, proposals)]);
+  const [runs, quotes] = await Promise.all([workflowRuns(env), dashboardQuotes(session, market)]);
   return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution, decision, version, runs, home, quotes,
                                                                        manifest: token === null ? "/manifest.webmanifest" : `/p/${token}/manifest.webmanifest` }));
 }
@@ -155,12 +155,16 @@ async function quoteNow(symbol) {
   }
 }
 
-async function dashboardQuotes(session, proposals) {
+async function dashboardQuotes(session, market) {
   const hasWallet = !!(session && (session.data.tx || []).length);
-  const pool = (proposals?.buys || []).map((b) => b.symbol).filter(Boolean);
-  const list = pool.length ? pool : DASH_STOCKS;
-  const random = hasWallet ? null : list[Math.floor(Math.random() * list.length)];
-  const [spy, oil, stock] = await Promise.all([quoteNow("SPY"), quoteNow("BZ=F"), random ? quoteNow(random) : null]);
+  // without a portfolio: the stock that moved most today (up or down), among the 4 biggest movers of the last
+  // daily run and the large companies; at most 12 live quotes (each cached a minute at the edge)
+  const rows = [].concat(market?.buy || [], market?.watch || [], market?.sell || []).filter((r) => r && r.symbol && r.ret_1d != null && !r.etf);
+  const movers = rows.sort((a, b) => Math.abs(b.ret_1d) - Math.abs(a.ret_1d)).slice(0, 4).map((r) => r.symbol);
+  const pool = hasWallet ? [] : [...new Set(movers.concat(DASH_STOCKS))].slice(0, 12);
+  const [spy, oil, ...others] = await Promise.all([quoteNow("SPY"), quoteNow("BZ=F"), ...pool.map(quoteNow)]);
+  const move = (q) => (q && q.prev ? Math.abs(q.price / q.prev - 1) : -1);
+  const stock = others.filter(Boolean).sort((a, b) => move(b) - move(a))[0] || null;
   return { spy, oil, stock, wallet: hasWallet };
 }
 
@@ -420,7 +424,7 @@ h1, h2, .pixel { font-family:var(--pixel); letter-spacing:.5px; } h1 { color:var
 .topbar { display:grid; grid-template-columns:1fr minmax(0,520px) 1fr; align-items:center; gap:8px 24px; }
 .topbar h1 { margin:0; line-height:0; }
 .topbar .brand { justify-self:start; }
-.topbar .logo { height:120px; width:auto; display:block; }
+.topbar .logo { height:100px; width:auto; display:block; }
 .topbar-mid { display:flex; justify-content:center; min-width:0; }
 a.home { color:inherit; text-decoration:none; }
 .me { display:inline-flex; align-items:center; gap:8px; padding:4px 12px 4px 4px; border-radius:999px; border:1px solid var(--line); color:var(--fg); text-decoration:none; transition:border-color .15s, box-shadow .15s; }
@@ -490,7 +494,7 @@ table.perf td:first-child { white-space:normal; min-width:120px; } table.perf tr
 .board li .pos { font-family:var(--pixel); font-size:.65rem; width:34px; color:var(--gold); }
 .board li:nth-child(1) { border-color:var(--gold); box-shadow:0 0 10px rgba(255,225,77,.45); }
 .board li:nth-child(2) { border-color:#c0c7d6; } .board li:nth-child(3) { border-color:#d08a4a; }
-.tabs { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; gap:6px; padding:8px 0; margin:6px 0 4px; background:linear-gradient(var(--bg) 85%,transparent); }
+.tabs { position:relative; z-index:5; display:flex; flex-wrap:wrap; gap:6px; padding:8px 0; margin:18px 0 4px; }
 .tab { flex:none; font-family:var(--pixel); font-size:.55rem; background:var(--card); color:var(--fg); border:2px solid var(--line); border-radius:6px; padding:9px 10px; cursor:pointer; }
 .tab.on { border-color:var(--accent); color:#fff; box-shadow:0 0 10px rgba(255,46,136,.5); }
 @media (min-width:641px) { .tabs .tab { flex:1 1 auto; text-align:center; white-space:nowrap; } }
@@ -534,6 +538,7 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .dash-top .tile .v { font-size:1.45rem; } .dash .tile .v.up { color:var(--up); } .dash .tile .v.down { color:var(--down); } .dash .tile .v.gold { color:var(--gold); }
 .dash-row { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); gap:12px; margin-top:12px; align-items:start; }
 .dash-col { display:grid; gap:12px; min-width:0; }
+.dash-row-a { grid-template-columns:minmax(0,1fr) minmax(0,1.6fr); }
 .dcard { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; min-width:0; }
 .dcard .dh { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
 .dcard .dh h3 { margin:0; } .dcard .dh a { font-size:.82rem; }
@@ -541,7 +546,7 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .dh + .drow, .chips + .dash-chart + .drow { border-top:0; } .drow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dash .grid { margin-bottom:8px; } .dash .chips { margin-bottom:6px; } .dash .chips .chip { padding:3px 10px; font-size:.8rem; }
 .dash-chart { height:260px; }
-@media (max-width:900px) { .dash-top { grid-template-columns:1fr 1fr; } .dash-row { grid-template-columns:1fr; } }
+@media (max-width:900px) { .dash-top { grid-template-columns:1fr 1fr; } .dash-row, .dash-row-a { grid-template-columns:1fr; } }
 .chart { width:100%; height:62vh; min-height:340px; background:var(--card); border:2px solid var(--line); border-radius:8px; }
 .range-custom { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 6px; font-size:12px; color:var(--muted, #b5bac1); }
 .range-custom input { background:#1e1f22; color:inherit; border:1px solid var(--line); border-radius:4px; padding:2px 6px; font:inherit; color-scheme:dark; }
@@ -1394,8 +1399,8 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
   const vixWord = c.vix == null ? "" : c.vix > 30 ? "mercado com medo" : c.vix > 20 ? "mercado nervoso" : "mercado calmo";
   const spy = Q.spy, oil = Q.oil, stock = Q.stock;
   const walletOn = !!(Q.wallet && WALLET);
-  const stockTile = () => stock ? tile("🎲 " + esc(stock.symbol) + " hoje (ao acaso)", fmtPct(dayPct(stock)), esc(stock.name) + " · " + money(stock.price, stock.currency), cls(dayPct(stock)))
-    : tile("🎲 Uma ação ao acaso", "—", "sem cotação agora");
+  const stockTile = () => stock ? tile("🔥 " + esc(stock.symbol) + " · destaque do dia", fmtPct(dayPct(stock)), esc(stock.name) + " · " + money(stock.price, stock.currency), cls(dayPct(stock)))
+    : tile("🔥 Destaque do dia", "—", "sem cotação agora");
   const top = '<div class="dash-top">' +
     tile("📈 S&P 500 (SPY) hoje", fmtPct(dayPct(spy)), spy ? money(spy.price, spy.currency) + (c.spy_trend != null ? " · " + fmtPct(c.spy_trend * 100) + " vs média 200d" : "") : "sem cotação agora", cls(dayPct(spy))) +
     '<div id="dash-wallet-tile">' + (walletOn ? tile("💼 A tua carteira hoje", "…", "a carregar") : stockTile()) + '</div>' +
@@ -1419,8 +1424,8 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
   const props = '<div class="dcard"><div class="dh"><h3>🧠 Propostas de hoje</h3>' + go("propostas", "Ver") + '</div>' +
     (buys.map((b) => '<div class="drow"><span class="nm"><b>' + esc(b.symbol) + '</b> <span class="muted small">' + esc(b.name || "") + '</span></span><span><span class="up">comprar</span>' + (b.safety != null ? ' <span class="muted small">🛡️ ' + b.safety + '</span>' : '') + '</span></div>').join("") +
      sells.map((x) => '<div class="drow"><span class="nm"><b>' + esc(x.symbol) + '</b></span><span class="down">vender</span></div>').join("") || '<p class="muted">Sem propostas hoje.</p>') + '</div>';
-  $("dash").innerHTML = top + '<div class="dash-row">' + wallet + league + '</div>' +
-    '<div class="dash-row">' + pretrain + '<div class="dash-col">' + news + props + '</div></div>';
+  $("dash").innerHTML = top + '<div class="dash-row dash-row-a">' + league + pretrain + '</div>' +
+    '<div class="dash-row">' + wallet + '<div class="dash-col">' + news + props + '</div></div>';
   $("dash").addEventListener("click", (e) => {
     const a = e.target.closest(".go");
     if (a) { e.preventDefault(); openTab(a.dataset.t); window.scrollTo(0, 0); return; }
