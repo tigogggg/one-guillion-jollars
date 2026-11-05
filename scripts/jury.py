@@ -352,7 +352,7 @@ def make_room(config: dict, state: dict, today: date, new_id: str) -> str | None
     alive = [c for c in config["agents"] if not c.get("desligado")]
     if len(alive) < MAX_AGENTS:
         return None
-    pool = [c for c in alive if c["strategy"] != "indexador"]
+    pool = [c for c in alive if c["strategy"] != "indexador" and not c.get("congelado")]
     judged = [(x, c) for c in pool if (x := live_excess(c, state)) is not None]
     if judged:
         worst = min(judged, key=lambda xc: xc[0])[1]

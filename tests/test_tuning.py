@@ -381,3 +381,19 @@ def test_holding_stocks_pays_the_dividend_tax_each_year():
     ten = pretrain.dividend_taxed(1.0, 10, "quant")
     assert 0.9 < ten < 1.0 and abs(ten - (2 * (1 - pretrain.DIVIDEND_TAX_DRAG) ** 10 - 1)) < 1e-12
     assert pretrain.dividend_taxed(1.0, 10, "rotador") == 1.0  # accumulating ETFs: no tax until sold
+
+
+def test_the_training_never_changes_a_frozen_candidate(monkeypatch, tmp_path):
+    from datetime import date
+
+    import pretrain
+
+    config = {"agents": [{"id": "quant-congelado", "strategy": "quant", "name": "Q", "emoji": "🧊", "capital": 1000,
+                          "params": {"n": 8}, "modo": pretrain.agents.DAILY, "congelado": {"desde": "2026-11-05"}}]}
+    state = {"agents": {"quant-congelado": {"params": {"n": 8}, "evolution": []}}}
+    saved = {}
+    monkeypatch.setattr(pretrain.agents, "load_config", lambda: config)
+    monkeypatch.setattr(pretrain.agents, "load_state", lambda: state)
+    monkeypatch.setattr(pretrain.agents, "save", lambda c, s: saved.update(s or {}))
+    assert pretrain.apply({"strategies": {"quant": {"chosen": {"n": 3}}}}, date(2026, 11, 8)) == []
+    assert state["agents"]["quant-congelado"]["params"] == {"n": 8}

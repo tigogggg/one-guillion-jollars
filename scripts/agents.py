@@ -1885,7 +1885,7 @@ def run_day(config: dict, state: dict, mkt: Market) -> tuple[list[tuple[dict, di
                 avoided.append(f"{cfg['emoji']} {cfg['name']}: " + ", ".join(notes))
             port["pending"] = [{**o, "created": mkt.as_of.isoformat()} for o in orders]
             port["last_decision"] = mkt.as_of.isoformat()
-        note = shadow_day(cfg, port, state, mkt)
+        note = None if cfg.get("congelado") else shadow_day(cfg, port, state, mkt)  # frozen: no change for a year
         if note:
             training.append(f"{cfg['emoji']} **{cfg['name']}** {note}")
     for dead in bankrupt:
@@ -2458,6 +2458,44 @@ MONTHLY_TITLE = "📆 Relatório mensal dos agentes"
 # --------------------------------------------------------------------------
 
 
+FROZEN_PATH = REPO_AGENTS / "lab" / "congelados.json"
+
+
+def frozen_report(config: dict, state: dict, mkt: Market) -> dict:
+    """The frozen candidates (config "congelado": parameters fixed for a year, never moved by the training, the jury
+    or the renewal) against the Indexador live, as a real account would see them: what is left after selling
+    everything today and paying the tax still owed (the index's own tax is deferred until then too)."""
+    def after_tax(cfg: dict) -> tuple[float, float] | None:
+        port = state["agents"].get(cfg["id"])
+        if not port or not port.get("history"):
+            return None
+        eq = equity(port, mkt)
+        return eq, eq - tax_owed_if_sold(port, mkt)
+
+    index_cfg = next((c for c in config["agents"] if c["strategy"] == "indexador"), None)
+    out = {"updated": mkt.as_of.isoformat(), "agents": {}}
+    for cfg in [c for c in config["agents"] if c.get("congelado")]:
+        mine, cmp = after_tax(cfg), live_vs_index(cfg, state)
+        if not mine:
+            continue
+        port = state["agents"][cfg["id"]]
+        deposits = port.get("deposits", cfg["capital"])
+        row = {"desde": cfg["congelado"].get("desde"), "ate": cfg["congelado"].get("ate"),
+               "bruto": round(mine[0] / deposits - 1, 4), "liquido": round(mine[1] / deposits - 1, 4)}
+        if cmp and index_cfg:  # the index over the same days, sold today: 28% on its gain
+            row["indice_bruto"] = round(cmp[1], 4)
+            row["indice_liquido"] = round(cmp[1] - TAX_RATE * max(cmp[1], 0.0), 4)
+            row["diferenca_liquida"] = round(row["liquido"] - row["indice_liquido"], 4)
+            row["sessoes"] = cmp[2]
+        out["agents"][cfg["id"]] = row
+    try:
+        FROZEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        FROZEN_PATH.write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n")
+    except OSError:
+        pass
+    return out
+
+
 def ensure_twins(config: dict, state: dict, start: date) -> list[dict]:
     """A daily twin ("· diário") for every reactive agent that has none (the Indexador needs none): same strategy and
     parameters, from the same capital, so the league shows what reacting during the day is worth."""
@@ -2775,6 +2813,7 @@ def main() -> int:
             ensure_profiles(config, state, mkt.as_of)
             moves, training, avoided, events = run_day(config, state, mkt)
             save(config, state)  # bankruptcies retire agents and add their replacements
+            frozen_report(config, state, mkt)
             archive(config, state, mkt)
             embeds, files = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}",
                                    moves, training, avoided, events)

@@ -66,6 +66,9 @@ and, when the top 5 changes, a new fusion agent is born (strategy `super`, named
 weights fixed, its family tree, the members' parameters and their origin, and the jury's analysis kept in config
 `genealogia` and on its portal sheet); its 20 years are replayed. At most 100 agents: beyond it a new one replaces the
 worst live performer against the Indexador.
+Frozen candidates (config `congelado`, daily mode, until the date in it): parameters fixed for a year, never changed by
+the pre-training or shadows, never in the jury's ranking or replaced by the cap; `agents.frozen_report` (daily) writes
+`agents/lab/congelados.json`: each against the Indexador after the tax still owed if sold today.
 A year on the bench without coming back switches an agent off for good (`desligado`, no more training for that
 profile). The old rule (out after 10 runs below the index, `pretrain.bench`) is off (`BENCH_BY_PRETRAIN`). A series (`repetir`, default 10) runs inside
 each strategy's machine (`pretrain.series`, data loaded once) until its choice stays the same 2 runs in a row; then

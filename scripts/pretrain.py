@@ -1516,7 +1516,7 @@ def apply(results: dict, today: date, changed_strategies: set | None = None) -> 
     league and those on the bench alike (the pre-training tunes the agents; who plays is the monthly renewal's)."""
     config, state = agents.load_config(), agents.load_state()
     changed = []
-    for cfg in [c for c in config["agents"] if not c.get("desligado")]:
+    for cfg in [c for c in config["agents"] if not c.get("desligado") and not c.get("congelado")]:
         r = results["strategies"].get(cfg["strategy"], {})
         if "chosen" not in r or agents.profile_of(cfg) != PROFILE:  # not trained here, or another profile's agent
             continue

@@ -130,3 +130,14 @@ def test_the_luck_test_counts_every_agent_as_a_try():
     ranked = jury.judge(config, state, reps)
     few, many = jury.league_luck(ranked, 8), jury.league_luck(ranked, 200)
     assert few["agent"] == ranked[0]["id"] and many["trials"] == 200 and many["dsr"] <= few["dsr"]
+
+
+def test_a_frozen_candidate_is_never_replaced(monkeypatch):
+    config, state, reps = league(8)
+    for c in config["agents"]:
+        if c["id"] != "campeao":
+            c["congelado"] = {"desde": "2026-11-05", "ate": "2027-11-05"}
+    monkeypatch.setattr(jury, "MAX_AGENTS", len(config["agents"]))
+    monkeypatch.setattr(jury, "LIVE_MIN_SESSIONS", 2)
+    state["agents"]["analista"]["history"][-1]["equity"] = 500  # the worst live, but frozen
+    assert jury.make_room(config, state, TODAY, "novo") == "campeao"
