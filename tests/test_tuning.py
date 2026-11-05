@@ -373,3 +373,11 @@ def test_the_verdict_holds_five_and_ten_year_stretches(monkeypatch):
     assert w["5a"][-1] == 10.0 and w["5a"][0] < 10.0  # the oldest stretch had part of the index missing
     assert pretrain.window_points("rotador", {}, markets)["5a"][0] == 10.0  # ETFs: no survivorship
     assert abs(pretrain.window_verdict({"5a": [10.0] * 8, "10a": [-10.0] * 3})) < 1e-9
+
+
+def test_holding_stocks_pays_the_dividend_tax_each_year():
+    import pretrain
+
+    ten = pretrain.dividend_taxed(1.0, 10, "quant")
+    assert 0.9 < ten < 1.0 and abs(ten - (2 * (1 - pretrain.DIVIDEND_TAX_DRAG) ** 10 - 1)) < 1e-12
+    assert pretrain.dividend_taxed(1.0, 10, "rotador") == 1.0  # accumulating ETFs: no tax until sold

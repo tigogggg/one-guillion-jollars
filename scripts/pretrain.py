@@ -522,7 +522,7 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
         if not detail:
             years = len(markets) / SESSIONS_PER_YEAR
             net = r["final"] - r["tax_owed"]
-            own = agents.profile_score(net / capital - 1, years, r["max_dd"], PROFILE)
+            own = agents.profile_score(dividend_taxed(net / capital - 1, years, strategy), years, r["max_dd"], PROFILE)
             return {"points": coverage_scaled(agents.relative_points(own, index_score(markets, years)), strategy, markets, years),
                     "profile_score": own,
                     "league_points": r["points"], "return": r["final"] / capital - 1, "return_after_tax": net / capital - 1,
@@ -559,6 +559,22 @@ def simulate(strategy: str, params: dict, markets: list[Market], capital: float 
     return out
 
 
+# The prices are adjusted for dividends (Yahoo auto_adjust): a stock's dividend is reinvested in full. In a real
+# account a dividend pays 28% in Portugal (the US withholding of 15% is credited against it) the year it is paid,
+# while the accumulating S&P 500 ETF (SXR8, Irish) reinvests its dividends with no Portuguese tax until it is sold
+# (its 15% US withholding is already in its price). The grade of a strategy that holds stocks loses that much a year:
+# 28% of a dividend yield of about 1.6% (the S&P 500's average over the years trained), held all the time (a little
+# harsh for agents often in cash or in low-yield growth stocks).
+DIVIDEND_TAX_DRAG = agents.TAX_RATE * 0.016
+
+
+def dividend_taxed(ret: float, years: float, strategy: str) -> float:
+    """A run's return after the yearly tax on the dividends of the stocks it held (not for ETF-only strategies)."""
+    if strategy in agents.NO_REGION:
+        return ret
+    return (1 + ret) * (1 - DIVIDEND_TAX_DRAG) ** years - 1
+
+
 def _graded(markets: list[Market], capital: float, final: float, tax_owed: float, max_dd: float, league_points: int,
             trades: int, bankrupt_on: str | None, sells: list[dict], zone_stats: dict, history: list[dict],
             strategy: str = "indexador") -> dict:
@@ -573,7 +589,7 @@ def _graded(markets: list[Market], capital: float, final: float, tax_owed: float
     # of the index counts double (agents.relative_points): the S&P 500 is the first base, every year.
     # what is left after selling everything at the end, as for the index (tax on the gains not taxed yet)
     net = final - tax_owed
-    own = agents.profile_score(net / capital - 1, years, max_dd, PROFILE)
+    own = agents.profile_score(dividend_taxed(net / capital - 1, years, strategy), years, max_dd, PROFILE)
     return {
         "points": coverage_scaled(agents.relative_points(own, index_score(markets, years)), strategy, markets, years),
         "profile_score": own,
