@@ -291,11 +291,12 @@ export function memberFace(me, big = false) {
     : `<span class="initial${big ? " big" : ""}" aria-hidden="true">${esc([...me.name][0] || "?").toUpperCase()}</span>`;
 }
 
-// The site's top bar, on the portal and the profile: the title and the logo go home, the name opens /perfil.
-export function siteTopbar(me, home = "/", under = "") {
+// The site's top bar, on the portal and the profile: the logo (with the name) goes home on the left, the portal's search
+// in the middle, the member's name (opens /perfil) on the right.
+export function siteTopbar(me, home = "/", middle = "") {
   return `<div class="topbar">
-  <div class="brand"><h1><a class="home" href="${esc(home)}">One Guillion Jollars</a></h1>${under}</div>
-  <a class="home logo-link" href="${esc(home)}" aria-label="Página principal"><img class="logo" src="/logo-256.png?v=1" alt="" width="108" height="108"></a>
+  <h1 class="brand"><a class="home logo-link" href="${esc(home)}" title="Página principal"><img class="logo" src="/logo-full.png?v=1" alt="One Guillion Jollars" width="280" height="260"></a></h1>
+  <div class="topbar-mid">${middle}</div>
   <div class="userbar">${me
     ? `<a class="me" href="/perfil" title="O meu perfil">${memberFace(me)}<b class="me-name">${esc(me.name)}</b></a><a class="btn alt" href="/sair">SAIR</a>`
     : `<a class="btn" href="/entrar">🔑 ENTRAR</a>`}</div>
@@ -416,10 +417,11 @@ const CSS = `
 body { margin:0; background:radial-gradient(circle at 50% -20%,#2a1a6b 0,var(--bg) 60%) fixed; color:var(--fg); font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
 body::after { content:""; position:fixed; inset:0; pointer-events:none; background:repeating-linear-gradient(0deg,rgba(0,0,0,.18) 0 1px,transparent 1px 3px); }
 h1, h2, .pixel { font-family:var(--pixel); letter-spacing:.5px; } h1 { color:var(--gold); text-shadow:0 0 8px rgba(255,225,77,.6); line-height:1.5; }
-.topbar { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:8px 24px; }
-.topbar h1 { margin:0; }
-.topbar .logo { font-size:1.35rem; width:5em; height:5em; display:block; }
-.topbar .logo-link { justify-self:center; }
+.topbar { display:grid; grid-template-columns:1fr minmax(0,520px) 1fr; align-items:center; gap:8px 24px; }
+.topbar h1 { margin:0; line-height:0; }
+.topbar .brand { justify-self:start; }
+.topbar .logo { height:120px; width:auto; display:block; }
+.topbar-mid { display:flex; justify-content:center; min-width:0; }
 a.home { color:inherit; text-decoration:none; }
 .me { display:inline-flex; align-items:center; gap:8px; padding:4px 12px 4px 4px; border-radius:999px; border:1px solid var(--line); color:var(--fg); text-decoration:none; transition:border-color .15s, box-shadow .15s; }
 .me:hover, .me:focus-visible { border-color:var(--neon); box-shadow:0 0 10px rgba(0,229,255,.35); }
@@ -449,8 +451,8 @@ a.home { color:inherit; text-decoration:none; }
   .totals-col { display:grid; grid-template-columns:1fr 1fr; order:-1; }
 }
 .topbar .userbar { justify-self:end; }
-@media (max-width:640px) { .topbar { grid-template-columns:1fr auto; } .topbar .logo { width:3.5em; height:3.5em; } .topbar .userbar { grid-column:1 / -1; justify-self:start; }
-  .topbar .brand { display:contents; } .topbar .search { grid-column:1 / -1; grid-row:3; width:100%; } }
+@media (max-width:760px) { .topbar { grid-template-columns:auto 1fr; } .topbar .logo { height:84px; }
+  .topbar-mid { grid-column:1 / -1; grid-row:2; } .topbar-mid:empty { display:none; } }
 h2 { color:var(--neon); text-shadow:0 0 6px rgba(0,229,255,.55); font-size:.8rem !important; line-height:1.6; }
 .marquee { overflow:hidden; white-space:nowrap; border:2px solid var(--accent); border-radius:6px; background:#12002a; box-shadow:0 0 12px rgba(255,46,136,.5); margin:8px 0; }
 .marquee span { display:inline-block; padding:8px 0 8px 100%; font-family:var(--pixel); font-size:.75rem; color:var(--gold); animation:scroll 14s linear infinite; }
@@ -491,6 +493,7 @@ table.perf td:first-child { white-space:normal; min-width:120px; } table.perf tr
 .tabs { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; gap:6px; padding:8px 0; margin:6px 0 4px; background:linear-gradient(var(--bg) 85%,transparent); }
 .tab { flex:none; font-family:var(--pixel); font-size:.55rem; background:var(--card); color:var(--fg); border:2px solid var(--line); border-radius:6px; padding:9px 10px; cursor:pointer; }
 .tab.on { border-color:var(--accent); color:#fff; box-shadow:0 0 10px rgba(255,46,136,.5); }
+@media (min-width:641px) { .tabs .tab { flex:1 1 auto; text-align:center; white-space:nowrap; } }
 .news { display:grid; gap:8px; } .news article { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--line); border-radius:8px; padding:10px 12px; }
 .news article.pos { border-left-color:var(--up); } .news article.neg { border-left-color:var(--down); }
 .news .meta { color:var(--muted); font-size:.8rem; } .news a { color:var(--neon); }
@@ -570,9 +573,8 @@ details.chap[open] > summary { color:var(--neon); }
 .userbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; font-size:.9rem; }
 .userbar .btn { text-decoration:none; display:inline-block; }
 body.embed .tabs { position:static !important; } body.embed main { padding-top:4px; padding-bottom:12px; } body.embed .embed-hide { display:none !important; }
-.brand { display:flex; flex-direction:column; gap:10px; min-width:0; }
-.search { position:relative; display:flex; width:min(100%, 340px); margin:0; }
-.search input { flex:1; min-width:0; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:999px; padding:7px 40px 7px 14px; font:inherit; font-size:.88rem; transition:border-color .15s, box-shadow .15s; }
+.search { position:relative; display:flex; width:100%; margin:0; }
+.search input { flex:1; min-width:0; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:999px; padding:9px 44px 9px 16px; font:inherit; font-size:.92rem; transition:border-color .15s, box-shadow .15s; }
 .search input:focus { outline:none; border-color:var(--neon); box-shadow:0 0 8px rgba(0,229,255,.45); }
 .search input::-webkit-search-cancel-button { display:none; }
 .search-go { position:absolute; right:4px; top:50%; transform:translateY(-50%); width:30px; height:30px; border:0; border-radius:50%; background:transparent; color:var(--fg); cursor:pointer; font-size:.95rem; }
@@ -1199,7 +1201,7 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").cat
   if (!$("glossary")) return;
   const terms = Object.entries(GLOSS).sort(([a], [b]) => a.localeCompare(b, "pt", { sensitivity: "base" }));
   const fold = (t) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  $("glossary").innerHTML = '<h2>❓ Glossário</h2><p class="muted small">Os termos que aparecem no portal, por ordem alfabética. Nas caixas, os termos sublinhados abrem esta explicação ao tocar.</p>' +
+  $("glossary").innerHTML = '<p class="muted small">Os termos que aparecem no portal, por ordem alfabética. Nas caixas, os termos sublinhados abrem esta explicação ao tocar.</p>' +
     '<div class="filters"><input id="gl-q" type="search" placeholder="Procurar um termo ou palavra (ex.: stop, risco, VIX)" style="flex:1;min-width:240px"></div>' +
     '<p class="muted small" id="gl-n"></p><div class="cards" id="gl-list"></div>';
   const draw = () => {
@@ -1344,7 +1346,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     '</div>' : '';
   const leaders = agents.slice().sort((a, b) => headline(b) - headline(a)).slice(0, 3);
   const news = ((NEWS || {}).items || []).filter((i) => (i.importancia || 0) >= 2).slice(0, 3);
-  $("today").innerHTML = '<h2>🏠 Hoje</h2>' +
+  $("today").innerHTML = '' +
     '<div class="panel"><div class="top" style="display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center"><span class="pixel" style="color:' + colour + ';font-size:.8rem">MERCADO: ' + esc(zone.toUpperCase()) + '</span>' +
     (M.stage2_pct != null ? '<span class="muted small">' + fmtNum(M.stage2_pct, 0) + '% das ações do S&P 500 em <abbr class="g" title="' + esc(GLOSS["Stage 2"]) + '">Stage 2</abbr></span>' : '') + '</div>' +
     (M.stage2_pct != null ? '<div class="bar" style="margin:8px 0"><i style="width:' + M.stage2_pct + '%;background:' + colour + '"></i></div>' : '') +
@@ -1417,7 +1419,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
   const props = '<div class="dcard"><div class="dh"><h3>🧠 Propostas de hoje</h3>' + go("propostas", "Ver") + '</div>' +
     (buys.map((b) => '<div class="drow"><span class="nm"><b>' + esc(b.symbol) + '</b> <span class="muted small">' + esc(b.name || "") + '</span></span><span><span class="up">comprar</span>' + (b.safety != null ? ' <span class="muted small">🛡️ ' + b.safety + '</span>' : '') + '</span></div>').join("") +
      sells.map((x) => '<div class="drow"><span class="nm"><b>' + esc(x.symbol) + '</b></span><span class="down">vender</span></div>').join("") || '<p class="muted">Sem propostas hoje.</p>') + '</div>';
-  $("dash").innerHTML = '<h2>📊 Dashboard</h2>' + top + '<div class="dash-row">' + wallet + league + '</div>' +
+  $("dash").innerHTML = top + '<div class="dash-row">' + wallet + league + '</div>' +
     '<div class="dash-row">' + pretrain + '<div class="dash-col">' + news + props + '</div></div>';
   $("dash").addEventListener("click", (e) => {
     const a = e.target.closest(".go");
@@ -1512,7 +1514,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     (i.url ? '<a href="' + esc(i.url) + '" target="_blank" rel="noopener noreferrer">' + esc(i.title) + '</a>' : esc(i.title)) +
     ' · ' + esc(i.publisher || "") + ' · há ' + ago(i.published) + ' · lida por ' + esc(i.fonte || "?") + react(i) + '</div></article>';
   const subs = [["agora", "Agora"], ["setores", "Por setor"], ["mudancas", "O que mudou"], ["acao", "Por ação"], ["calendario", "Calendário"], ["precisao", "Precisão"]];
-  $("news").innerHTML = '<h2>📰 Notícias do mercado</h2><p class="muted small">' + (N.updated ? 'Lidas às ' + lisbon(Date.parse(N.updated), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) + ' · ' : '') +
+  $("news").innerHTML = '<p class="muted small">' + (N.updated ? 'Lidas às ' + lisbon(Date.parse(N.updated), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) + ' · ' : '') +
     'ações do ranking, das carteiras dos agentes, do /seguir e as que mais mexeram · arquivo de ' + (N.archive_days || 30) + ' dias</p>' +
     '<div class="chips" id="nsub">' + subs.map(([k, l], i) => '<button class="chip' + (i ? '' : ' on') + '" data-k="' + k + '">' + l + '</button>').join("") + '</div><div id="nbody"></div>';
   const views = {
@@ -1687,7 +1689,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
   const sb = P ? (P.scoreboard || {}) : {}, all = sb.all || {}, byBucket = sb.by_bucket || {}, byRules = sb.by_rules || {};
   const sbRow = (label, x) => [label, x.proposals ?? 0, x.closed ?? 0, pctOrDash(x.win_rate), x.avg_r == null ? "—" : fmtNum(x.avg_r, 2), x.avg_ret == null ? "—" : fmtPct(x.avg_ret)];
   const asOf = (P && P.as_of) || (M && M.as_of) || "", zone = (P && P.zone) || (M && M.zone) || "";
-  $("props").innerHTML = '<h2>🧠 Propostas</h2><p class="muted small">Fecho de ' + esc(asOf) + ' · mercado em zona <b>' + esc(zone) + '</b>' +
+  $("props").innerHTML = '<p class="muted small">Fecho de ' + esc(asOf) + ' · mercado em zona <b>' + esc(zone) + '</b>' +
     (M ? ' (' + fmtNum(M.stage2_pct, 0) + '% das ações do S&P 500 em tendência de alta)' : '') +
     '. Duas leituras de cada ação, lado a lado: o que os <b>agentes</b> decidiram para a abertura (pesados pelo historial de cada um) e se passa nas <b>regras de compra</b> ' +
     '(tendência, sinal de entrada, resultados, notícias, stop e score de segurança). Para estudar e decidir tu: não é recomendação.</p>' +
@@ -2058,7 +2060,7 @@ async function savePrefs(fields) {
   const nextCell = (r) => { const at = r.next && r.next(); return at ? fmt(at) + '<br><span class="muted small" data-at="' + at + '"></span>' : '<span class="muted">' + (r.next === null && r.wf === "intraday-lab.yml" ? "depois do pré-treino" : "a cada alteração") + "</span>"; };
   const tick = () => document.querySelectorAll("#status [data-at]").forEach((e) => { e.textContent = "daqui a " + left(+e.dataset.at - Date.now()); });
   const draw = () => {
-    $("status").innerHTML = '<h2>🩺 Estado do sistema</h2><p class="muted small">Cada parte do portal e cada tarefa automática: como está, quando correu e quando volta a correr, e o que a faz correr. ' +
+    $("status").innerHTML = '<p class="muted small">Cada parte do portal e cada tarefa automática: como está, quando correu e quando volta a correr, e o que a faz correr. ' +
       (RUNS ? "As execuções vêm do GitHub Actions (↗ abre a última)." : "Sem acesso às execuções do GitHub agora: o estado vem só da data dos dados.") + "</p>" +
       table(["Parte", "Estado", "Última atualização", "Há", "Próxima", "Condição de atualização"], rows.map((r) => [r.k, ...state(r), nextCell(r), '<span class="small wrap">' + esc(r.when) + "</span>"])) +
       '<p class="muted small">🟢 em dia · 🔵 a correr · 🟡 atrasado (mais do que o normal) · 🔴 falhou, parado ou sem dados. Se algo ficar parado, avisa no Discord: o canal 🔧-estado mostra os erros.</p>';
