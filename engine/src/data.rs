@@ -131,6 +131,11 @@ pub struct Data {
     /// The news signal's score of each symbol (news.py; 0 when none) and the VCP watchlist (live only).
     pub news: Vec<i32>,
     pub vcp: Vec<bool>,
+    /// The news signal's importance of each symbol (0 when none), the symbols with news in the order news.py gave
+    /// them (Python's dict order: ties keep it), and the first headline's summary (the Jornalista's reason).
+    pub news_importance: Vec<i32>,
+    pub news_order: Vec<usize>,
+    pub news_headline: Vec<String>,
 }
 
 /// Field indexes the engine reads, resolved once.

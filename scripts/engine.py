@@ -32,8 +32,15 @@ CURRENCIES = ["USD", "GBP", "CHF", "SEK", "DKK", "NOK"]
 SEPARATE = ("sector", "industry", "name", "stage2", "trend_score")  # kept apart from the float32 metrics
 
 
+# Strategies newly ported to the engine (the live-only ones): they still trade in Python, while every round also runs
+# them in the engine from the same state and writes the differences (shadow_round, agents/sombra); once a stretch of
+# real rounds matches, a strategy leaves this set and trades in the engine.
+ENGINE_SHADOW = {"jornalista", "catalisador", "cetico"}
+
+
 def enabled(strategy: str) -> bool:
-    return ogj_engine is not None and os.environ.get("OGJ_ENGINE", "rust") != "python" and strategy in ogj_engine.SUPPORTED
+    return (ogj_engine is not None and os.environ.get("OGJ_ENGINE", "rust") != "python" and strategy in ogj_engine.SUPPORTED
+            and strategy not in ENGINE_SHADOW)
 
 
 def day_num(d: date) -> int:
@@ -285,7 +292,13 @@ def build(markets: list, symbols: list[str] | None = None, sectors: list[str] | 
                 ex_since[k, j], ex_to_close[k, j] = agents.session_minutes(probe[e], now)
         data["ex_open"], data["ex_since"], data["ex_to_close"] = ex_open.ravel(), ex_since.ravel(), ex_to_close.ravel()
     last = markets[-1]
-    data["news"] = np.array([int((last.news or {}).get(s, {}).get("score", 0) or 0) for s in symbols], dtype=np.int32)
+    news = last.news or {}
+    data["news"] = np.array([int(news.get(s, {}).get("score", 0) or 0) for s in symbols], dtype=np.int32)
+    data["news_importance"] = np.array([int(news.get(s, {}).get("importance", 0) or 0) for s in symbols], dtype=np.int32)
+    pos = {s: i for i, s in enumerate(symbols)}
+    data["news_order"] = np.array([pos[s] for s in news if s in pos], dtype=np.uint32)
+    data["news_headline"] = [((news[s]["items"][0]["resumo"] if news.get(s, {}).get("items") else "notícias positivas")[:80])
+                             if s in news else "" for s in symbols]
     data["vcp"] = np.array([1 if s in (last.vcp or ()) else 0 for s in symbols], dtype=np.uint8)
     if last.earnings_dates is None and last.earnings:  # live: the next date looked up for each symbol
         off, days = [0], []
@@ -535,14 +548,18 @@ def compare_round(ids: set[str], python_state: dict, state: dict, day) -> dict:
     return {"agents": len(ids), "diffs": len(diffs)}
 
 
-def shadow_round(config: dict, before: dict, after: dict, mkt, now) -> dict:
+def shadow_round(config: dict, before: dict, after: dict, mkt, now, only: set[str] | None = None) -> dict:
     """The round Python just did, again in the engine from the portfolios as they were before it; every difference is
-    written to the private repo (agents/sombra/<day>.jsonl). Never changes the agents. Returns counts."""
+    written to the private repo (agents/sombra/<day>.jsonl). Never changes the agents. Returns counts.
+    only: these strategies (the ones still in ENGINE_SHADOW)."""
     import copy
 
     if ogj_engine is None:
         return {"skipped": "motor Rust não compilado"}
-    cfgs = [c for c in agents.active_agents(config) if c["id"] in before["agents"] and c["strategy"] in ogj_engine.SUPPORTED]
+    cfgs = [c for c in agents.active_agents(config) if c["id"] in before["agents"] and c["strategy"] in ogj_engine.SUPPORTED
+            and (only is None or c["strategy"] in only)]
+    if not cfgs:
+        return {"agents": 0, "diffs": 0}
     held = {s for c in cfgs for s in list(before["agents"][c["id"]]["positions"]) + [o["symbol"] for o in before["agents"][c["id"]]["pending"]]}
     m = copy.copy(mkt)
     symbols = sorted(set(m.stocks) | set(m.etfs) | held | {s for s, df in (m.hist or {}).items() if df is not None and len(df)})
@@ -568,5 +585,6 @@ def shadow_round(config: dict, before: dict, after: dict, mkt, now) -> dict:
                 diffs.append({"agent": c["id"], "field": k, "python": py[k], "rust": rust[k]})
     SHADOW_DIR.mkdir(parents=True, exist_ok=True)
     with (SHADOW_DIR / f"{m.as_of.isoformat()}.jsonl").open("a") as f:
-        f.write(json.dumps({"at": now.isoformat(timespec="minutes"), "agents": len(cfgs), "diffs": diffs}) + "\n")
+        f.write(json.dumps({"at": now.isoformat(timespec="minutes"), "agents": len(cfgs), "diffs": diffs,
+                            **({"motor": "rust-sombra", "estrategias": sorted(only)} if only else {})}) + "\n")
     return {"agents": len(cfgs), "diffs": len(diffs)}

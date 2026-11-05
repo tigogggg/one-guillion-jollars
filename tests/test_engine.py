@@ -393,3 +393,56 @@ def test_the_engine_trades_the_live_round_like_python(markets, monkeypatch, tmp_
         assert strip(a["trades"]) == strip(b["trades"]), i
         assert [(o["side"], o["symbol"]) for o in a["pending"]] == [(o["side"], o["symbol"]) for o in b["pending"]], i
     assert engine.compare_round(ids, py, state, day)["diffs"] == 0
+
+
+def test_the_news_strategies_match_python_in_the_engine(markets, monkeypatch, tmp_path):
+    """The live-only news strategies (Jornalista, Catalisador, Cético) ported to the engine: the same round from the
+    same state, in Python and in the engine (shadow_round), leaves the same cash, positions and orders."""
+    import copy
+
+    if "jornalista" not in engine.ogj_engine.SUPPORTED:
+        pytest.skip("a receita privada ainda não tem as estratégias de notícias")
+    from datetime import datetime, timezone
+
+    import earnings as E
+
+    k = 400
+    today = markets[k]
+    day = today.as_of
+    hist = {}
+    for s, df in today.hist.items():
+        cut = df[df.index.date <= day].copy()
+        if len(cut) and cut.index[-1].date() == day:
+            cut.iloc[-1, cut.columns.get_loc("Close")] = cut["Open"].iloc[-1] * 1.01
+            cut.iloc[-1, cut.columns.get_loc("High")] = max(cut["Open"].iloc[-1], cut["Close"].iloc[-1])
+        hist[s] = cut
+    live = copy.copy(today)
+    live.hist, live.closes, live.earnings_dates, live.earnings, live.vcp, live.league = hist, None, None, {}, set(), {}
+    stocks = [s for s in today.stocks if s.startswith("US")][:12]
+    live.news = {s: {"score": sc, "importance": imp, "items": [{"resumo": f"Notícia sobre {s}"}]}
+                 for s, sc, imp in zip(stocks, [8, 7, 7, -6, -8, 5, -4, 9, 6, -7, 7, 3], [3, 2, 3, 2, 3, 1, 2, 3, 2, 2, 3, 3])}
+    monkeypatch.setattr(E, "next_earnings", lambda s, d: None)
+    monkeypatch.setattr(engine, "SHADOW_DIR", tmp_path)
+    config, state = {"agents": []}, {"agents": {}}
+    for aid, s in (("jornalista", "jornalista"), ("jornalista-velho", "jornalista"), ("catalisador", "catalisador"),
+                   ("cetico", "cetico")):
+        params = {**{x: agents.COMMON[x] for x in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES[s][2]}
+        port = agents.new_portfolio(1000, markets[k - 30].as_of)
+        if aid == "jornalista-velho":  # holdings bought weeks ago, one of them with bad news now
+            port = pretrain.simulate("foguetao", {**params, **agents.STRATEGIES["foguetao"][2]}, markets[k - 30:k], keep_port=True)["port"]
+            held = list(port["positions"])
+            if held:
+                live.news[held[0]] = {"score": -9, "importance": 3, "items": []}
+        port["params"] = params
+        config["agents"].append({"id": aid, "name": aid, "emoji": "📰", "strategy": s, "capital": 1000, "params": params})
+        state["agents"][aid] = port
+    now = datetime(day.year, day.month, day.day, 20, 0, tzinfo=timezone.utc)
+    before = json_copy(state)
+    moves, _ = agents.reactive_round(config, state, live, now)
+    r = engine.shadow_round(config, before, state, live, now, only=engine.ENGINE_SHADOW)
+    import json
+    diffs = json.loads((tmp_path / f"{day.isoformat()}.jsonl").read_text().splitlines()[-1])["diffs"]
+    assert r["agents"] == 4 and diffs == []
+    assert state["agents"]["jornalista"]["pending"] or any(c["id"] == "jornalista" for c, _ in moves)  # it acted on the news
+    assert any(o["side"] == "sell" for o in state["agents"]["jornalista-velho"]["pending"]) \
+        or any(c["id"] == "jornalista-velho" and t["side"] == "venda" for c, t in moves)  # and sold on the bad news

@@ -2943,6 +2943,12 @@ def main() -> int:
             for cfg in active_agents(config):  # the shadow registered its copies: the real portfolios again
                 if cfg["id"] in state["agents"]:
                     mkt.league[cfg["id"]] = (cfg, state["agents"][cfg["id"]])
+        if engine.ENGINE_SHADOW and os.environ.get("OGJ_SHADOW", "1") != "0":  # strategies being ported, in the shadow
+            try:
+                print(f"Ronda-sombra (Rust, em observação): "
+                      f"{engine.shadow_round(config, snapshot, state, mkt, now, only=engine.ENGINE_SHADOW)}", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"WARN: ronda-sombra nova: {e!r}", file=sys.stderr)
         try:
             PRICE_CACHE.mkdir(parents=True, exist_ok=True)
             earnings_cache.write_text(json.dumps({s: (d.isoformat() if d else None) for s, d in mkt.earnings.items()}))

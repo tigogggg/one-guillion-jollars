@@ -159,6 +159,9 @@ impl EngineData {
             ex_since: { let v = opt_arr::<f64>(d, "ex_since")?; if v.is_empty() { vec![0.0; n_days] } else { v } },
             ex_to_close: { let v = opt_arr::<f64>(d, "ex_to_close")?; if v.is_empty() { vec![0.0; n_days] } else { v } },
             news: { let v = opt_arr::<i32>(d, "news")?; if v.is_empty() { vec![0; n_syms] } else { v } },
+            news_importance: { let v = opt_arr::<i32>(d, "news_importance")?; if v.is_empty() { vec![0; n_syms] } else { v } },
+            news_order: opt_arr::<u32>(d, "news_order")?.into_iter().map(|x| x as usize).collect(),
+            news_headline: if d.contains("news_headline")? { list(d, "news_headline")? } else { vec![String::new(); n_syms] },
             vcp: { let v = opt_arr::<u8>(d, "vcp")?; if v.is_empty() { vec![false; n_syms] } else { v.into_iter().map(|x| x != 0).collect() } },
             days,
         };
