@@ -264,8 +264,17 @@ def download(period: str, spy: pd.DataFrame | None, fx: pd.Series | None) -> pd.
     for name, series in FRED_SERIES.items():  # the cached history, plus the latest days if FRED answers
         base = cached(name)
         fresh = base is not None and len(base) and base.index.max() >= pd.Timestamp.today() - pd.Timedelta(days=10)
-        recent = None if fresh else fred(series, tries=1, start=(pd.Timestamp.today() - pd.Timedelta(days=400)).date().isoformat(),
-                                         timeout=45)  # the cache is refreshed weekly: only ask FRED when it is stale
+        # FRED timing out once a day is enough: the rounds of that day (state/prices, kept between them) skip it
+        tried = Path(__file__).resolve().parents[1] / "state" / "prices" / f"fred-{series}-{pd.Timestamp.today().date()}.falhou"
+        recent = None if fresh or tried.exists() else fred(
+            series, tries=1, start=(pd.Timestamp.today() - pd.Timedelta(days=400)).date().isoformat(),
+            timeout=45)  # the cache is refreshed weekly: only ask FRED when it is stale
+        if recent is None and not fresh and not tried.exists():
+            try:
+                tried.parent.mkdir(parents=True, exist_ok=True)
+                tried.touch()
+            except OSError:
+                pass
         s = base.combine_first(recent) if base is not None and recent is not None else (base if base is not None else recent)
         if s is not None and len(s):
             raw[name] = s
