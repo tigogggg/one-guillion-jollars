@@ -137,9 +137,13 @@ def save(message: str, ours_first: bool, paths: list[str], tries: int = 5) -> in
                 return 1
     git("add", "-A", "--", *paths, check=False)
     if subprocess.run(["git", "-C", str(AGENTS_DIR), "diff", "--cached", "--quiet"]).returncode == 0:
-        print("Nada para guardar.", flush=True)
-        return 0
-    git("commit", "-qm", message)
+        ahead = git("rev-list", "--count", "@{u}..HEAD", check=False).strip()
+        if not ahead or ahead == "0":
+            print("Nada para guardar.", flush=True)
+            return 0
+        base_rev = git("rev-parse", "@{u}").strip()  # commits made by hand and not pushed yet: pushed as they are
+    else:
+        git("commit", "-qm", message)
     base = {p: show(base_rev, p) for p in ours}
     for attempt in range(tries):
         git("fetch", "-q", "origin", "main", check=False)
