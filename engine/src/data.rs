@@ -136,6 +136,12 @@ pub struct Data {
     pub news_importance: Vec<i32>,
     pub news_order: Vec<usize>,
     pub news_headline: Vec<String>,
+    /// The Visionário's tilt of each symbol from the latest 18-month view (scripts/vision.py; 0: none or stale view).
+    pub vision_tilt: Vec<i32>,
+    /// The day's ranking (rankings.py, the Joalheiro): its symbols in order, and each symbol's score and quality.
+    pub rank_order: Vec<usize>,
+    pub rank_score: Vec<f64>,
+    pub rank_quality: Vec<f64>,
 }
 
 /// Field indexes the engine reads, resolved once.

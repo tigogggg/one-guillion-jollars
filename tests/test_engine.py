@@ -446,3 +446,47 @@ def test_the_news_strategies_match_python_in_the_engine(markets, monkeypatch, tm
     assert state["agents"]["jornalista"]["pending"] or any(c["id"] == "jornalista" for c, _ in moves)  # it acted on the news
     assert any(o["side"] == "sell" for o in state["agents"]["jornalista-velho"]["pending"]) \
         or any(c["id"] == "jornalista-velho" and t["side"] == "venda" for c, t in moves)  # and sold on the bad news
+
+
+
+def test_the_view_and_ranking_strategies_match_python_in_the_engine(markets, monkeypatch, tmp_path):
+    """The Visionário (the 18-month view's tilts) and the Joalheiro (the day's ranking) ported to the engine: the same
+    round from the same state, in Python and in the engine (shadow_round), leaves the same cash, positions and orders."""
+    import copy
+    import json
+    from datetime import datetime, timezone
+
+    import earnings as E
+
+    if "visionario" not in engine.ogj_engine.SUPPORTED:
+        pytest.skip("a receita privada ainda não tem o Visionário e o Joalheiro")
+    k = 400
+    today = markets[k]
+    day = today.as_of
+    live = copy.copy(today)
+    live.hist = {s: df[df.index.date <= day] for s, df in today.hist.items()}
+    live.closes, live.earnings_dates, live.earnings, live.vcp, live.league, live.news = None, None, {}, set(), {}, {}
+    us = [s for s in today.stocks if s.startswith("US")]
+    for i, s in enumerate(us):
+        today.stocks[s]._extra["industry"] = "Aerospace & Defense" if i % 3 == 0 else "Biotechnology"
+    sectors = sorted({today.stocks[s].get("sector") for s in us if today.stocks[s].get("sector")})
+    monkeypatch.setitem(agents._VISION, "v", {"at": day.isoformat(), "industrias": {"ind_ITA": 2, "ind_XBI": -1},
+                                               "setores": {sectors[0]: 1} if sectors else {}})
+    live.rankings = [{"symbol": s, "score": 100 - i, "quality_score": 50 + (i * 7) % 50} for i, s in enumerate(us[:20])]
+    monkeypatch.setattr(E, "next_earnings", lambda s, d: None)
+    monkeypatch.setattr(engine, "SHADOW_DIR", tmp_path)
+    config, state = {"agents": []}, {"agents": {}}
+    for s in ("visionario", "joalheiro"):
+        params = {**{x: agents.COMMON[x] for x in pretrain.SHARED_IN_BACKTEST}, **agents.STRATEGIES[s][2]}
+        port = agents.new_portfolio(1000, markets[k - 30].as_of)
+        port["params"] = params
+        config["agents"].append({"id": s, "name": s, "emoji": "🔭", "strategy": s, "capital": 1000, "params": params})
+        state["agents"][s] = port
+    now = datetime(day.year, day.month, day.day, 20, 0, tzinfo=timezone.utc)
+    before = json_copy(state)
+    agents.reactive_round(config, state, live, now)
+    r = engine.shadow_round(config, before, state, live, now, only=engine.ENGINE_SHADOW)
+    diffs = json.loads((tmp_path / f"{day.isoformat()}.jsonl").read_text().splitlines()[-1])["diffs"]
+    assert r["agents"] == 2 and diffs == []
+    for s in ("visionario", "joalheiro"):  # both acted
+        assert state["agents"][s]["pending"] or state["agents"][s]["positions"], s

@@ -162,6 +162,10 @@ impl EngineData {
             news_importance: { let v = opt_arr::<i32>(d, "news_importance")?; if v.is_empty() { vec![0; n_syms] } else { v } },
             news_order: opt_arr::<u32>(d, "news_order")?.into_iter().map(|x| x as usize).collect(),
             news_headline: if d.contains("news_headline")? { list(d, "news_headline")? } else { vec![String::new(); n_syms] },
+            vision_tilt: { let v = opt_arr::<i32>(d, "vision_tilt")?; if v.is_empty() { vec![0; n_syms] } else { v } },
+            rank_order: opt_arr::<u32>(d, "rank_order")?.into_iter().map(|x| x as usize).collect(),
+            rank_score: { let v = opt_arr::<f64>(d, "rank_score")?; if v.is_empty() { vec![f64::NAN; n_syms] } else { v } },
+            rank_quality: { let v = opt_arr::<f64>(d, "rank_quality")?; if v.is_empty() { vec![0.0; n_syms] } else { v } },
             vcp: { let v = opt_arr::<u8>(d, "vcp")?; if v.is_empty() { vec![false; n_syms] } else { v.into_iter().map(|x| x != 0).collect() } },
             days,
         };

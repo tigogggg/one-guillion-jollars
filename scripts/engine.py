@@ -35,7 +35,7 @@ SEPARATE = ("sector", "industry", "name", "stage2", "trend_score")  # kept apart
 # Strategies newly ported to the engine (the live-only ones): they still trade in Python, while every round also runs
 # them in the engine from the same state and writes the differences (shadow_round, agents/sombra); once a stretch of
 # real rounds matches, a strategy leaves this set and trades in the engine.
-ENGINE_SHADOW = {"jornalista", "catalisador", "cetico"}
+ENGINE_SHADOW = {"jornalista", "catalisador", "cetico", "visionario", "joalheiro"}
 
 
 def enabled(strategy: str) -> bool:
@@ -299,6 +299,13 @@ def build(markets: list, symbols: list[str] | None = None, sectors: list[str] | 
     data["news_order"] = np.array([pos[s] for s in news if s in pos], dtype=np.uint32)
     data["news_headline"] = [((news[s]["items"][0]["resumo"] if news.get(s, {}).get("items") else "notícias positivas")[:80])
                              if s in news else "" for s in symbols]
+    data["vision_tilt"] = np.array([vision_tilts(last).get(s, 0) for s in symbols], dtype=np.int32)
+    rows = [r for r in (getattr(last, "rankings", None) or []) if r.get("symbol") in pos]
+    data["rank_order"] = np.array([pos[r["symbol"]] for r in rows], dtype=np.uint32)
+    rank_score, rank_quality = np.full(len(symbols), np.nan), np.zeros(len(symbols))
+    for r in rows:
+        rank_score[pos[r["symbol"]]], rank_quality[pos[r["symbol"]]] = float(r["score"]), float(r.get("quality_score", 0) or 0)
+    data["rank_score"], data["rank_quality"] = rank_score, rank_quality
     data["vcp"] = np.array([1 if s in (last.vcp or ()) else 0 for s in symbols], dtype=np.uint8)
     if last.earnings_dates is None and last.earnings:  # live: the next date looked up for each symbol
         off, days = [0], []
@@ -436,6 +443,26 @@ def _python_view(port: dict, ix: dict[str, int]) -> dict:
                      o.get("reason", ""), o.get("ref"), o.get("gap_max"), _day(o.get("created"))] for o in port["pending"]],
         "last_rebalance": _day(port.get("last_rebalance")),
     }
+
+
+def vision_tilts(mkt) -> dict[str, int]:
+    """Each US stock's tilt in the latest 18-month view (agents.s_visionario's), when the view is fresh."""
+    import context
+
+    if not hasattr(agents, "vision"):
+        return {}
+    v = agents.vision()
+    if not v.get("at") or (mkt.as_of - date.fromisoformat(v["at"][:10])).days > agents.VISION_MAX_DAYS:
+        return {}
+    out = {}
+    for s, m in (mkt.stocks or {}).items():
+        if not agents.is_us(s):
+            continue
+        t = (v.get("industrias") or {}).get(context.industry_key(m.get("industry")) or "", 0)
+        t = t or (v.get("setores") or {}).get(m.get("sector") or "", 0)
+        if t:
+            out[s] = int(t)
+    return out
 
 
 def _iso(n: int | None) -> str | None:
