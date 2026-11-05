@@ -615,15 +615,27 @@ async function snapshot(env, data) {
   const verdicts = await judge(data, quotes, fx, proposals, news);
   const followList = data.owner ? ((await env.CONFIG.get(`follows:${data.owner}`, "json")) || []) : [];
   const follows = await Promise.all(followList.map(async (t) => {
-    const q = quotes[t] || (await yahooQuote(t));
+    const [q, year] = await Promise.all([quotes[t] || yahooQuote(t), yahooCached(t, "range=1y&interval=1d", 3600)]);
     return { symbol: t, name: q?.name || "", price: q?.price ?? null, currency: q?.currency || "", change: q?.prev ? q.price / q.prev - 1 : null,
-             news: news?.scores?.[t] ?? null, proposed: (proposals?.buys || []).some((b) => b.symbol === t) };
+             ...periodChanges(year, q?.price), news: news?.scores?.[t] ?? null, proposed: (proposals?.buys || []).some((b) => b.symbol === t) };
   }));
   const [copy, agentList] = await Promise.all([data.owner ? env.CONFIG.get(`copiar:${data.owner}`, "json") : null,
     followableAgents(env)]);
   return { name: data.name, display_name: data.display_name || "", tx: data.tx, quotes, fx, verdicts, follows, copy: copy || null, agent_list: agentList || [], accounts: data.accounts || {}, profile: data.profile || null,
            dividends: data.dividends || [], settings: data.settings || { capital: 10000, risk: 1 },
            proposals: proposals ? { as_of: proposals.as_of, zone: proposals.zone, buys: proposals.buys.slice(0, 12) } : null, at: Date.now() };
+}
+
+// The change over a week, a month and a year: the current price against the last close on or before that day.
+function periodChanges(chart, price) {
+  const ts = chart?.timestamp || [], cl = chart?.indicators?.quote?.[0]?.close || [];
+  const at = (days) => {
+    const cut = Date.now() / 1000 - days * 86400;
+    let v = null;
+    for (let i = 0; i < ts.length && ts[i] <= cut; i++) if (cl[i] != null) v = cl[i];
+    return v != null && price != null ? price / v - 1 : null;
+  };
+  return { w1: at(7), m1: at(30), y1: ts.length && ts[0] <= Date.now() / 1000 - 360 * 86400 ? at(365) : null };
 }
 
 // ---------------------------------------------------------------------------
@@ -1461,10 +1473,11 @@ $("copy-form").addEventListener("submit", async (e) => {
 function renderFollows() {
   renderCopy();
   const f = SNAP.follows || [];
-  $("follows").innerHTML = f.length ? table(["Ação", "Preço", "Hoje", "Notícias (36 h)", "Proposta hoje", ""], f.map((x) => ['<b>' + esc(x.symbol) + '</b> <span class="muted">' + esc(x.name) + '</span>',
+  $("follows").innerHTML = f.length ? table(["Ação", "Preço", "Hoje", "1W", "1M", "1Y", "Notícias (36 h)", "Proposta hoje", ""], f.map((x) => ['<b>' + esc(x.symbol) + '</b> <span class="muted">' + esc(x.name) + '</span>',
     x.price != null ? nf(x.price) + " " + esc(x.currency) : "—", '<span class="' + cls(x.change) + '">' + pct(x.change) + '</span>',
+    ...[x.w1, x.m1, x.y1].map((v) => v == null ? "—" : '<span class="' + cls(v) + '">' + pct(v) + '</span>'),
     x.news == null ? "—" : '<span class="' + cls(x.news) + '">' + (x.news > 0 ? "+" : "") + x.news + '</span>', x.proposed ? "🧠 sim" : "—",
-    '<button class="del" data-unfollow="' + esc(x.symbol) + '">deixar</button>']), [1, 2, 3]) : '<p class="muted">Ainda não segues nenhuma ação.</p>';
+    '<button class="del" data-unfollow="' + esc(x.symbol) + '">deixar</button>']), [1, 2, 3, 4, 5, 6]) : '<p class="muted">Ainda não segues nenhuma ação.</p>';
 }
 async function followAction(action, symbol) {
   const r = await fetch(BASE + "/data", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, symbol }) });
