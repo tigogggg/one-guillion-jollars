@@ -191,6 +191,7 @@ export async function portfolioRoute(request, env, tok, rest, dispatch) {
     return resp;
   }
   if (rest === "/data" && request.method === "GET") return json(await snapshot(env, data));
+  if (rest === "/procurar" && request.method === "GET") return json(await searchSymbols(new URL(request.url).searchParams.get("q")));
   if (rest === "/history" && request.method === "GET") return json(await history(env, data, new URL(request.url).searchParams.get("escala") === "hora"));
   if (rest === "/analysis" && request.method === "GET") return json(await analysisStatus(env, data));
   if (rest === "/versions" && request.method === "GET") return json({ versions: await listVersions(env, tok), current: cur.version });
@@ -567,6 +568,22 @@ async function yahoo(symbol, params) {
     return (await resp.json())?.chart?.result?.[0] || null;
   } catch {
     return null;
+  }
+}
+
+// Ticker suggestions while typing (Yahoo's search): symbol, full name, exchange and kind; stocks, ETFs and funds only.
+const KINDS = { EQUITY: "ação", ETF: "ETF", MUTUALFUND: "fundo", INDEX: "índice" };
+async function searchSymbols(q) {
+  q = String(q || "").trim().slice(0, 40);
+  if (q.length < 2) return [];
+  const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=10&newsCount=0&listsCount=0`;
+  try {
+    const resp = await fetch(url, { headers: UA, cf: { cacheTtl: 3600, cacheEverything: true } });
+    if (!resp.ok) return [];
+    return ((await resp.json())?.quotes || []).filter((x) => x.symbol && KINDS[x.quoteType])
+      .map((x) => ({ symbol: x.symbol, name: x.longname || x.shortname || "", exchange: x.exchDisp || x.exchange || "", kind: KINDS[x.quoteType] }));
+  } catch {
+    return [];
   }
 }
 
@@ -991,7 +1008,7 @@ function portfolioPage(data, tok, opts = {}) {
   <form id="copy-form" class="panel filters"><select name="agent" id="copy-agent"></select><input name="valor" type="number" min="0" step="50" placeholder="Valor que dedicas (€, opcional)"><button class="btn" type="submit">GUARDAR</button><span id="copy-msg" class="small"></span></form>
   <h2>👀 Ações que segues</h2>
   <p class="muted small">A mesma lista do <code>/seguir</code> no Discord: recebes uma mensagem privada quando uma destas ações rompe com volume ou mexe 5% ou mais no dia.</p>
-  <form id="follow-form" class="panel filters"><input name="symbol" placeholder="Ticker, ex.: NVDA" required autocapitalize="characters"><button class="btn" type="submit">SEGUIR</button><span id="follow-msg" class="small"></span></form>
+  <form id="follow-form" class="panel filters"><input name="symbol" placeholder="Ticker ou nome, ex.: NVDA, Vanguard" required autocapitalize="characters" autocomplete="off" list="follow-list"><datalist id="follow-list"></datalist><button class="btn" type="submit">SEGUIR</button><span id="follow-msg" class="small"></span></form>
   <div id="follows"></div>
 </section>
 <section data-tab="propostas" hidden>
@@ -1485,6 +1502,21 @@ async function followAction(action, symbol) {
   if (!r.ok) { $("follow-msg").textContent = "⚠️ " + out.error; $("follow-msg").className = "small down"; return; }
   $("follow-msg").textContent = ""; SNAP = out; render();
 }
+// suggestions while typing: the ticker with its full name, exchange and kind beside it
+let suggestTimer = null, suggestSeq = 0;
+$("follow-form").symbol.addEventListener("input", (e) => {
+  clearTimeout(suggestTimer);
+  const q = e.target.value.trim();
+  if (q.length < 2) { $("follow-list").innerHTML = ""; return; }
+  suggestTimer = setTimeout(async () => {
+    const seq = ++suggestSeq;
+    try {
+      const rows = await (await fetch(BASE + "/procurar?q=" + encodeURIComponent(q))).json();
+      if (seq !== suggestSeq) return;
+      $("follow-list").innerHTML = rows.map((r) => '<option value="' + esc(r.symbol) + '">' + esc([r.name, r.exchange, r.kind].filter(Boolean).join(" · ")) + '</option>').join("");
+    } catch (err) {}
+  }, 250);
+});
 $("follow-form").addEventListener("submit", (e) => { e.preventDefault(); followAction("follow_add", e.target.symbol.value); e.target.reset(); });
 $("follows").addEventListener("click", (e) => { const b = e.target.closest("[data-unfollow]"); if (b) followAction("follow_remove", b.dataset.unfollow); });
 
