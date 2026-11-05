@@ -485,3 +485,17 @@ def test_the_friday_card_sums_up_the_week(monkeypatch):
     card = health.weekly_card(date(2026, 11, 6))
     text = str(card)
     assert "Rondas: 3" in text and "mediana 2.0 min" in text and "agents.yml: 1 de 4" in text
+
+
+def test_thinly_traded_stocks_cost_more_to_trade(monkeypatch):
+    import pandas as pd
+
+    import agents
+
+    monkeypatch.setattr(agents, "LIQUIDITY_EXTRA", {})
+    days = pd.bdate_range("2026-01-01", periods=30)
+    big = pd.DataFrame({"Close": 200.0, "Volume": 5e6}, index=days)  # 1 000 M$ a day
+    small = pd.DataFrame({"Close": 10.0, "Volume": 2e5}, index=days)  # 2 M€ a day
+    agents.set_liquidity({"AAPL": big, "TINY.DE": small})
+    assert agents.fees("TINY.DE") == agents.FEE + 0.003
+    assert agents.fees("AAPL") == agents.FEE + agents.FX_FEE

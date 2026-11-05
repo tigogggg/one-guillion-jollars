@@ -397,6 +397,7 @@ def build_markets(years: int = YEARS, context_path: str | None = None, prices_on
     period = "2y" if years <= 1 else "10y" if years <= 8 else "max"
     stock_hist = download_history(list(sector_of) + ["SPY"], period=period)
     stock_hist = {s: agents.fix_pence(df) if agents.currency_of(s) == "GBp" else df for s, df in stock_hist.items()}
+    agents.set_liquidity(stock_hist)  # thinly traded stocks cost more per trade (agents.fees), in both engines
     etf_hist = download_history([t for t, _ in UCITS_ETFS], period=period)
     fx_all = download_history(list(agents.FX_SYMBOLS.values()), period=period)
     fx = fx_all["EURUSD=X"]["Close"]

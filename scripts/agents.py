@@ -722,6 +722,7 @@ def load_market(now: datetime | None = None, live: bool = False) -> Market:
         fx_hist = complete_bars(download_history(list(FX_SYMBOLS.values())), now, as_of)
     if "EURUSD=X" not in fx_hist:
         raise RuntimeError("Sem dados do Yahoo Finance (EUR/USD).")
+    set_liquidity(stock_hist)
     fx_rates = with_last_rates({c: fx_hist[t]["Close"] for c, t in FX_SYMBOLS.items() if c != "USD" and t in fx_hist})
     missing = [s for s in sector_of if s not in stock_hist]
     if missing:
@@ -1036,9 +1037,28 @@ def tax_owed_if_sold(port: dict, mkt: Market) -> float:
     return owed * TAX_RATE
 
 
+# The broker's spread is that of a liquid stock: a thinly traded one costs more to get in and out of (wider spread,
+# the price moves when the order fills). Extra per side by the median value traded per day (euros, last year);
+# ETFs are kept tight by their market makers. Set when the prices load (set_liquidity), read by both engines.
+LIQUIDITY_TIERS = ((100e6, 0.0), (20e6, 0.0005), (5e6, 0.0015), (0.0, 0.003))
+TO_EUR_APPROX = {"EUR": 1.0, "USD": 0.92, "GBp": 0.0117, "CHF": 1.05, "SEK": 0.087, "DKK": 0.134, "NOK": 0.085}
+LIQUIDITY_EXTRA: dict[str, float] = {}
+
+
+def set_liquidity(hist: dict) -> None:
+    """Each stock's extra spread from its median traded value over the last year of `hist` (symbol: daily bars)."""
+    for s, df in hist.items():
+        if df is None or not len(df) or s in ETF_SYMBOLS or "Volume" not in df:
+            continue
+        tail = df.iloc[-252:]
+        value = float((tail["Close"] * tail["Volume"]).median()) * TO_EUR_APPROX.get(currency_of(s), 1.0)
+        if value == value:  # not NaN
+            LIQUIDITY_EXTRA[s] = next(extra for floor, extra in LIQUIDITY_TIERS if value >= floor)
+
+
 def fees(symbol: str) -> float:
-    """Spread/slippage per side, plus currency conversion for anything not quoted in euros."""
-    return FEE + (0.0 if is_eur(symbol) else FX_FEE)
+    """Spread/slippage per side (wider for thinly traded stocks), plus currency conversion for anything not in euros."""
+    return FEE + LIQUIDITY_EXTRA.get(symbol, 0.0) + (0.0 if is_eur(symbol) else FX_FEE)
 
 
 def commission_terms(symbol: str) -> dict:
