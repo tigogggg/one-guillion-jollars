@@ -895,7 +895,11 @@ function liveHtml(a) {
     tile("Sharpe", fmtNum(a.sharpe), a.sessions + " sessões desde " + esc(a.started)) +
     tile("Dinheiro", fmtEur(a.cash), fmtNum(a.invested_pct, 0) + "% investido") +
     tile("Operações", a.buys + " compras · " + a.sells + " vendas", a.sells ? a.wins + " vendas com lucro (" + fmtNum(a.wins / a.sells * 100, 0) + "%)" : "ainda sem vendas") +
-    tile("Impostos pagos", fmtEur(a.taxes), esc(a.fees_note)) + '</div>' +
+    tile("Impostos pagos", fmtEur(a.taxes), esc(a.fees_note)) +
+    tile("Dividendos", fmtEur((a.dividendos || {}).liquido_eur || 0), (a.dividendos || {}).bruto_eur
+      ? fmtEur(a.dividendos.bruto_eur) + " brutos · " + fmtEur(a.dividendos.imposto_eur) + " de imposto (28%) · " +
+        (a.dividendos.ultimos || []).length + " pagamentos"
+      : "recebidos desde 5/11/2026, líquidos de imposto") + '</div>' +
     '<h3>💼 Carteira atual (' + a.positions.length + ' posições ativas)</h3>' +
     table(["Ativo", "Porque comprou", "Nome", "Qtd.", "Custo médio", "Preço atual", "Investido", "Valor", "Ganho", "Ganho %", "Peso", "Stop", "Alvo", "Desde", "Resultados"],
       a.positions.map((p) => ['<b>' + esc(p.symbol) + '</b>', p.why ? '<details><summary>' + esc(p.reason || "ver") + '</summary><p class="small why">' + esc(p.why) + '</p></details>' : esc(p.reason || "—"),

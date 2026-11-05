@@ -397,3 +397,25 @@ def test_the_training_never_changes_a_frozen_candidate(monkeypatch, tmp_path):
     monkeypatch.setattr(pretrain.agents, "save", lambda c, s: saved.update(s or {}))
     assert pretrain.apply({"strategies": {"quant": {"chosen": {"n": 3}}}}, date(2026, 11, 8)) == []
     assert state["agents"]["quant-congelado"]["params"] == {"n": 8}
+
+
+def test_dividends_are_paid_after_tax_to_the_agents_that_held_on_the_ex_date():
+    from datetime import date
+
+    import agents
+
+    day = date(2026, 11, 6)
+    mkt = type("M", (), {"as_of": day})()
+    config = {"agents": [{"id": "a", "name": "A", "emoji": "🤖"}, {"id": "b", "name": "B", "emoji": "🤖"}]}
+    state = {"agents": {
+        "a": {"cash": 100.0, "positions": {"SAP.DE": {"qty": 10, "entry_date": "2026-10-01"}},
+              "dividendos": {"ate": "2026-11-04", "bruto_eur": 0.0, "imposto_eur": 0.0, "liquido_eur": 0.0, "ultimos": []}},
+        "b": {"cash": 100.0, "positions": {"SAP.DE": {"qty": 10, "entry_date": "2026-11-06"}}}}}  # bought on the ex-date
+    paid = agents.credit_dividends(config, state, mkt, fetch=lambda syms, since: {"SAP.DE": [(date(2026, 11, 5), 2.0),
+                                                                                         (date(2026, 1, 5), 9.0)]})
+    a, b = state["agents"]["a"], state["agents"]["b"]
+    assert len(paid) == 1 and abs(a["cash"] - (100 + 20 * 0.72)) < 1e-9 and a["dividendos"]["bruto_eur"] == 20.0
+    assert a["dividendos"]["imposto_eur"] == 5.6 and a["dividendos"]["ate"] == "2026-11-06"
+    assert b["cash"] == 100.0 and b["dividendos"]["ate"] == "2026-11-06"
+    again = agents.credit_dividends(config, state, mkt, fetch=lambda syms, since: {"SAP.DE": [(date(2026, 11, 5), 2.0)]})
+    assert again == [] and abs(a["cash"] - 114.4) < 1e-9  # never paid twice

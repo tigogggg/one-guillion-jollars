@@ -2324,6 +2324,7 @@ def agent_details(config: dict, state: dict, mkt: Market) -> list[dict]:
                         for sh in state.get("shadows", {}).get(cfg["id"], [])],
             "por_zona": params.get("por_zona") or {},
             "genealogia": cfg.get("genealogia"),  # a fusion's family tree and the analysis behind it (scripts/jury.py)
+            "dividendos": {k: v for k, v in (port.get("dividendos") or {}).items() if k != "ate"},  # credit_dividends
         })
     return out
 
@@ -2456,6 +2457,69 @@ MONTHLY_TITLE = "📆 Relatório mensal dos agentes"
 # --------------------------------------------------------------------------
 # Intraday stop round
 # --------------------------------------------------------------------------
+
+
+DIVIDENDS_KEPT = 30  # last dividends listed per agent
+
+
+def fetch_dividends(symbols: list[str], since: date) -> dict[str, list[tuple[date, float]]]:
+    """Each symbol's dividends (ex-date, amount per share in its quote currency) since that day, from Yahoo."""
+    if not symbols:
+        return {}
+    import yfinance as yf
+
+    out: dict[str, list[tuple[date, float]]] = {}
+    try:
+        df = yf.download(symbols, start=since.isoformat(), actions=True, auto_adjust=False, progress=False,
+                         group_by="ticker", threads=True)
+    except Exception as e:  # noqa: BLE001 - no dividends today, the rest of the run goes on
+        print(f"WARN: dividendos: {e!r}", file=sys.stderr)
+        return {}
+    for s in symbols:
+        try:
+            col = df[s]["Dividends"] if len(symbols) > 1 else df["Dividends"]
+        except (KeyError, TypeError):
+            continue
+        col = col.dropna()
+        out[s] = [(ix.date(), float(v)) for ix, v in col.items() if v and v > 0]
+    return out
+
+
+def credit_dividends(config: dict, state: dict, mkt: Market, fetch=fetch_dividends) -> list[str]:
+    """The dividends of the stocks each agent held on their ex-date, paid into its cash after the Portuguese tax (28%,
+    the US 15% withheld at source is credited against it). The prices are not adjusted live: on the ex-date the price
+    falls by the dividend, and until now the agent never received it. Totals in port["dividendos"]."""
+    agents_with = [(c, state["agents"][c["id"]]) for c in config["agents"]
+                   if not c.get("desligado") and (state["agents"].get(c["id"]) or {}).get("positions")]
+    held = sorted({s for _, p in agents_with for s in p["positions"]})
+    if not held:
+        return []
+    since = min(date.fromisoformat((p.get("dividendos") or {}).get("ate") or (mkt.as_of - timedelta(days=1)).isoformat())
+                for _, p in agents_with)
+    divs = fetch(held, since + timedelta(days=1))
+    notes = []
+    for cfg, port in agents_with:
+        book = port.setdefault("dividendos", {"bruto_eur": 0.0, "imposto_eur": 0.0, "liquido_eur": 0.0, "ultimos": []})
+        last = date.fromisoformat(book.get("ate") or (mkt.as_of - timedelta(days=1)).isoformat())
+        for sym, pos in port["positions"].items():
+            entry = date.fromisoformat(pos["entry_date"]) if pos.get("entry_date") else None
+            for ex, amount in divs.get(sym, []):
+                if not (last < ex <= mkt.as_of) or (entry and entry >= ex):  # bought on or after the ex-date: not paid
+                    continue
+                try:
+                    gross = pos["qty"] * to_eur(mkt, sym, amount, ex)
+                except KeyError:
+                    continue
+                tax = gross * TAX_RATE
+                port["cash"] += gross - tax
+                book["bruto_eur"] = round(book["bruto_eur"] + gross, 2)
+                book["imposto_eur"] = round(book["imposto_eur"] + tax, 2)
+                book["liquido_eur"] = round(book["liquido_eur"] + gross - tax, 2)
+                book["ultimos"] = (book["ultimos"] + [{"date": ex.isoformat(), "symbol": sym, "bruto_eur": round(gross, 2),
+                                                       "liquido_eur": round(gross - tax, 2)}])[-DIVIDENDS_KEPT:]
+                notes.append(f"{cfg['emoji']} {cfg['name']}: dividendo de {sym} {eur(gross - tax)} líquido")
+        book["ate"] = mkt.as_of.isoformat()
+    return notes
 
 
 FROZEN_PATH = REPO_AGENTS / "lab" / "congelados.json"
@@ -2833,6 +2897,11 @@ def main() -> int:
             mkt = load_market()
             ensure_twins(config, state, mkt.as_of)
             ensure_profiles(config, state, mkt.as_of)
+            try:  # before the day: the dividends of yesterday's ex-dates are cash today
+                paid = credit_dividends(config, state, mkt)
+                print(f"Dividendos: {len(paid)} pagamentos creditados", flush=True)  # the details stay private
+            except Exception as e:  # noqa: BLE001 - never stops the day
+                print(f"WARN: dividendos: {e!r}", file=sys.stderr)
             moves, training, avoided, events = run_day(config, state, mkt)
             save(config, state)  # bankruptcies retire agents and add their replacements
             frozen_report(config, state, mkt)
