@@ -3,9 +3,8 @@ name: Visão a 18 meses (Visionário)
 # Claude reads the last two weeks of news (web search) and our numbers, builds three 18-month scenarios and the tilts
 # per sector and industry the Visionário follows (scripts/vision.py). Twice a week, before the European open, or by hand.
 # This repo is public: the view goes to the private repo and Discord, never to this log.
+# Started by the Cloudflare Worker on Mondays and Thursdays (worker.js, visao): GitHub's own cron skipped runs.
 on:
-  schedule:
-    - cron: "41 5 * * 1,4"
   workflow_dispatch:
     inputs:
       motivo:

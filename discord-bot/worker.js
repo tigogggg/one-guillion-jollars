@@ -51,7 +51,9 @@ const DEFAULT_SCHEDULE = {
   noticias: ["12:00", "16:00", "20:30"],
   semanal: { dia: "sab", hora: "10:00" },
   treino: "06:00", // Sundays, after the weekly market data (context-data.yml): re-train the agents on the last 20 years
+  visao: "05:41", // Mondays and Thursdays: the Visionário's 18-month view (GitHub's own cron skipped runs)
 };
+const VISION_DAYS = ["seg", "qui"];
 const DAYS = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
 const DAY_NAMES = { dom: "domingo", seg: "segunda", ter: "terça", qua: "quarta", qui: "quinta", sex: "sexta", sab: "sábado" };
 const WORKFLOWS = {
@@ -64,6 +66,7 @@ const WORKFLOWS = {
   noticias: "news.yml",
   semanal: "weekly-summary.yml",
   treino: "pretrain.yml",
+  visao: "visao.yml",
 };
 // The agents' rounds: "HH:MM-HH:MM/N" (every N minutes from the first time to the last) or a list of times.
 function roundTimes(spec) {
@@ -325,6 +328,7 @@ async function runSchedule(env, ctx, now) {
     }
     if (now.day === schedule.semanal.dia) jobs.push(["semanal", schedule.semanal.hora]);
     if (now.day === "dom") jobs.push(["treino", schedule.treino]);
+    if (VISION_DAYS.includes(now.day)) jobs.push(["visao", schedule.visao]);
 
     for (const [job, time] of jobs) {
       const late = now.minutes - toMinutes(time);
@@ -416,6 +420,7 @@ async function scheduleCommand(env, sub) {
     `🗓️ Resumo semanal: **${DAY_NAMES[schedule.semanal.dia]} às ${schedule.semanal.hora}**`,
     `🔧 Verificação do estado do bot: **${schedule.estado}** (dias úteis, no canal 🔧-estado)`,
     `🧠 Re-treino dos agentes (últimos 20 anos): **ao domingo às ${schedule.treino}**`,
+    `🔭 Visão a 18 meses (Visionário): **segunda e quinta às ${schedule.visao}** (e quando há um choque grave)`,
     "-# As análises arrancam até 5 minutos depois da hora marcada e demoram alguns minutos a chegar.",
   ].join("\n");
 }
