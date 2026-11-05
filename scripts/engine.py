@@ -527,7 +527,7 @@ def compare_round(ids: set[str], python_state: dict, state: dict, day) -> dict:
     for i in sorted(ids):
         a, b = _python_view(python_state["agents"][i], ix), _python_view(state["agents"][i], ix)
         for k in ("cash", "positions", "pending", "last_rebalance"):
-            if json.dumps(a[k]) != json.dumps(b[k]):
+            if a[k] != b[k]:  # values, not their spelling (1000 and 1000.0 are the same cash)
                 diffs.append({"agent": i, "field": k, "python": a[k], "rust": b[k]})
     SHADOW_DIR.mkdir(parents=True, exist_ok=True)
     with (SHADOW_DIR / f"{day.isoformat()}.jsonl").open("a") as f:
