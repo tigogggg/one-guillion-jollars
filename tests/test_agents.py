@@ -528,7 +528,7 @@ def test_rounds_download_the_year_once_a_day_and_add_the_latest_days(tmp_path, m
 
     monkeypatch.setattr(agents, "download_history", fake)
     monkeypatch.setattr(agents, "PRICE_CACHE", tmp_path)
-    now = datetime(2026, 10, 30, 10, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 10, 30, 15, 0, tzinfo=timezone.utc)  # New York in session
     out = agents.round_history(["AAA"], now)
     assert list(out["AAA"]["Close"]) == [1, 2, 3, 7, 8.5]  # the fresh days replace the cached ones from their start
     agents.round_history(["AAA"], now)
