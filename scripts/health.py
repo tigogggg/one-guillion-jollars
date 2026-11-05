@@ -34,6 +34,9 @@ WEEKDAY_JOBS = [
     ("news.yml", "Notícias", 1, None),
     ("alert-followups.yml", "Acompanhamento dos alertas", 1, None),
 ]
+# Every day (the Worker starts them too since GitHub's own cron proved unreliable), and the view on Mon/Thu.
+DAILY_JOBS = [("backup.yml", "Cópia de segurança", 1, None), ("tests.yml", "Testes", 1, None)]
+VISION_JOB = ("visao.yml", "Visão a 18 meses", 1, None)
 
 
 def named(runs: list[dict] | None, prefix: str | None) -> list[dict] | None:
@@ -50,7 +53,7 @@ ORANGE = 0xF0B232
 
 
 def runs_today(workflow: str, today: date) -> list[dict] | None:
-    """Today's (Lisbon) runs of a workflow on main, or None when the API is unreachable."""
+    """Today's (Lisbon) runs of a workflow (main, or estavel where the agents run), or None when the API is unreachable."""
     repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")
     if not repo or not token:
         return None
@@ -58,7 +61,7 @@ def runs_today(workflow: str, today: date) -> list[dict] | None:
     try:
         for page in (1, 2, 3):  # agents.yml runs ~80 times a weekday (league and rounds)
             resp = requests.get(f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs",
-                                params={"branch": "main", "created": f">={today - timedelta(days=1)}", "per_page": 100,
+                                params={"created": f">={today - timedelta(days=1)}", "per_page": 100,
                                         "page": page},
                                 headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
                                 timeout=30)
@@ -128,8 +131,8 @@ def main() -> int:
     args = parser.parse_args()
 
     today = datetime.now(LISBON).date()
-    jobs = [job_line(name, named(runs_today(wf, today), prefix), n) for wf, name, n, prefix in WEEKDAY_JOBS] \
-        if today.weekday() < 5 else []
+    expected = (WEEKDAY_JOBS if today.weekday() < 5 else []) + DAILY_JOBS + ([VISION_JOB] if today.weekday() in (0, 3) else [])
+    jobs = [job_line(name, named(runs_today(wf, today), prefix), n) for wf, name, n, prefix in expected]
     data = [data_line(name, last_data_date(url, col), today) for name, url, col in DATA_SOURCES]
     card = build_card(today, jobs, data)
     where = route("estado")
