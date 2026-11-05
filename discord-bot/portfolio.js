@@ -328,6 +328,17 @@ async function follow(env, data, body) {
   return null;
 }
 
+// The agents a member can follow: portal:agentes (scripts/agents.py publish_agent_list), or the latest league page's
+// agents until that list exists.
+async function followableAgents(env) {
+  const list = await env.CONFIG.get("portal:agentes", "json");
+  if (Array.isArray(list) && list.length) return list;
+  const latest = await env.CONFIG.get("chart-latest:liga", "json");
+  const chart = latest ? await env.CONFIG.get(`chart:${latest}`, "json") : null;
+  return ((chart && chart.agents) || []).filter((a) => a.id && a.active !== false)
+    .map((a) => ({ id: a.id, name: a.name, emoji: a.emoji || "🤖", perfil: a.perfil, congelado: !!a.congelado }));
+}
+
 // The agent the member follows (KV copiar:<discord id>): scripts/copy_alerts.py sends them a private message on
 // Discord each time it buys or sells. An empty agent stops it.
 async function setCopy(env, data, body) {
@@ -335,7 +346,7 @@ async function setCopy(env, data, body) {
   const key = `copiar:${data.owner}`;
   const id = String(body.agent || "").trim();
   if (!id) { await env.CONFIG.delete(key); return null; }
-  const list = (await env.CONFIG.get("portal:agentes", "json")) || [];
+  const list = await followableAgents(env);
   if (!list.some((a) => a.id === id)) return "Esse agente não está na liga.";
   const valor = body.valor === "" || body.valor == null ? null : Number(body.valor);
   if (valor != null && !(valor >= 0 && valor <= 10000000)) return "Valor inválido.";
@@ -609,7 +620,7 @@ async function snapshot(env, data) {
              news: news?.scores?.[t] ?? null, proposed: (proposals?.buys || []).some((b) => b.symbol === t) };
   }));
   const [copy, agentList] = await Promise.all([data.owner ? env.CONFIG.get(`copiar:${data.owner}`, "json") : null,
-    env.CONFIG.get("portal:agentes", "json")]);
+    followableAgents(env)]);
   return { name: data.name, display_name: data.display_name || "", tx: data.tx, quotes, fx, verdicts, follows, copy: copy || null, agent_list: agentList || [], accounts: data.accounts || {}, profile: data.profile || null,
            dividends: data.dividends || [], settings: data.settings || { capital: 10000, risk: 1 },
            proposals: proposals ? { as_of: proposals.as_of, zone: proposals.zone, buys: proposals.buys.slice(0, 12) } : null, at: Date.now() };
