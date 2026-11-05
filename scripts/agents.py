@@ -3053,6 +3053,11 @@ def main() -> int:
                 print(f"Dividendos: {len(paid)} pagamentos creditados", flush=True)  # the details stay private
             except Exception as e:  # noqa: BLE001 - never stops the day
                 print(f"WARN: dividendos: {e!r}", file=sys.stderr)
+            stale = sorted({sym for p in state["agents"].values() for sym in p.get("positions", {})
+                            if sym in mkt.hist and mkt.hist[sym].index[-1].date() < mkt.as_of})
+            if stale:  # a held stock valued at an older close than the decision day (market data, not results)
+                print("WARN: preço anterior ao dia " + mkt.as_of.isoformat() + ": "
+                      + ", ".join(f"{s} ({mkt.hist[s].index[-1].date()})" for s in stale[:20]), file=sys.stderr)
             moves, training, avoided, events = run_day(config, state, mkt)
             try:  # the agents under test, as if traded at Interactive Brokers (scripts/ibkr.py)
                 import ibkr
