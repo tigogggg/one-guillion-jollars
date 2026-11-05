@@ -538,7 +538,9 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .dash-top .tile .v { font-size:1.45rem; } .dash .tile .v.up { color:var(--up); } .dash .tile .v.down { color:var(--down); } .dash .tile .v.gold { color:var(--gold); }
 .dash-row { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(0,1fr); gap:12px; margin-top:12px; align-items:start; }
 .dash-col { display:grid; gap:12px; min-width:0; }
-.dash-row-a { grid-template-columns:minmax(0,1fr) minmax(0,1.6fr); }
+.dash-row-a { grid-template-columns:minmax(0,1fr) minmax(0,1.6fr); align-items:stretch; }
+.dash-league { display:flex; flex-direction:column; } .dash-league-list { flex:1 1 0; min-height:0; overflow:hidden; }
+.dash-league-list .drow:first-child { border-top:0; }
 .dcard { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px 14px; min-width:0; }
 .dcard .dh { display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
 .dcard .dh h3 { margin:0; } .dcard .dh a { font-size:.82rem; }
@@ -546,7 +548,7 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .dh + .drow, .chips + .dash-chart + .drow { border-top:0; } .drow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dash .grid { margin-bottom:8px; } .dash .chips { margin-bottom:6px; } .dash .chips .chip { padding:3px 10px; font-size:.8rem; }
 .dash-chart { height:260px; }
-@media (max-width:900px) { .dash-top { grid-template-columns:1fr 1fr; } .dash-row, .dash-row-a { grid-template-columns:1fr; } }
+@media (max-width:900px) { .dash-top { grid-template-columns:1fr 1fr; } .dash-row, .dash-row-a { grid-template-columns:1fr; } .dash-league-list { flex:none; } }
 .chart { width:100%; height:62vh; min-height:340px; background:var(--card); border:2px solid var(--line); border-radius:8px; }
 .range-custom { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 6px; font-size:12px; color:var(--muted, #b5bac1); }
 .range-custom input { background:#1e1f22; color:inherit; border:1px solid var(--line); border-radius:4px; padding:2px 6px; font:inherit; color-scheme:dark; }
@@ -1077,6 +1079,7 @@ function openTab(name) {
   if (name === "corrida" && window.Plotly) Plotly.Plots.resize("chart");
   if (name === "pretreino" && window.Plotly && $("pt-chart")) Plotly.Plots.resize("pt-chart");
   if (name === "dashboard" && window.Plotly && $("dash-pt-chart") && $("dash-pt-chart").data) Plotly.Plots.resize("dash-pt-chart");
+  if (name === "dashboard" && window.dashFit) window.dashFit();
   try { history.replaceState(null, "", "#" + name); } catch (e) {}
 }
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
@@ -1410,9 +1413,9 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     (walletOn ? '<p class="muted small">A carregar…</p>' : WALLET ? '<p class="muted">Ainda não tens movimentos. Importa o extrato da corretora ou adiciona uma compra no <a href="/perfil#importar">perfil</a> e o resumo aparece aqui.</p>'
       : '<p class="muted"><a href="/entrar">Entra com o Discord ou o Google</a> para veres aqui a tua carteira.</p>') + '</div></div>';
   const leaders = agents.slice().sort((a, b) => headline(b) - headline(a));
-  const league = '<div class="dcard"><div class="dh"><h3>🏁 Liga dos agentes</h3>' + go("corrida", "Corrida") + '</div>' +
-    (leaders.slice(0, 6).map((a, i) => '<div class="drow"><span class="nm">' + (i + 1) + ' · <a href="#" class="dash-agent" data-n="' + esc(a.name) + '">' + esc(a.emoji + " " + a.name) + '</a></span><span class="' + cls(headline(a)) + '">' + fmtPct(headline(a)) + '</span></div>').join("") ||
-      '<p class="muted">Ainda sem agentes.</p>') +
+  const league = '<div class="dcard dash-league"><div class="dh"><h3>🏁 Liga dos agentes</h3>' + go("corrida", "Corrida") + '</div><div class="dash-league-list">' +
+    (leaders.map((a, i) => '<div class="drow"><span class="nm">' + (i + 1) + ' · <a href="#" class="dash-agent" data-n="' + esc(a.name) + '">' + esc(a.emoji + " " + a.name) + '</a></span><span class="' + cls(headline(a)) + '">' + fmtPct(headline(a)) + '</span></div>').join("") ||
+      '<p class="muted">Ainda sem agentes.</p>') + '</div>' +
     (leaders.length ? '<p class="muted small">' + leaders.length + ' agentes na liga · dados de ' + esc(lisbon(Date.parse(DATA.updated), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) + '</p>' : '') + '</div>';
   const pretrain = '<div class="dcard"><div class="dh"><h3>⏪ Pré-treino</h3>' + (PRETRAIN ? go("pretreino", "Pré-treino") : '') + '</div><div id="dash-pt">' +
     (PRETRAIN ? '' : '<p class="muted">O pré-treino aparece aqui depois da próxima execução.</p>') + '</div></div>';
@@ -1473,9 +1476,22 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       years = +b.dataset.y;
       store.set("dash-pt-years", years);
       draw();
+      fitLeague();
     });
     draw();
   }
+  function fitLeague() {
+    const list = document.querySelector(".dash-league-list");
+    if (!list || !list.offsetParent) return;  // the tab is hidden: measured when it opens
+    const rows = [...list.children];
+    rows.forEach((r) => { r.style.display = ""; });
+    if (window.matchMedia("(max-width:900px)").matches) { rows.forEach((r, i) => { r.style.display = i >= 10 ? "none" : ""; }); return; }
+    const bottom = list.getBoundingClientRect().bottom;
+    rows.forEach((r) => { if (r.getBoundingClientRect().bottom > bottom + 1) r.style.display = "none"; });
+  }
+  window.dashFit = fitLeague;
+  window.addEventListener("resize", fitLeague);
+  fitLeague();
 
   // the member's portfolio: the same data as the profile (/c/<token>/data)
   if (walletOn) fetch(WALLET + "/data", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((w) => {
