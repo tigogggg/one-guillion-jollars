@@ -447,3 +447,26 @@ def test_a_round_only_downloads_the_markets_in_session():
     assert agents.session_live("AAPL", evening) and not agents.session_live("SAP.DE", evening)
     assert agents.session_live("EURUSD=X", evening)
     assert not agents.session_live("AAPL", datetime(2026, 11, 7, 19, 0, tzinfo=timezone.utc))  # Saturday
+
+
+def test_the_decision_page_scales_the_orders_to_the_real_account(monkeypatch):
+    import sys
+    from datetime import date
+
+    import agents
+
+    mkt = type("M", (), {"as_of": date(2026, 11, 6)})()
+    config = {"agents": [{"id": "an-c", "name": "Analista (congelado)", "emoji": "🧊", "strategy": "analista", "capital": 1000,
+                          "congelado": {"desde": "2026-11-05", "ate": "2027-11-05"}}]}
+    hist = [{"date": "2026-11-05", "equity": 1000, "deposits": 1000}, {"date": "2026-11-06", "equity": 1050, "deposits": 1000}]
+    state = {"agents": {"an-c": {"deposits": 1000, "history": hist, "pending": [{"side": "buy", "symbol": "V", "eur": 300}]},
+                        "indexador": {"history": [dict(h, equity=1010 if i else 1000) for i, h in enumerate(hist)]}}}
+    monkeypatch.setattr(agents, "real_capital", lambda: 5000.0)
+    published = {}
+    monkeypatch.setitem(sys.modules, "interactive",
+                        type("I", (), {"publish_section": staticmethod(lambda k, v: published.update({k: v}) or True)}))
+    frozen = {"agents": {"an-c": {"desde": "2026-11-05", "ate": "2027-11-05", "liquido": 0.036, "indice_liquido": 0.0072,
+                                  "diferenca_liquida": 0.0288}}}
+    page = agents.decision_page(config, state, mkt, frozen)
+    assert page["ordens"][0]["eur"] == 1500.0 and published["decisao"] is page
+    assert page["candidatos"][0]["veredicto"] == "a cumprir a regra"

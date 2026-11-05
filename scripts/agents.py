@@ -2577,6 +2577,58 @@ def frozen_report(config: dict, state: dict, mkt: Market) -> dict:
     return out
 
 
+# The rule written before the results (Tiago, 2026-11-05): at the end of the frozen year a candidate only moves to real
+# money if, after the tax owed when sold, it beat the S&P 500 by DECISION_MARGIN and fell no deeper than it.
+DECISION_MARGIN = 0.02
+
+
+def decision_page(config: dict, state: dict, mkt: Market, frozen: dict) -> dict:
+    """The portal's 🎯 Decisão: the frozen candidates against the S&P 500 after tax, the rule, and today's orders of each
+    scaled to the real account (capital_real), to copy by hand if a candidate is ever chosen. Nothing is sent to a
+    broker."""
+    capital = real_capital()
+    by_id = {c["id"]: c for c in config["agents"]}
+    index_port = state["agents"].get("indexador") or {}
+
+    def deepest(port: dict) -> float:
+        peak, dd = 0.0, 0.0
+        for h in port.get("history") or []:
+            r = h["equity"] / h["deposits"] if h.get("deposits") else 1.0
+            peak = max(peak, r)
+            dd = max(dd, 1 - r / peak if peak else 0.0)
+        return dd
+
+    idx_dd = deepest(index_port)
+    rows, orders = [], []
+    for aid, row in frozen.get("agents", {}).items():
+        cfg, port = by_id.get(aid), state["agents"].get(aid) or {}
+        if not cfg:
+            continue
+        dd = deepest(port)
+        diff = row.get("diferenca_liquida")
+        verdict = ("ainda sem dias suficientes" if diff is None else
+                   "a cumprir a regra" if diff >= DECISION_MARGIN and dd <= idx_dd + 1e-9 else "ainda não cumpre a regra")
+        rows.append({"id": aid, "name": cfg["name"], "emoji": cfg["emoji"], "estrategia": cfg["strategy"], **row,
+                     "queda_max": round(dd, 4), "indice_queda_max": round(idx_dd, 4), "veredicto": verdict})
+        scale = capital / (port.get("deposits") or cfg.get("capital") or 1000)
+        for o in port.get("pending") or []:
+            orders.append({"agent": cfg["name"], "emoji": cfg["emoji"], "symbol": o["symbol"], "side": o["side"],
+                           "eur": round((o.get("eur") or 0) * scale, 2) if o["side"] == "buy" else None,
+                           "fraction": o.get("fraction", 1.0), "reason": o.get("reason", "")})
+    page = {"as_of": mkt.as_of.isoformat(), "capital_real": capital, "margem": DECISION_MARGIN, "candidatos": rows,
+            "ordens": orders,
+            "regra": f"Ao fim do ano congelado, um candidato só passa a dinheiro real se, depois do imposto que pagaria ao "
+                     f"vender, bater o S&P 500 por pelo menos {DECISION_MARGIN * 100:.0f} pontos percentuais e não tiver "
+                     "caído mais do que ele. Regra escrita antes dos resultados."}
+    try:
+        import interactive
+
+        interactive.publish_section("decisao", page)
+    except Exception as e:  # noqa: BLE001 - the portal never stops the day
+        print(f"WARN: decisão: {e!r}", file=sys.stderr)
+    return page
+
+
 def ensure_twins(config: dict, state: dict, start: date) -> list[dict]:
     """A daily twin ("· diário") for every reactive agent that has none (the Indexador needs none): same strategy and
     parameters, from the same capital, so the league shows what reacting during the day is worth."""
@@ -2921,7 +2973,7 @@ def main() -> int:
                 print(f"WARN: dividendos: {e!r}", file=sys.stderr)
             moves, training, avoided, events = run_day(config, state, mkt)
             save(config, state)  # bankruptcies retire agents and add their replacements
-            frozen_report(config, state, mkt)
+            decision_page(config, state, mkt, frozen_report(config, state, mkt))
             archive(config, state, mkt)
             embeds, files = league(config, state, mkt, f"🤖 Liga dos agentes · fecho de {mkt.as_of.isoformat()}",
                                    moves, training, avoided, events)

@@ -113,7 +113,7 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
   const latest = (await env.CONFIG.get("chart-latest:liga", "json")) || (await env.CONFIG.get("chart-latest:pretreino", "json"));
   const data = (latest && (await env.CONFIG.get(`chart:${latest}`, "json"))) ||
     { title: "Liga dos agentes", subtitle: "ainda sem dados", updated: new Date().toISOString(), series: [], agents: [] };
-  const [news, market, proposals, calendar, geo, evolution] = await Promise.all(["news", "market", "proposals", "calendar", "geo", "evolution"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
+  const [news, market, proposals, calendar, geo, evolution, decision] = await Promise.all(["news", "market", "proposals", "calendar", "geo", "evolution", "decisao"].map((k) => env.CONFIG.get(`portal:${k}`, "json")));
   const ptId = await env.CONFIG.get("chart-latest:pretreino", "json");
   let pretrain = ptId && ptId !== latest ? await env.CONFIG.get(`chart:${ptId}`, "json") : null;
   if (pretrain) {  // the other investor profiles' latest pre-trainings, on the same page
@@ -129,7 +129,7 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
                            wallet: `/c/${session.tok}` } : null;
   const version = await portalVersion(env);
   const runs = await workflowRuns(env);
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution, version, runs, home,
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution, decision, version, runs, home,
                                                                        manifest: token === null ? "/manifest.webmanifest" : `/p/${token}/manifest.webmanifest` }));
 }
 
@@ -277,7 +277,7 @@ export function chartPage(data, upcoming, newer, extras = {}) {
   const portal = !!extras.portal;
   const tabs = (portal ? [["hoje", "🏠 Hoje"]] : []).concat([["corrida", "🏁 Corrida"]])
     .concat(portal && extras.pretrain ? [["pretreino", "⏪ Pré-treino"]] : []).concat([["agentes", "🧾 Agentes"]])
-    .concat(portal ? [["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
+    .concat(portal ? [["decisao", "⚖️ Decisão"], ["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"], ["oportunidades", "🎯 Oportunidades"]] : [])
     .concat(portal ? [] : [["agenda", "⏱️ Agenda"]])  // in the portal the schedule is part of 🩺 Estado
     .concat(portal ? [["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]] : []);  // the portfolio is in the profile (the name, top right)
   const me = extras.user;
@@ -337,7 +337,8 @@ ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pret
   <h2>🔎 Ficha do agente</h2>
   <div class="agent-pick"><nav id="chips" class="agent-list"></nav><div id="detail"></div></div>
 </section>
-${portal ? `<section data-tab="propostas" hidden><div id="props"></div></section>
+${portal ? `<section data-tab="decisao" hidden><div id="decision"></div></section>
+<section data-tab="propostas" hidden><div id="props"></div></section>
 <section data-tab="noticias" hidden><div id="news"></div></section>
 <section data-tab="oportunidades" hidden><div id="opps"></div></section>` : ""}
 <section data-tab="${portal ? "estado" : "agenda"}" hidden>
@@ -359,6 +360,7 @@ const UPCOMING = ${safeJson(upcoming)};
 const NEWS = ${safeJson(extras.news || null)};
 const MARKET = ${safeJson(extras.market || null)};
 const PROPOSALS = ${safeJson(extras.proposals || null)};
+const DECISION = ${safeJson(extras.decision || null)};
 const CALENDAR = ${safeJson(extras.calendar || null)};
 const PRETRAIN = ${safeJson(extras.pretrain || null)};
 const RUNS = ${safeJson(extras.runs || null)};
@@ -1416,6 +1418,30 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
   $("nsub").addEventListener("click", (e) => { const b = e.target.closest(".chip"); if (b) show(b.dataset.k); });
   $("nbody").addEventListener("click", (e) => { const a = e.target.closest(".nsym"); if (a) { e.preventDefault(); pickSym = a.dataset.s; show("acao"); } });
   show("agora");
+})();
+
+// ---- the decision: the frozen candidates against the S&P 500 after tax, before any real money ----
+(function decision() {
+  if (!$("decision")) return;
+  const D = DECISION;
+  if (!D) { $("decision").innerHTML = '<p class="muted">Aparece depois da próxima liga dos agentes (dias úteis às 07:30).</p>'; return; }
+  const pctOrDash = (x) => x == null ? "—" : fmtPct(x * 100);
+  const rows = (D.candidatos || []).map((c) => [
+    '<b>' + esc(c.emoji + " " + c.name) + '</b><br><span class="muted small">desde ' + esc(c.desde) + ' até ' + esc(c.ate) + '</span>',
+    pctOrDash(c.liquido), pctOrDash(c.indice_liquido),
+    '<span class="' + cls(c.diferenca_liquida || 0) + '">' + pctOrDash(c.diferenca_liquida) + '</span>',
+    fmtPct(-(c.queda_max || 0) * 100) + ' <span class="muted small">(índice ' + fmtPct(-(c.indice_queda_max || 0) * 100) + ')</span>',
+    esc(c.veredicto)]);
+  const orders = (D.ordens || []).map((o) => [esc(o.emoji + " " + o.agent), '<b>' + esc(o.symbol) + '</b>',
+    o.side === "buy" ? "comprar" : "vender" + (o.fraction < 0.999 ? " " + fmtNum(o.fraction * 100, 0) + "%" : ""),
+    o.eur != null ? fmtEur(o.eur) : "—", esc(o.reason || "")]);
+  $("decision").innerHTML = '<h2>⚖️ Vale a pena pôr dinheiro real?</h2><p class="muted small">Três candidatos congelados durante um ano ' +
+    '(parâmetros fixos, sem treino nem júri), medidos ao vivo contra o S&P 500 como numa conta real: o que sobra depois de vender tudo hoje ' +
+    'e pagar o imposto. Dados de ' + esc(D.as_of) + '.</p><div class="panel"><p><b>Regra:</b> ' + esc(D.regra) + '</p></div>' +
+    table(["Candidato", "Depois de impostos", "S&P 500 (idem)", "Diferença", "Queda máxima", "Veredicto"], rows, [1, 2, 3]) +
+    '<h2>📝 Ordens de hoje, à escala da tua conta (' + fmtEur(D.capital_real) + ')</h2><p class="muted small">O que cada candidato vai fazer ' +
+    'na abertura, se o seguisses com a conta real. Só para replicar à mão se um dia algum cumprir a regra: nada é enviado a nenhuma corretora.</p>' +
+    table(["Candidato", "Ativo", "Ordem", "Valor", "Porquê"], orders, [3]);
 })();
 
 // ---- proposals ----
