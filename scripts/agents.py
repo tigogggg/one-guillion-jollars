@@ -230,8 +230,10 @@ REACTIVE, DAILY = "reativo", "diario"
 LIVE_ONLY = {"joalheiro", "jornalista", "catalisador", "cetico", "conselho", "maestro", "super", "visionario"}
 META = {"conselho", "maestro", "super"}  # decide after the others, from their portfolios
 INTRADAY_ONLY = {"relampago"}  # trade within the day: the daily backtest skips them, the intraday lab replays them
-TRADES_KEPT = 200
+TRADES_KEPT = 200  # in the state; every trade is also kept for good in agents/arquivo/decisoes (market_archive)
 POINTS_LOG_KEPT = 60
+# Each agent's changes (training, mutations, renewals): 200 in the state, every one kept in agents/arquivo/evolucao
+EVOLUTION_KEPT = 200
 
 # Numeric parameters the monthly training may change, with their bounds.
 PARAM_BOUNDS = {
@@ -1294,7 +1296,7 @@ def train(cfg: dict, port: dict, mkt: Market) -> str | None:
     changes = mutate(params, random.Random(f"{cfg['id']}-{mkt.as_of}"), cfg["strategy"])
     port["generation"] += 1
     note = f"{last_month}: {ret * 100:+.1f}% → geração {port['generation']}: " + (", ".join(changes) or "sem alterações")
-    port["evolution"] = (port["evolution"] + [{"date": mkt.as_of.isoformat(), "note": note}])[-24:]
+    port["evolution"] = (port["evolution"] + [{"date": mkt.as_of.isoformat(), "note": note}])[-EVOLUTION_KEPT:]
     return note
 
 
@@ -1838,7 +1840,7 @@ def shadow_day(cfg: dict, port: dict, state: dict, mkt: Market) -> str | None:
     port["generation"] += 1
     note = (f"fantasma promovido ({', '.join(promoted['changes'])}): {promoted['ret'] * 100:+.1f}% contra "
             f"{promoted['parent_ret'] * 100:+.1f}% em {promoted['sessions']} sessões → geração {port['generation']}")
-    port["evolution"] = (port["evolution"] + [{"date": mkt.as_of.isoformat(), "note": note}])[-24:]
+    port["evolution"] = (port["evolution"] + [{"date": mkt.as_of.isoformat(), "note": note}])[-EVOLUTION_KEPT:]
     state["shadows"][cfg["id"]] = []  # new copies tomorrow, from the new parameters
     return note
 

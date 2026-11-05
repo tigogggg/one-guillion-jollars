@@ -6,6 +6,7 @@ as they stood each week. Each run adds what it saw:
 
 - noticias/YYYY-MM.jsonl        every rated headline (news.py), and geopolitica/YYYY-MM.jsonl the risk readings
 - decisoes/YYYY-MM.jsonl        every trade of every agent (with its context and the round's time)
+- evolucao/YYYY-MM.jsonl        every change of every agent (training, mutation, renewal), its dividends and daily points
 - fechos/YYYY-MM-DD.csv.gz      the decision day's bar of the whole universe (stocks, ETFs, currencies)
 - resultados/YYYY-MM-DD.json    the next earnings date known that day for the stocks the run looked up
 - fundamentais-eu/YYYY-MM-DD.json.gz  Yahoo's fundamentals of the European stocks (weekly)
@@ -96,7 +97,25 @@ def decisions(config: dict, state: dict) -> int:
     def key(r):
         return (r.get("agent"), r.get("date"), r.get("hora"), r.get("side"), r.get("symbol"), r.get("qty"), r.get("price"))
 
-    return sum(_append(f"decisoes/{month}.jsonl", rs, key) for month, rs in rows.items())
+    n = sum(_append(f"decisoes/{month}.jsonl", rs, key) for month, rs in rows.items())
+    return n + changes(config, state)
+
+
+def changes(config: dict, state: dict) -> int:
+    """Every agent's changes, dividends and daily points, once, for good (the state keeps only the latest)."""
+    rows: dict[str, list[dict]] = {}
+    for agent_id, port in state["agents"].items():
+        for e in port.get("evolution", []):
+            rows.setdefault(e["date"][:7], []).append({"agent": agent_id, "kind": "mudanca", **e})
+        for d in (port.get("dividendos") or {}).get("ultimos", []):
+            rows.setdefault(d["date"][:7], []).append({"agent": agent_id, "kind": "dividendo", **d})
+        for p in port.get("points_log", []):
+            rows.setdefault(p["date"][:7], []).append({"agent": agent_id, "kind": "pontos", **p})
+
+    def key(r):
+        return (r.get("agent"), r.get("kind"), r.get("date"), r.get("note"), r.get("symbol"), r.get("pts"))
+
+    return sum(_append(f"evolucao/{month}.jsonl", rs, key) for month, rs in rows.items())
 
 
 def closes(mkt) -> int:

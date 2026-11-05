@@ -427,7 +427,7 @@ def renew(config: dict, state: dict, ranked: list[dict], today: date) -> dict:
                 port["evolution"] = old.get("evolution", [])
                 state["agents"][cfg["id"]] = port
             port = state["agents"][cfg["id"]]
-            port["evolution"] = (port.get("evolution", []) + [{"date": today.isoformat(), "note": "entra na liga na renovação do mês"}])[-24:]
+            port["evolution"] = (port.get("evolution", []) + [{"date": today.isoformat(), "note": "entra na liga na renovação do mês"}])[-agents.EVOLUTION_KEPT:]
             moves["in"].append(x["id"])
         elif x["id"] not in keep and cfg.get("active", True):
             cfg["active"] = False

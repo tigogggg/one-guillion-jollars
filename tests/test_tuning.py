@@ -419,3 +419,18 @@ def test_dividends_are_paid_after_tax_to_the_agents_that_held_on_the_ex_date():
     assert b["cash"] == 100.0 and b["dividendos"]["ate"] == "2026-11-06"
     again = agents.credit_dividends(config, state, mkt, fetch=lambda syms, since: {"SAP.DE": [(date(2026, 11, 5), 2.0)]})
     assert again == [] and abs(a["cash"] - 114.4) < 1e-9  # never paid twice
+
+
+def test_every_change_of_an_agent_is_archived_once(monkeypatch, tmp_path):
+    import json
+
+    import market_archive
+
+    monkeypatch.setattr(market_archive, "ARCHIVE", tmp_path)
+    state = {"agents": {"quant": {"trades": [], "evolution": [{"date": "2026-11-05", "note": "pré-treino: n 8→5"}],
+                                  "dividendos": {"ultimos": [{"date": "2026-11-04", "symbol": "V", "bruto_eur": 1.0}]},
+                                  "points_log": [{"date": "2026-11-04", "pts": 3}]}}}
+    assert market_archive.changes({"agents": []}, state) == 3
+    assert market_archive.changes({"agents": []}, state) == 0  # never twice
+    rows = [json.loads(x) for x in (tmp_path / "evolucao" / "2026-11.jsonl").read_text().splitlines()]
+    assert {r["kind"] for r in rows} == {"mudanca", "dividendo", "pontos"}

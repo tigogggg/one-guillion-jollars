@@ -1533,7 +1533,7 @@ def apply(results: dict, today: date, changed_strategies: set | None = None) -> 
         note = "pré-treino: " + ", ".join(f"{k} {old.get(k)}→{v}" for k, v in changes.items())
         port["params"] = params
         port["pending"], port["last_decision"], port["last_rebalance"] = [], None, None
-        port["evolution"] = (port["evolution"] + [{"date": today.isoformat(), "note": note}])[-24:]
+        port["evolution"] = (port["evolution"] + [{"date": today.isoformat(), "note": note}])[-agents.EVOLUTION_KEPT:]
         changed.append(f"{cfg['emoji']} {cfg['name']}: {note}")
         defaults = {**agents.COMMON, **agents.STRATEGIES.get(cfg["strategy"], (None, "", {}))[2]}
         if changed_strategies is not None and any(k in old or v != defaults.get(k) for k, v in changes.items()):
@@ -1599,7 +1599,7 @@ def bench(results: dict, today: date) -> list[str]:
             port = new_portfolio(cfg["capital"], today)
             port["params"] = old.get("params", cfg["params"])
             port["evolution"] = (old.get("evolution", []) + [{"date": today.isoformat(),
-                                                               "note": "volta à liga: já bate o S&P 500"}])[-24:]
+                                                               "note": "volta à liga: já bate o S&P 500"}])[-agents.EVOLUTION_KEPT:]
             state["agents"][cfg["id"]] = port
             notes.append(f"🔙 {cfg['emoji']} {cfg['name']} volta à liga com capital novo: já bate o S&P 500")
     agents.save(config, state)

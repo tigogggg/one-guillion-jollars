@@ -737,7 +737,7 @@ def apply_reactivity(results: dict[str, dict], today: date) -> list[str]:
                 note = f"reatividade: {agents.REACTIVITY[v['chosen']['reatividade']]}" + (
                     f" (espera {v['chosen']['espera_min']} min, até {v['chosen']['esticado_max']:.1%} acima do fecho)"
                     if v["chosen"]["reatividade"] == 1 else "")
-                port["evolution"] = (port.get("evolution", []) + [{"date": today.isoformat(), "note": note}])[-24:]
+                port["evolution"] = (port.get("evolution", []) + [{"date": today.isoformat(), "note": note}])[-agents.EVOLUTION_KEPT:]
                 notes.append(f"{cfg['emoji']} {cfg['name']}: {note}")
     agents.save(None, state)
     return notes
