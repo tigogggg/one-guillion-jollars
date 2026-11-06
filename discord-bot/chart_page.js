@@ -548,6 +548,18 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .dh + .drow, .chips + .dash-chart + .drow { border-top:0; } .drow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dash .grid { margin-bottom:8px; } .dash .chips { margin-bottom:6px; } .dash .chips .chip { padding:3px 10px; font-size:.8rem; }
 .dash-chart { height:260px; } .dash-bars { height:260px; margin-top:4px; }
+.wtiles { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(0,1fr); grid-template-areas:"a c d" "b c e"; gap:8px; margin-bottom:10px; }
+.wtiles > div { min-width:0; display:flex; } .wtiles .tile { flex:1; margin:0; }
+.wt-a { grid-area:a; } .wt-b { grid-area:b; } .wt-c { grid-area:c; } .wt-d { grid-area:d; } .wt-e { grid-area:e; }
+.wgain { display:flex; flex-direction:column; gap:6px; }
+.wg { display:grid; grid-template-columns:auto 1fr auto; align-items:baseline; gap:8px; padding:4px 0; border-top:1px solid var(--line); }
+.wg .k { font-size:.8rem; } .wg .v { font-size:1.35rem; font-weight:600; text-align:right; } .wg .s { font-size:.8rem; min-width:4.2em; text-align:right; }
+.wg .v.up, .wg .s.up { color:var(--up); } .wg .v.down, .wg .s.down { color:var(--down); }
+.wbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 12px; margin-bottom:6px; }
+.dash .wbar .chips { margin:0; }
+.wrange { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:.8rem; color:var(--muted); }
+.wrange input { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:3px 6px; font:inherit; color-scheme:dark; }
+@media (max-width:640px) { .wtiles { grid-template-columns:1fr 1fr; grid-template-areas:"c c" "a d" "b e"; } }
 .wsel { cursor:pointer; border-radius:6px; padding-left:6px; padding-right:6px; transition:background .15s; }
 .wsel:hover { background:rgba(0,229,255,.06); } .wsel.on { background:rgba(26,86,196,.28); box-shadow:inset 3px 0 0 #3d7bff; }
 @media (max-width:900px) { .dash-top { grid-template-columns:1fr 1fr; } .dash-row, .dash-row-a { grid-template-columns:1fr; } .dash-league-list { flex:none; } }
@@ -1517,22 +1529,35 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     $("dash-wallet-tile").innerHTML = tile("💼 A tua carteira hoje", fmtPct(dayP), fmtEur(day) + " · valor total " + fmtEur(value), cls(day));
     const sells = Object.entries(w.verdicts || {}).filter(([k, v]) => k !== "rules" && v.verdict === "Vender").map(([k]) => k);
     rows.sort((a, b) => b.v - a.v);
-    const SCALES = [["dias", "Dias", 30], ["semanas", "Semanas", 26], ["meses", "Meses", 24], ["anos", "Anos", 99]];
+    const SCALES = [["dias", "Dias", "dias"], ["semanas", "Semanas", "semanas"], ["meses", "Meses", "meses"], ["anos", "Anos", "anos"]];
     let scale = store.get("dash-wallet-scale", "meses");
     if (!SCALES.some(([k]) => k === scale)) scale = "meses";
     let pick = "";  // "" = the whole portfolio, else a symbol
     const line = (k, label, sub, v, pct) => '<div class="drow wsel' + (k === pick ? ' on' : '') + '" data-k="' + esc(k) + '" role="button" tabindex="0"><span class="nm"><b>' + label + '</b> <span class="muted small">' + sub + '</span></span><span class="' + cls(pct) + '">' + fmtPct(pct) + '</span></div>';
     // the tiles follow the chosen row: the whole portfolio or one position
+    const TAX = 0.28;  // Portugal: 28% on the gain (capital gains), only when there is a gain
     const tiles = () => {
       const r = pick ? rows.find((x) => x.sym === pick) : { v: value, c: cost, d: day, pct: dayP };
       const verdict = pick ? ((w.verdicts || {})[pick] || {}).verdict : null;
-      return tile("Valor" + (pick ? " · " + esc(pick) : ""), fmtEur(r.v)) + tile("Ganho", fmtEur(r.v - r.c), fmtPct(r.c ? (r.v / r.c - 1) * 100 : null), cls(r.v - r.c)) +
-        tile("Hoje", fmtEur(r.d), fmtPct(r.pct), cls(r.d)) +
-        (pick ? tile("Veredito", esc(verdict || "—"), "da carteira para " + esc(pick), verdict === "Vender" ? "down" : verdict ? "up" : "")
-          : tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up"));
+      const gross = r.v - r.c, net = gross > 0 ? gross * (1 - TAX) : gross;
+      const pc = (g) => (r.c ? fmtPct(g / r.c * 100, 2) : "—");
+      return '<div class="wt-a">' + tile("Valor" + (pick ? " · " + esc(pick) : ""), fmtEur(r.v)) + '</div>' +
+        '<div class="wt-b">' + tile("Hoje", fmtEur(r.d), fmtPct(r.pct, 2), cls(r.d)) + '</div>' +
+        '<div class="wt-c"><div class="tile wgain"><div class="k">Ganho' + (pick ? " · " + esc(pick) : "") + '</div>' +
+          '<div class="wg"><span class="k">Bruto</span><span class="v ' + cls(gross) + '">' + fmtEur(gross) + '</span><span class="s ' + cls(gross) + '">' + pc(gross) + '</span></div>' +
+          '<div class="wg"><span class="k">Líquido</span><span class="v ' + cls(net) + '">' + fmtEur(net) + '</span><span class="s ' + cls(net) + '">' + pc(net) + '</span></div>' +
+          '<div class="s">' + (gross > 0 ? "depois de 28% de imposto (" + fmtEur(gross * TAX) + ") se vendesses hoje" : "sem imposto: não há lucro") + '</div></div></div>' +
+        '<div class="wt-d">' + tile("Investido", fmtEur(r.c), "custo das posições abertas") + '</div>' +
+        '<div class="wt-e">' + (pick ? tile("Veredito", esc(verdict || "—"), "da carteira para " + esc(pick), verdict === "Vender" ? "down" : verdict ? "up" : "")
+          : tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up")) + '</div>';
     };
-    $("dash-wallet").innerHTML = '<div class="grid" id="dash-wallet-tiles">' + tiles() + '</div>' +
-      '<div class="chips" id="dash-wallet-scale">' + SCALES.map(([k, t]) => '<button class="chip' + (k === scale ? ' on' : '') + '" data-s="' + k + '">' + t + '</button>').join("") + '</div>' +
+    const first = w.tx.reduce((m, t) => (t.date < m ? t.date : m), "9999"), todayIso = new Date().toISOString().slice(0, 10);
+    let from = first, to = todayIso;
+    $("dash-wallet").innerHTML = '<div class="wtiles" id="dash-wallet-tiles">' + tiles() + '</div>' +
+      '<div class="wbar"><div class="chips" id="dash-wallet-scale">' + SCALES.map(([k, t]) => '<button class="chip' + (k === scale ? ' on' : '') + '" data-s="' + k + '">' + t + '</button>').join("") + '</div>' +
+      '<div class="wrange"><label>De <input type="date" id="dash-wallet-from" value="' + first + '" min="' + first + '" max="' + todayIso + '"></label>' +
+      '<label>a <input type="date" id="dash-wallet-to" value="' + todayIso + '" min="' + first + '" max="' + todayIso + '"></label>' +
+      '<button class="chip" id="dash-wallet-all" title="Desde a primeira compra até hoje">Tudo</button></div></div>' +
       '<div id="dash-wallet-chart" class="dash-chart dash-bars"><p class="muted small">A carregar o histórico…</p></div>' +
       '<p class="muted small"><span style="color:#1a56c4">■</span> <span>investido</span> · <span style="color:#39ff88">■</span> <span>lucro</span> · <span style="color:#ff4d6d">■</span> <span>prejuízo</span> · <span id="dash-wallet-what">Total</span></p>' +
       '<div id="dash-wallet-rows">' + line("", "Total", fmtEur(value), value, dayP) +
@@ -1580,18 +1605,27 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       $("dash-wallet-what").textContent = pick || "Total";
       if (!window.Plotly || !H) return;
       const o = H.out[pick] || H.out[""], last = {};
-      H.days.forEach((d, i) => { last[keyOf[scale](d)] = i; });
-      let keys = Object.keys(last).sort();
-      keys = keys.filter((k) => o.inv[last[k]] || o.val[last[k]]);
-      const all = keys.length;
-      keys = keys.slice(-SCALES.find(([k]) => k === scale)[2]);
-      if (keys.length) $("dash-wallet-what").textContent = (pick || "Total") + " · " + labelOf[scale](keys[0]) + " → " + labelOf[scale](keys[keys.length - 1]) +
-        (keys.length === all ? " (desde a 1.ª compra)" : " (últimos " + keys.length + " " + SCALES.find(([k]) => k === scale)[1].toLowerCase() + ")");
-      if (!keys.length) { $("dash-wallet-chart").innerHTML = '<p class="muted small">Sem histórico para mostrar.</p>'; return; }
-      const x = keys.map(labelOf[scale]), inv = keys.map((k) => o.inv[last[k]]), val = keys.map((k) => o.val[last[k]]);
+      H.days.forEach((d, i) => { if (d >= from && d <= to) last[keyOf[scale](d)] = i; });
+      let keys = Object.keys(last).sort().filter((k) => o.inv[last[k]] || o.val[last[k]]);
+      const room = Math.max(10, Math.floor(($("dash-wallet-chart").clientWidth || 600) / 12));  // at least ~12px per bar
+      const n = Math.max(1, Math.ceil(keys.length / room));
+      const span = {};  // each bar's first period, when it holds several
+      if (n > 1) {
+        const kept = [];
+        for (let i = keys.length; i > 0; i -= n) { kept.unshift(keys[i - 1]); span[keys[i - 1]] = keys[Math.max(0, i - n)]; }
+        keys = kept;
+      }
+      const unit = SCALES.find(([k]) => k === scale)[2];
+      if (keys.length) $("dash-wallet-what").textContent = (pick || "Total") + " · " + H.days[last[span[keys[0]] || keys[0]]].split("-").reverse().join("/") + " → " +
+        H.days[last[keys[keys.length - 1]]].split("-").reverse().join("/") + (n > 1 ? " · cada barra junta " + n + " " + unit : "");
+      if (!keys.length) { $("dash-wallet-chart").innerHTML = '<p class="muted small">Sem histórico nestas datas.</p>'; return; }
+      // dd/mm repeats across years: then the year goes in too (Plotly would stack equal labels into one bar)
+      const years = new Set(keys.map((k) => k.slice(0, 4))).size > 1 && (scale === "dias" || scale === "semanas");
+      const x = keys.map((k) => labelOf[scale](k) + (years ? "/" + k.slice(2, 4) : "")), inv = keys.map((k) => o.inv[last[k]]), val = keys.map((k) => o.val[last[k]]);
       const gain = val.map((v, i) => v - inv[i]);
-      const when = keys.map((k) => (scale === "semanas" ? "semana de " : "") + labelOf[scale](k) + (scale === "dias" ? "" : " (fecho " + H.days[last[k]].slice(8, 10) + "/" + H.days[last[k]].slice(5, 7) + ")"));
-      const info = gain.map((g, i) => when[i] + "<br>investido " + fmtEur(inv[i]) + "<br>" + (g >= 0 ? "lucro " : "prejuízo ") + fmtEur(g) + (inv[i] ? " (" + fmtPct((val[i] / inv[i] - 1) * 100) + ")" : "") + "<br>vale " + fmtEur(val[i]));
+      const when = keys.map((k) => (span[k] && span[k] !== k ? labelOf[scale](span[k]) + " a " : scale === "semanas" ? "semana de " : "") + labelOf[scale](k) +
+        (scale === "dias" ? "" : " (fecho " + H.days[last[k]].slice(8, 10) + "/" + H.days[last[k]].slice(5, 7) + ")"));
+      const info = gain.map((g, i) => when[i] + "<br>investido " + fmtEur(inv[i]) + "<br>" + (g >= 0 ? "lucro " : "prejuízo ") + fmtEur(g) + (inv[i] ? " (" + fmtPct((val[i] / inv[i] - 1) * 100, 2) + ")" : "") + "<br>vale " + fmtEur(val[i]));
       $("dash-wallet-chart").innerHTML = "";
       Plotly.newPlot("dash-wallet-chart", [
         { x, y: inv.map((v, i) => (gain[i] < 0 ? val[i] : v)), name: "Investido", type: "bar", marker: { color: "#1a56c4", line: { color: "#3d7bff", width: 1 } }, hovertext: info, hoverinfo: "text" },
@@ -1599,7 +1633,8 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
         { x, y: gain.map((g) => (g < 0 ? -g : 0)), name: "Prejuízo", type: "bar", marker: { color: "#ff4d6d" }, hoverinfo: "skip" },
       ], { barmode: "relative", bargap: keys.length < 4 ? 0.6 : 0.25, paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 11 },
         margin: { l: 56, r: 8, t: 8, b: keys.length > 12 ? 56 : 30 }, showlegend: false, hovermode: "x",
-        yaxis: { ticksuffix: " €", gridcolor: "#2e2763", zerolinecolor: "#9b96c9" }, xaxis: { type: "category", tickangle: keys.length > 12 ? -45 : 0, nticks: 14 } },
+        yaxis: { ticksuffix: " €", gridcolor: "#2e2763", zerolinecolor: "#9b96c9" }, xaxis: { type: "category", tickangle: keys.length > 12 ? -45 : 0, nticks: 14 },
+        hoverlabel: { bgcolor: "#17123a", bordercolor: "#3d7bff" } },
         { responsive: true, displaylogo: false, displayModeBar: false });
     };
     $("dash-wallet-scale").addEventListener("click", (e) => {
@@ -1619,6 +1654,16 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       $("dash-wallet-rows").querySelectorAll(".wsel").forEach((x) => x.classList.toggle("on", x.dataset.k === pick));
       bars();
     };
+    const range = () => {
+      const f = $("dash-wallet-from").value || first, t = $("dash-wallet-to").value || todayIso;
+      from = f <= t ? f : t; to = f <= t ? t : f;
+      bars();
+    };
+    $("dash-wallet-from").addEventListener("change", range);
+    $("dash-wallet-to").addEventListener("change", range);
+    $("dash-wallet-all").addEventListener("click", () => { $("dash-wallet-from").value = first; $("dash-wallet-to").value = todayIso; range(); });
+    let redraw = 0;
+    window.addEventListener("resize", () => { clearTimeout(redraw); redraw = setTimeout(bars, 250); });
     $("dash-wallet-rows").addEventListener("click", choose);
     $("dash-wallet-rows").addEventListener("keydown", choose);
     fetch(WALLET + "/history", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((h) => {
