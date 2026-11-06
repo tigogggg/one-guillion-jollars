@@ -547,7 +547,9 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .drow { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 0; border-top:1px solid var(--line); font-size:.9rem; }
 .dh + .drow, .chips + .dash-chart + .drow { border-top:0; } .drow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dash .grid { margin-bottom:8px; } .dash .chips { margin-bottom:6px; } .dash .chips .chip { padding:3px 10px; font-size:.8rem; }
-.dash-chart { height:260px; } .dash-bars { height:240px; margin-top:4px; }
+.dash-chart { height:260px; } .dash-bars { height:260px; margin-top:4px; }
+.wsel { cursor:pointer; border-radius:6px; padding-left:6px; padding-right:6px; transition:background .15s; }
+.wsel:hover { background:rgba(0,229,255,.06); } .wsel.on { background:rgba(26,86,196,.28); box-shadow:inset 3px 0 0 #3d7bff; }
 @media (max-width:900px) { .dash-top { grid-template-columns:1fr 1fr; } .dash-row, .dash-row-a { grid-template-columns:1fr; } .dash-league-list { flex:none; } }
 .chart { width:100%; height:62vh; min-height:340px; background:var(--card); border:2px solid var(--line); border-radius:8px; }
 .range-custom { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 6px; font-size:12px; color:var(--muted, #b5bac1); }
@@ -1515,42 +1517,102 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     $("dash-wallet-tile").innerHTML = tile("💼 A tua carteira hoje", fmtPct(dayP), fmtEur(day) + " · valor total " + fmtEur(value), cls(day));
     const sells = Object.entries(w.verdicts || {}).filter(([k, v]) => k !== "rules" && v.verdict === "Vender").map(([k]) => k);
     rows.sort((a, b) => b.v - a.v);
-    let view = store.get("dash-wallet-view", "acoes");
-    if (view !== "total" && view !== "acoes") view = "acoes";
+    const SCALES = [["dias", "Dias", 30], ["semanas", "Semanas", 26], ["meses", "Meses", 24], ["anos", "Anos", 99]];
+    let scale = store.get("dash-wallet-scale", "meses");
+    if (!SCALES.some(([k]) => k === scale)) scale = "meses";
+    let pick = "";  // "" = the whole portfolio, else a symbol
+    const line = (k, label, sub, v, pct) => '<div class="drow wsel' + (k === pick ? ' on' : '') + '" data-k="' + esc(k) + '" role="button" tabindex="0"><span class="nm"><b>' + label + '</b> <span class="muted small">' + sub + '</span></span><span class="' + cls(pct) + '">' + fmtPct(pct) + '</span></div>';
     $("dash-wallet").innerHTML = '<div class="grid">' + tile("Valor", fmtEur(value)) + tile("Ganho", fmtEur(value - cost), fmtPct(cost ? (value / cost - 1) * 100 : null), cls(value - cost)) +
       tile("Hoje", fmtEur(day), fmtPct(dayP), cls(day)) + tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up") + '</div>' +
-      '<div class="chips" id="dash-wallet-view">' + [["total", "Total"], ["acoes", "Por ação"]].map(([k, t]) => '<button class="chip' + (k === view ? ' on' : '') + '" data-v="' + k + '">' + t + '</button>').join("") + '</div>' +
-      '<div id="dash-wallet-chart" class="dash-chart dash-bars"></div>' +
-      '<p class="muted small"><span style="color:#00e5ff">■</span> <span>investido</span> · <span style="color:#39ff88">■</span> <span>lucro</span> · <span style="color:#ff4d6d">■</span> <span>prejuízo</span></p>' +
-      rows.slice(0, 6).map((r) => '<div class="drow"><span class="nm"><b>' + esc(r.sym) + '</b> <span class="muted small">' + fmtNum(r.qty, r.qty % 1 ? 2 : 0) + ' · ' + fmtEur(r.v) + '</span></span><span class="' + cls(r.pct) + '">' + fmtPct(r.pct) + '</span></div>').join("") +
+      '<div class="chips" id="dash-wallet-scale">' + SCALES.map(([k, t]) => '<button class="chip' + (k === scale ? ' on' : '') + '" data-s="' + k + '">' + t + '</button>').join("") + '</div>' +
+      '<div id="dash-wallet-chart" class="dash-chart dash-bars"><p class="muted small">A carregar o histórico…</p></div>' +
+      '<p class="muted small"><span style="color:#1a56c4">■</span> <span>investido</span> · <span style="color:#39ff88">■</span> <span>lucro</span> · <span style="color:#ff4d6d">■</span> <span>prejuízo</span> · <span id="dash-wallet-what">Total</span></p>' +
+      '<div id="dash-wallet-rows">' + line("", "Total", fmtEur(value), value, dayP) +
+      rows.slice(0, 6).map((r) => line(r.sym, esc(r.sym), fmtNum(r.qty, r.qty % 1 ? 2 : 0) + ' · ' + fmtEur(r.v), r.v, r.pct)).join("") + '</div>' +
       (rows.length > 6 ? '<p class="muted small">+ ' + (rows.length - 6) + ' posições no perfil</p>' : '');
-    // bars: what went in (blue), the gain stacked on top (green) or the loss below zero (red); the whole portfolio or each position
+
+    // day by day since the first purchase, each position's money in (average cost, in euros at each purchase's rate) and
+    // its value at that day's close; the last day is today's live value, the same as the tiles above
+    let H = null;
+    const build = (h) => {
+      const tx = w.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq);
+      const first = tx[0].date, today = new Date().toISOString().slice(0, 10);
+      const days = [...new Set(Object.values(h.series || {}).flatMap((x) => x.t))].filter((d) => d >= first && d < today).sort();
+      days.push(today);
+      const cursor = (x) => { let i = 0, v = null; return (d) => { if (!x) return null; while (i < x.t.length && x.t[i] <= d) { if (x.c[i] != null) v = x.c[i]; i++; } return v; }; };
+      const rate = (cur, close) => (close ? (cur === "GBp" || cur === "GBX" ? 0.01 : 1) / close : null);
+      const fxAt = (cur, d) => { if (!cur || cur === "EUR") return 1; const x = (h.fx || {})[cur]; let v = null; if (x) for (let i = 0; i < x.t.length && x.t[i] <= d; i++) if (x.c[i] != null) v = x.c[i]; return rate(cur, v) ?? w.fx[cur] ?? 1; };
+      const px = {}, fxc = {}, st = {}, out = { "": { inv: [], val: [] } };
+      for (const t of tx) { px[t.symbol] ||= cursor((h.series || {})[t.symbol]); if (t.currency && t.currency !== "EUR") fxc[t.currency] ||= cursor((h.fx || {})[t.currency]); }
+      let ti = 0;
+      for (const d of days) {
+        for (; ti < tx.length && tx[ti].date <= d; ti++) {
+          const t = tx[ti], q = st[t.symbol] ||= { qty: 0, inv: 0, cur: t.currency };
+          if (t.side === "buy") { q.qty += t.qty; q.inv += (t.qty * t.price + t.fee) * fxAt(t.currency, t.date); }
+          else { const avg = q.qty ? q.inv / q.qty : 0; q.inv -= avg * t.qty; q.qty -= t.qty; }
+        }
+        let ti2 = 0, tv = 0;
+        for (const [sym, q] of Object.entries(st)) {
+          const o = out[sym] ||= { inv: new Array(out[""].inv.length).fill(0), val: new Array(out[""].inv.length).fill(0) };
+          const close = px[sym](d), fx = !q.cur || q.cur === "EUR" ? 1 : rate(q.cur, fxc[q.cur](d)) ?? w.fx[q.cur] ?? 1;
+          const live = d === today ? rows.find((r) => r.sym === sym) : null;
+          const held = q.qty > 1e-9, inv = held ? (live ? live.c : q.inv) : 0;
+          const val = held ? (live ? live.v : close != null ? q.qty * close * fx : inv) : 0;
+          o.inv.push(inv); o.val.push(val); ti2 += inv; tv += val;
+        }
+        out[""].inv.push(ti2); out[""].val.push(tv);
+      }
+      return { days, out };
+    };
+    const monday = (d) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() - (x.getUTCDay() + 6) % 7); return x.toISOString().slice(0, 10); };
+    const keyOf = { dias: (d) => d, semanas: monday, meses: (d) => d.slice(0, 7), anos: (d) => d.slice(0, 4) };
+    const labelOf = { dias: (k) => k.slice(8, 10) + "/" + k.slice(5, 7), semanas: (k) => k.slice(8, 10) + "/" + k.slice(5, 7), meses: (k) => k.slice(5, 7) + "/" + k.slice(0, 4), anos: (k) => k };
+    // bars: the money in (dark blue), the gain stacked on top (green) or the loss below zero (red), at the end of each period
     const bars = () => {
-      if (!window.Plotly) { $("dash-wallet-chart").style.display = "none"; return; }
-      const list = view === "total" ? [{ sym: "Total", v: value, c: cost }] : rows;
-      const x = list.map((r) => r.sym), gain = list.map((r) => r.v - r.c);
-      const eur = (v) => fmtEur(v), pct = (r) => (r.c ? fmtPct((r.v / r.c - 1) * 100) : "");
+      $("dash-wallet-what").textContent = pick || "Total";
+      if (!window.Plotly || !H) return;
+      const o = H.out[pick] || H.out[""], last = {};
+      H.days.forEach((d, i) => { last[keyOf[scale](d)] = i; });
+      let keys = Object.keys(last).sort();
+      keys = keys.filter((k) => o.inv[last[k]] || o.val[last[k]]);
+      keys = keys.slice(-SCALES.find(([k]) => k === scale)[2]);
+      if (!keys.length) { $("dash-wallet-chart").innerHTML = '<p class="muted small">Sem histórico para mostrar.</p>'; return; }
+      const x = keys.map(labelOf[scale]), inv = keys.map((k) => o.inv[last[k]]), val = keys.map((k) => o.val[last[k]]);
+      const gain = val.map((v, i) => v - inv[i]);
+      const when = keys.map((k) => (scale === "semanas" ? "semana de " : "") + labelOf[scale](k) + (scale === "dias" ? "" : " (fecho " + H.days[last[k]].slice(8, 10) + "/" + H.days[last[k]].slice(5, 7) + ")"));
+      const info = gain.map((g, i) => when[i] + "<br>investido " + fmtEur(inv[i]) + "<br>" + (g >= 0 ? "lucro " : "prejuízo ") + fmtEur(g) + (inv[i] ? " (" + fmtPct((val[i] / inv[i] - 1) * 100) + ")" : "") + "<br>vale " + fmtEur(val[i]));
+      $("dash-wallet-chart").innerHTML = "";
       Plotly.newPlot("dash-wallet-chart", [
-        { x, y: list.map((r) => r.c), name: "Investido", type: "bar", marker: { color: "#00e5ff", line: { color: "#7ff3ff", width: 1 } },
-          hovertext: list.map((r) => "investido " + eur(r.c)), hoverinfo: "x+text" },
-        { x, y: gain.map((g) => (g > 0 ? g : 0)), name: "Lucro", type: "bar", marker: { color: "#39ff88" },
-          hovertext: list.map((r) => (r.v >= r.c ? "lucro " + eur(r.v - r.c) + " (" + pct(r) + ") · vale " + eur(r.v) : "")), hoverinfo: "x+text" },
-        { x, y: gain.map((g) => (g < 0 ? g : 0)), name: "Prejuízo", type: "bar", marker: { color: "#ff4d6d" },
-          hovertext: list.map((r) => (r.v < r.c ? "prejuízo " + eur(r.v - r.c) + " (" + pct(r) + ") · vale " + eur(r.v) : "")), hoverinfo: "x+text" },
-      ], { barmode: "relative", bargap: view === "total" ? 0.6 : 0.3, paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 11 },
-        margin: { l: 56, r: 8, t: 8, b: 30 }, showlegend: false, hovermode: "closest",
-        yaxis: { ticksuffix: " €", gridcolor: "#2e2763", zerolinecolor: "#9b96c9" }, xaxis: { type: "category", tickangle: list.length > 8 ? -45 : 0 } },
+        { x, y: inv, name: "Investido", type: "bar", marker: { color: "#1a56c4", line: { color: "#3d7bff", width: 1 } }, hovertext: info, hoverinfo: "text" },
+        { x, y: gain.map((g) => (g > 0 ? g : 0)), name: "Lucro", type: "bar", marker: { color: "#39ff88" }, hoverinfo: "skip" },
+        { x, y: gain.map((g) => (g < 0 ? g : 0)), name: "Prejuízo", type: "bar", marker: { color: "#ff4d6d" }, hoverinfo: "skip" },
+      ], { barmode: "relative", bargap: keys.length < 4 ? 0.6 : 0.25, paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 11 },
+        margin: { l: 56, r: 8, t: 8, b: keys.length > 12 ? 56 : 30 }, showlegend: false, hovermode: "x",
+        yaxis: { ticksuffix: " €", gridcolor: "#2e2763", zerolinecolor: "#9b96c9" }, xaxis: { type: "category", tickangle: keys.length > 12 ? -45 : 0, nticks: 14 } },
         { responsive: true, displaylogo: false, displayModeBar: false });
     };
-    $("dash-wallet-view").addEventListener("click", (e) => {
-      const b = e.target.closest("[data-v]");
+    $("dash-wallet-scale").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-s]");
       if (!b) return;
-      view = b.dataset.v;
-      store.set("dash-wallet-view", view);
-      $("dash-wallet-view").querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c.dataset.v === view));
+      scale = b.dataset.s;
+      store.set("dash-wallet-scale", scale);
+      $("dash-wallet-scale").querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c.dataset.s === scale));
       bars();
     });
-    bars();
+    const choose = (e) => {
+      const r = e.target.closest(".wsel");
+      if (!r || (e.type === "keydown" && e.key !== "Enter" && e.key !== " ")) return;
+      e.preventDefault();
+      pick = r.dataset.k;
+      $("dash-wallet-rows").querySelectorAll(".wsel").forEach((x) => x.classList.toggle("on", x.dataset.k === pick));
+      bars();
+    };
+    $("dash-wallet-rows").addEventListener("click", choose);
+    $("dash-wallet-rows").addEventListener("keydown", choose);
+    fetch(WALLET + "/history", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((h) => {
+      H = build(h || { series: {}, fx: {} });
+      bars();
+    }).catch(() => { H = build({ series: {}, fx: {} }); bars(); });
   }).catch(() => { $("dash-wallet").innerHTML = '<p class="muted">Não consegui ler a carteira agora.</p>'; });
 })();
 
