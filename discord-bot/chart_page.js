@@ -368,6 +368,10 @@ ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pret
   <h2>📊 Desempenho</h2>
   <div id="perf"></div>
   <details class="panel" id="compare-box"><summary><b>⚖️ Comparar dois agentes</b></summary><div class="filters"><select id="cmp-a"></select><select id="cmp-b"></select></div><div id="cmp"></div></details>
+  <details class="panel" id="holdings-box" open><summary><b>🗂️ Posições de todos os agentes</b> <span class="muted small">quem tem o quê, agora</span></summary>
+    <div class="filters"><span class="chips"><button type="button" class="chip on" data-hv="agente">Por agente</button><button type="button" class="chip" data-hv="ativo">Por ativo</button></span>
+    <select id="hold-agent"><option value="">Todos os agentes</option></select><input id="hold-q" type="search" placeholder="Ticker ou nome, ex.: NVDA"></div>
+    <div id="holdings"></div></details>
   <h2>🔎 Ficha do agente</h2>
   <div class="agent-pick"><nav id="chips" class="agent-list"></nav><div id="detail"></div></div>
 </section>
@@ -516,6 +520,10 @@ abbr.g { text-decoration:underline dotted; text-underline-offset:3px; cursor:hel
   .tabs::-webkit-scrollbar { display:none; }  /* swipe sideways, no bar */
   main { padding-bottom:84px; }
 }
+.lot-filters .chips { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0; } .lot-filters .chip { padding:3px 10px; font-size:.8rem; }
+.lot-sum { margin:8px 0; } .lot-day { margin:10px 0 4px; } .lot-day-head { border-bottom:1px solid var(--line); padding:2px 0 4px; margin-bottom:4px; }
+.lot-line { display:inline-flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; }
+#holdings-box .filters { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:8px 0; } #holdings-box .chips { display:flex; gap:6px; }
 .lot { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 12px; margin:6px 0; }
 .lot summary { color:var(--fg); } .lot .trade { border-left:3px solid var(--line); padding:4px 10px; margin:8px 0 0 4px; }
 .lot .trade.b { border-left-color:var(--up); } .lot .trade.s { border-left-color:var(--down); } .why { color:var(--muted); margin:.3rem 0; white-space:normal; }
@@ -997,17 +1005,8 @@ function liveHtml(a) {
     table(["Tipo", "Ativo", "Valor", "Stop", "Alvo", "Motivo", "Números na decisão", "Criada"],
       (a.pending || []).map((o) => [o.side === "buy" ? "🟢 compra" : "🔴 venda", '<b>' + esc(o.symbol) + '</b>', o.eur ? fmtEur(o.eur) : (o.fraction ? fmtNum(o.fraction * 100, 0) + "% da posição" : "tudo"),
         o.stop ? fmtNum(o.stop) : "—", o.tp ? fmtNum(o.tp) : "—", esc(o.reason || ""), '<span class="small" style="white-space:normal">' + esc((o.why || "").replace(/^Na altura: /, "")) + '</span>', esc(o.created || "")]), [2, 3, 4]) +
-    '<h3>📚 Histórico de posições (' + (a.history || []).length + ')</h3><p class="muted small">Cada posição da primeira compra à última venda. Toca para ver as compras, as vendas e a justificação de cada uma segundo a estratégia.</p>' +
-    ((a.history || []).map((l) => {
-      const icon = l.status === "aberta" ? "🟡" : l.result > 0 ? "✅" : "🔴";
-      const last = l.sells.length ? l.sells[l.sells.length - 1].reason : "";
-      return '<details class="lot"><summary>' + icon + ' <b>' + esc(l.symbol) + '</b> · ' + esc(l.opened_at || l.opened) + ' → ' + esc(l.closed_at || l.closed || "aberta") +
-        (l.status === "fechada" ? ' · <span class="' + cls(l.result) + '">' + fmtEur(l.result) + (l.result_pct != null ? " (" + fmtPct(l.result_pct) + ")" : "") + '</span>' + (l.days != null ? ' · ' + l.days + ' dias' : '') + (last ? ' · ' + esc(last) : '') : ' · ' + fmtEur(l.invested) + ' investidos') +
-        '</summary>' + l.buys.concat(l.sells).sort((x, y) => (x.date + (x.hora || "")).localeCompare(y.date + (y.hora || ""))).map((t) =>
-          '<div class="trade ' + (t.side === "compra" ? "b" : "s") + '"><b>' + (t.side === "compra" ? "🟢 Compra" : "🔴 Venda") + '</b> · ' + esc(t.date + (t.hora ? " " + t.hora : "")) + ' · ' + fmtNum(t.qty, 4) + ' a ' + fmtNum(t.price) +
-          ' · ' + fmtEur(t.eur) + (t.side === "venda" ? ' · <span class="' + cls(t.pnl_eur) + '">' + fmtEur(t.pnl_eur) + '</span>' + (t.held != null ? ' em ' + t.held + ' dias' : '') : '') +
-          '<p class="small why">' + esc(t.why || t.reason || "") + '</p></div>').join("") + '</details>';
-    }).join("") || '<p class="muted">Ainda sem operações.</p>') +
+    '<h3>📚 Histórico de posições (' + (a.history || []).length + ')</h3><p class="muted small">Cada posição da primeira compra à última venda, agrupadas pelo dia em que abriram. Filtra pelo que procuras; toca numa posição para ver as compras, as vendas e a justificação de cada uma segundo a estratégia.</p>' +
+    '<div class="lots-box"></div>' +
     '<details><summary>Todas as operações em lista (' + a.trades.length + ')</summary>' +
     table(["Data", "Tipo", "Ativo", "Qtd.", "Preço", "Valor", "Resultado", "Motivo"],
       a.trades.map((t) => [esc(t.date + (t.hora ? " " + t.hora : "")), t.side === "compra" ? "🟢 compra" : t.side === "venda" ? "🔴 venda" : "🧾 " + esc(t.side), '<b>' + esc(t.symbol) + '</b>',
@@ -1071,9 +1070,70 @@ function backtestHtml(a) {
 }
 
 let SHOWN = null;  // the agent on the sheet (kept across the portal's refreshes)
+// ---- an agent's position history: filters, a summary of what is filtered, grouped by the day they opened ----
+const LOT_PAGE = 20;
+let LOTF = { estado: "todas", res: "todos", motivo: "", periodo: "tudo", q: "", n: LOT_PAGE };
+const lotExit = (l) => l.status === "aberta" ? "" : ((l.sells[l.sells.length - 1] || {}).reason || "—");
+function lotHtml(l) {
+  const icon = l.status === "aberta" ? "🟡" : l.result > 0 ? "✅" : "🔴";
+  const last = lotExit(l), hm = (x) => (x || "").slice(11) || "";
+  const span = (l.opened_at || l.opened) + (l.status === "aberta" ? " → aberta" : " → " + (l.closed === l.opened ? hm(l.closed_at) || l.closed : (l.closed_at || l.closed)));
+  return '<details class="lot"><summary><span class="lot-line">' + icon + ' <b>' + esc(l.symbol) + '</b><span class="muted small">' + esc(span.replace(l.opened + " ", "")) + '</span>' +
+    (l.status === "fechada" ? '<span class="' + cls(l.result) + '">' + fmtEur(l.result) + (l.result_pct != null ? " (" + fmtPct(l.result_pct) + ")" : "") + '</span>' +
+      '<span class="muted small">' + (l.days ? l.days + (l.days === 1 ? " dia" : " dias") + " · " : "") + esc(last) + '</span>' : '<span class="muted small">' + fmtEur(l.invested) + ' investidos</span>') +
+    '</span></summary>' + l.buys.concat(l.sells).sort((x, y) => (x.date + (x.hora || "")).localeCompare(y.date + (y.hora || ""))).map((t) =>
+      '<div class="trade ' + (t.side === "compra" ? "b" : "s") + '"><b>' + (t.side === "compra" ? "🟢 Compra" : "🔴 Venda") + '</b> · ' + esc(t.date + (t.hora ? " " + t.hora : "")) + ' · ' + fmtNum(t.qty, 4) + ' a ' + fmtNum(t.price) +
+      ' · ' + fmtEur(t.eur) + (t.side === "venda" ? ' · <span class="' + cls(t.pnl_eur) + '">' + fmtEur(t.pnl_eur) + '</span>' + (t.held != null ? ' em ' + t.held + ' dias' : '') : '') +
+      '<p class="small why">' + esc(t.why || t.reason || "") + '</p></div>').join("") + '</details>';
+}
+function drawLots(a, box) {
+  const all = a.history || [];
+  if (!all.length) { box.innerHTML = '<p class="muted">Ainda sem operações.</p>'; return; }
+  const today = new Date().toISOString().slice(0, 10);
+  const since = { hoje: today, "7d": new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10), "30d": new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10),
+    "90d": new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10) }[LOTF.periodo];
+  const motivos = [...new Set(all.map(lotExit).filter(Boolean))].sort();
+  if (LOTF.motivo && !motivos.includes(LOTF.motivo)) LOTF.motivo = "";
+  const q = LOTF.q.trim().toUpperCase();
+  const shown = all.filter((l) => (LOTF.estado === "todas" || (LOTF.estado === "abertas") === (l.status === "aberta")) &&
+    (LOTF.res === "todos" || (l.status === "fechada" && (LOTF.res === "ganho" ? l.result > 0 : l.result <= 0))) &&
+    (!LOTF.motivo || lotExit(l) === LOTF.motivo) && (!since || (l.closed || l.opened) >= since) && (!q || l.symbol.toUpperCase().includes(q)));
+  const closed = shown.filter((l) => l.status === "fechada"), wins = closed.filter((l) => l.result > 0);
+  const total = closed.reduce((s, l) => s + l.result, 0), inv = closed.reduce((s, l) => s + l.invested, 0);
+  const chip = (k, v, label) => '<button type="button" class="chip' + (LOTF[k] === v ? " on" : "") + '" data-f="' + k + '" data-v="' + v + '">' + label + '</button>';
+  const days = {};
+  shown.slice(0, LOTF.n).forEach((l) => (days[l.opened] = days[l.opened] || []).push(l));
+  const dayName = (d) => d === today ? "Hoje" : d === new Date(Date.now() - 864e5).toISOString().slice(0, 10) ? "Ontem"
+    : new Date(d + "T12:00:00Z").toLocaleDateString("pt-PT", { weekday: "short", day: "2-digit", month: "2-digit", year: d.slice(0, 4) === today.slice(0, 4) ? undefined : "numeric" });
+  box.innerHTML = '<div class="lot-filters">' +
+    '<div class="chips">' + chip("estado", "todas", "Todas") + chip("estado", "abertas", "🟡 Abertas") + chip("estado", "fechadas", "Fechadas") + '</div>' +
+    '<div class="chips">' + chip("res", "todos", "Qualquer resultado") + chip("res", "ganho", "✅ Ganho") + chip("res", "perda", "🔴 Perda") + '</div>' +
+    '<div class="chips">' + chip("periodo", "tudo", "Tudo") + chip("periodo", "hoje", "Hoje") + chip("periodo", "7d", "7 dias") + chip("periodo", "30d", "30 dias") + chip("periodo", "90d", "90 dias") + '</div>' +
+    '<div class="filters"><select data-f="motivo"><option value="">Qualquer motivo de saída</option>' + motivos.map((m) => '<option' + (m === LOTF.motivo ? " selected" : "") + '>' + esc(m) + '</option>').join("") + '</select>' +
+    '<input type="search" data-f="q" placeholder="Ticker, ex.: NVDA" value="' + esc(LOTF.q) + '"></div></div>' +
+    '<p class="small lot-sum"><b>' + shown.length + '</b> de ' + all.length + ' posições' + (closed.length ? ' · ' + wins.length + ' com ganho, ' + (closed.length - wins.length) + ' com perda (' +
+      fmtNum(wins.length / closed.length * 100, 0) + '% de acerto) · resultado <span class="' + cls(total) + '">' + fmtEur(total) + (inv ? ' (' + fmtPct(total / inv * 100) + ')' : '') + '</span>' : '') +
+      (shown.length - closed.length ? ' · ' + (shown.length - closed.length) + ' aberta' + (shown.length - closed.length === 1 ? '' : 's') : '') + '</p>' +
+    (shown.length ? Object.entries(days).map(([d, ls]) => {
+      const t = ls.filter((l) => l.status === "fechada").reduce((s, l) => s + l.result, 0);
+      return '<div class="lot-day"><div class="lot-day-head"><b>' + esc(dayName(d)) + '</b> <span class="muted small">' + (/^(Hoje|Ontem)$/.test(dayName(d)) ? d + ' · ' : '') + ls.length + (ls.length === 1 ? ' posição' : ' posições') + '</span>' +
+        (ls.some((l) => l.status === "fechada") ? ' <span class="small ' + cls(t) + '">' + fmtEur(t) + '</span>' : '') + '</div>' + ls.map(lotHtml).join("") + '</div>';
+    }).join("") : '<p class="muted">Nenhuma posição com estes filtros.</p>') +
+    (shown.length > LOTF.n ? '<p><button type="button" class="chip" data-more="1">Mostrar mais ' + Math.min(LOT_PAGE, shown.length - LOTF.n) + ' (faltam ' + (shown.length - LOTF.n) + ')</button></p>' : '');
+  box.onclick = (e) => {
+    const b = e.target.closest("[data-f][data-v]"), m = e.target.closest("[data-more]");
+    if (b) { LOTF[b.dataset.f] = b.dataset.v; LOTF.n = LOT_PAGE; drawLots(a, box); }
+    else if (m) { LOTF.n += LOT_PAGE; drawLots(a, box); }
+  };
+  box.querySelector('select[data-f="motivo"]').onchange = (e) => { LOTF.motivo = e.target.value; LOTF.n = LOT_PAGE; drawLots(a, box); };
+  const qi = box.querySelector('input[data-f="q"]');
+  qi.oninput = () => { LOTF.q = qi.value; LOTF.n = LOT_PAGE; const pos = qi.selectionStart; drawLots(a, box); const n = box.querySelector('input[data-f="q"]'); n.focus(); n.setSelectionRange(pos, pos); };
+}
+
 function show(i, scroll) {
   const a = agents[i];
   if (!a) return;
+  if (SHOWN !== a.name) LOTF = { estado: "todas", res: "todos", motivo: "", periodo: "tudo", q: "", n: LOT_PAGE };
   SHOWN = a.name;
   markAgent(i);
   const byReturn = (list) => list.slice().sort((x, y) => (headline(y) ?? -1e9) - (headline(x) ?? -1e9));
@@ -1083,9 +1143,47 @@ function show(i, scroll) {
     ' em ' + esc(agentGroup(a).replace(/^\S+\s/, "")) + ' · ' + esc(a.strategy.label) + '</p>' +
     (a.backtest ? backtestHtml(a) : liveHtml(a)) + genealogyHtml(a) + strategyHtml(a.strategy) + '</div>';
   chapters($("detail").firstElementChild);
+  const lotsBox = $("detail").querySelector(".lots-box");
+  if (lotsBox) drawLots(a, lotsBox);
   if (scroll) { openTab("agentes"); $("detail").scrollIntoView({ behavior: "smooth", block: "start" }); }
 }
 if (agents.length) show(0, false);
+
+// ---- 🗂️ every live agent's open positions: by agent (what each one holds) or by stock (who holds it) ----
+(function holdings() {
+  if (!$("holdings")) return;
+  const live = agents.filter((a) => !a.backtest && (a.positions || []).length);
+  $("hold-agent").innerHTML += live.map((a) => '<option value="' + esc(a.name) + '">' + esc(a.emoji + " " + a.name) + ' (' + a.positions.length + ')</option>').join("");
+  let view = "agente";
+  const draw = () => {
+    const who = $("hold-agent").value, q = $("hold-q").value.trim().toUpperCase();
+    const rows = [];
+    live.forEach((a) => { if (!who || a.name === who) a.positions.forEach((p) => { if (!q || p.symbol.toUpperCase().includes(q) || (p.name || "").toUpperCase().includes(q)) rows.push({ a, p }); }); });
+    const agentLink = (a) => '<a href="#" class="hold-ag" data-n="' + esc(a.name) + '">' + esc(a.emoji + " " + a.name) + '</a>';
+    if (view === "agente") {
+      $("holdings").innerHTML = rows.length ? table(["Agente", "Ativo", "Nome", "Desde", "Investido", "Valor", "Ganho %", "Peso"], rows.map(({ a, p }) => [agentLink(a), '<b>' + esc(p.symbol) + '</b>',
+        esc(p.name || p.sector || ""), esc(p.since || p.entry_date || ""), fmtEur(p.cost_eur), fmtEur(p.value_eur), '<span class="' + cls(p.pnl_pct) + '">' + fmtPct(p.pnl_pct) + '</span>',
+        fmtNum(p.weight, 1) + "%"]), [4, 5, 6, 7]) + '<p class="muted small">' + rows.length + ' posições em ' + new Set(rows.map((r) => r.a.name)).size + ' agentes.</p>'
+        : '<p class="muted">Nenhuma posição com estes filtros.</p>';
+    } else {
+      const by = {};
+      rows.forEach(({ a, p }) => { const x = by[p.symbol] = by[p.symbol] || { p, agents: [], cost: 0, value: 0 }; x.agents.push(a); x.cost += p.cost_eur; x.value += p.value_eur; });
+      const list = Object.values(by).sort((x, y) => y.agents.length - x.agents.length || y.value - x.value);
+      $("holdings").innerHTML = list.length ? table(["Ativo", "Nome", "Agentes", "Quem tem", "Investido", "Valor", "Ganho %"], list.map((x) => ['<b>' + esc(x.p.symbol) + '</b>',
+        esc(x.p.name || x.p.sector || ""), x.agents.length, '<span class="small" style="white-space:normal">' + x.agents.map(agentLink).join(", ") + '</span>', fmtEur(x.cost), fmtEur(x.value),
+        '<span class="' + cls(x.value - x.cost) + '">' + fmtPct(x.cost ? (x.value / x.cost - 1) * 100 : 0) + '</span>']), [2, 4, 5, 6]) +
+        '<p class="muted small">' + list.length + ' ativos; os detidos por mais agentes primeiro.</p>' : '<p class="muted">Nenhuma posição com estes filtros.</p>';
+    }
+  };
+  $("holdings-box").addEventListener("click", (e) => {
+    const v = e.target.closest("[data-hv]"), ag = e.target.closest(".hold-ag");
+    if (v) { view = v.dataset.hv; $("holdings-box").querySelectorAll("[data-hv]").forEach((b) => b.classList.toggle("on", b === v)); draw(); }
+    if (ag) { e.preventDefault(); const i = agents.findIndex((x) => x.name === ag.dataset.n); if (i >= 0) show(i, true); }
+  });
+  $("hold-agent").addEventListener("change", draw);
+  $("hold-q").addEventListener("input", draw);
+  draw();
+})();
 
 // ---- tabs ----
 function openTab(name) {
