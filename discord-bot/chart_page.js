@@ -557,7 +557,9 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .qhelp:hover::after, .qhelp:focus::after { opacity:1; visibility:visible; }
 @media (max-width:900px) { .wtiles { grid-template-columns:repeat(2,minmax(0,1fr)); } .wtiles .tile:first-child { grid-column:1 / -1; } }
 .wbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 12px; margin-bottom:6px; }
-.dash .wbar .chips { margin:0; }
+.dash .wbar .chips { margin:0; } .wleft { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
+.wchk { display:inline-flex; align-items:center; gap:5px; font-size:.8rem; color:var(--muted); cursor:pointer; user-select:none; }
+.wchk input { accent-color:#3d7bff; margin:0; cursor:pointer; } .wper { margin:8px 0 2px; text-align:right; }
 .wrange { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:.8rem; color:var(--muted); }
 .wrange input { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:3px 6px; font:inherit; color-scheme:dark; }
 .wsel { cursor:pointer; border-radius:6px; padding-left:6px; padding-right:6px; transition:background .15s; }
@@ -1533,7 +1535,8 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     let scale = store.get("dash-wallet-scale", "meses");
     if (!SCALES.some(([k]) => k === scale)) scale = "meses";
     let pick = "";  // "" = the whole portfolio, else a symbol
-    const line = (k, label, sub, v, pct) => '<div class="drow wsel' + (k === pick ? ' on' : '') + '" data-k="' + esc(k) + '" role="button" tabindex="0"><span class="nm"><b>' + label + '</b> <span class="muted small">' + sub + '</span></span><span class="' + cls(pct) + '">' + fmtPct(pct) + '</span></div>';
+    let showInv = store.get("dash-wallet-inv", true) !== false;  // off: only the gain or loss, on its own scale
+    const line = (k, label, sub, v, pct) => '<div class="drow wsel' + (k === pick ? ' on' : '') + '" data-k="' + esc(k) + '" data-p="' + (pct ?? "") + '" role="button" tabindex="0"><span class="nm"><b>' + label + '</b> <span class="muted small">' + sub + '</span></span><span class="wp ' + cls(pct) + '">' + fmtPct(pct) + '</span></div>';
     // the tiles follow the chosen row: the whole portfolio or one position
     const TAX = 0.28;  // Portugal: 28% on the gain (capital gains), only when there is a gain
     const tiles = () => {
@@ -1553,12 +1556,14 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     const first = w.tx.reduce((m, t) => (t.date < m ? t.date : m), "9999"), todayIso = new Date().toISOString().slice(0, 10);
     let from = first, to = todayIso;
     $("dash-wallet").innerHTML = '<div class="wtiles" id="dash-wallet-tiles">' + tiles() + '</div>' +
-      '<div class="wbar"><div class="chips" id="dash-wallet-scale">' + SCALES.map(([k, t]) => '<button class="chip' + (k === scale ? ' on' : '') + '" data-s="' + k + '">' + t + '</button>').join("") + '</div>' +
+      '<div class="wbar"><div class="wleft"><div class="chips" id="dash-wallet-scale">' + SCALES.map(([k, t]) => '<button class="chip' + (k === scale ? ' on' : '') + '" data-s="' + k + '">' + t + '</button>').join("") + '</div>' +
+      '<label class="wchk"><input type="checkbox" id="dash-wallet-inv"' + (showInv ? ' checked' : '') + '> <span>Investimento</span></label></div>' +
       '<div class="wrange"><label>De <input type="date" id="dash-wallet-from" value="' + first + '" min="' + first + '" max="' + todayIso + '"></label>' +
       '<label>a <input type="date" id="dash-wallet-to" value="' + todayIso + '" min="' + first + '" max="' + todayIso + '"></label>' +
       '<button class="chip" id="dash-wallet-all" title="Desde a primeira compra até hoje">Tudo</button></div></div>' +
       '<div id="dash-wallet-chart" class="dash-chart dash-bars"><p class="muted small">A carregar o histórico…</p></div>' +
-      '<p class="muted small"><span style="color:#1a56c4">■</span> <span>investido</span> · <span style="color:#39ff88">■</span> <span>lucro</span> · <span style="color:#ff4d6d">■</span> <span>prejuízo</span> · <span id="dash-wallet-what">Total</span></p>' +
+      '<p class="muted small"><span id="dash-wallet-leg-inv"' + (showInv ? '' : ' hidden') + '><span style="color:#1a56c4">■</span> <span>investido</span> · </span><span style="color:#39ff88">■</span> <span>lucro</span> · <span style="color:#ff4d6d">■</span> <span>prejuízo</span> · <span id="dash-wallet-what">Total</span></p>' +
+      '<p class="muted small wper" id="dash-wallet-per">% de hoje</p>' +
       '<div id="dash-wallet-rows">' + line("", "Total", fmtEur(value), value, dayP) +
       rows.slice(0, 6).map((r) => line(r.sym, esc(r.sym), fmtNum(r.qty, r.qty % 1 ? 2 : 0) + ' · ' + fmtEur(r.v), r.v, r.pct)).join("") + '</div>' +
       (rows.length > 6 ? '<p class="muted small">+ ' + (rows.length - 6) + ' posições no perfil</p>' : '');
@@ -1574,35 +1579,65 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       const cursor = (x) => { let i = 0, v = null; return (d) => { if (!x) return null; while (i < x.t.length && x.t[i] <= d) { if (x.c[i] != null) v = x.c[i]; i++; } return v; }; };
       const rate = (cur, close) => (close ? (cur === "GBp" || cur === "GBX" ? 0.01 : 1) / close : null);
       const fxAt = (cur, d) => { if (!cur || cur === "EUR") return 1; const x = (h.fx || {})[cur]; let v = null; if (x) for (let i = 0; i < x.t.length && x.t[i] <= d; i++) if (x.c[i] != null) v = x.c[i]; return rate(cur, v) ?? w.fx[cur] ?? 1; };
-      const px = {}, fxc = {}, st = {}, out = { "": { inv: [], val: [] } };
+      const px = {}, fxc = {}, st = {}, out = { "": { inv: [], val: [], rg: [] } };
       for (const t of tx) { px[t.symbol] ||= cursor((h.series || {})[t.symbol]); if (t.currency && t.currency !== "EUR") fxc[t.currency] ||= cursor((h.fx || {})[t.currency]); }
       let ti = 0;
       for (const d of days) {
         for (; ti < tx.length && tx[ti].date <= d; ti++) {
-          const t = tx[ti], q = st[t.symbol] ||= { qty: 0, inv: 0, cur: t.currency };
+          const t = tx[ti], q = st[t.symbol] ||= { qty: 0, inv: 0, rg: 0, cur: t.currency };
           if (t.side === "buy") { q.qty += t.qty; q.inv += (t.qty * t.price + t.fee) * fxAt(t.currency, t.date); }
-          else { const avg = q.qty ? q.inv / q.qty : 0; q.inv -= avg * t.qty; q.qty -= t.qty; }
+          else { const avg = q.qty ? q.inv / q.qty : 0; q.rg += (t.qty * t.price - t.fee) * fxAt(t.currency, t.date) - avg * t.qty; q.inv -= avg * t.qty; q.qty -= t.qty; }
         }
-        let ti2 = 0, tv = 0;
+        let ti2 = 0, tv = 0, tr = 0;
         for (const [sym, q] of Object.entries(st)) {
-          const o = out[sym] ||= { inv: new Array(out[""].inv.length).fill(0), val: new Array(out[""].inv.length).fill(0) };
+          const o = out[sym] ||= { inv: new Array(out[""].inv.length).fill(0), val: new Array(out[""].inv.length).fill(0), rg: new Array(out[""].inv.length).fill(0) };
           const close = px[sym](d), fx = !q.cur || q.cur === "EUR" ? 1 : rate(q.cur, fxc[q.cur](d)) ?? w.fx[q.cur] ?? 1;
           const live = d === today ? rows.find((r) => r.sym === sym) : null;
           const held = q.qty > 1e-9, inv = held ? (live ? live.c : q.inv) : 0;
           const val = held ? (live ? live.v : close != null ? q.qty * close * fx : inv) : 0;
-          o.inv.push(inv); o.val.push(val); ti2 += inv; tv += val;
+          o.inv.push(inv); o.val.push(val); o.rg.push(q.rg); ti2 += inv; tv += val; tr += q.rg;
         }
-        out[""].inv.push(ti2); out[""].val.push(tv);
+        out[""].inv.push(ti2); out[""].val.push(tv); out[""].rg.push(tr);
       }
       return { days, out };
     };
     const monday = (d) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() - (x.getUTCDay() + 6) % 7); return x.toISOString().slice(0, 10); };
     const keyOf = { dias: (d) => d, semanas: monday, meses: (d) => d.slice(0, 7), anos: (d) => d.slice(0, 4) };
     const labelOf = { dias: (k) => k.slice(8, 10) + "/" + k.slice(5, 7), semanas: (k) => k.slice(8, 10) + "/" + k.slice(5, 7), meses: (k) => k.slice(5, 7) + "/" + k.slice(0, 4), anos: (k) => k };
+    const PER = { dias: "do dia", semanas: "da semana", meses: "do mês", anos: "do ano" };
+    const dmy = (d) => d.split("-").reverse().join("/");
+    const period = () => {
+      if (!H || !H.days.length) return;
+      let e = -1;
+      H.days.forEach((d, i) => { if (d <= to) e = i; });
+      if (e < 0) return;
+      const k = keyOf[scale](H.days[e]);
+      let b = e;
+      while (b > 0 && keyOf[scale](H.days[b - 1]) === k) b--;
+      const s0 = b - 1;  // the close before the period starts (-1: nothing held yet)
+      const live = scale === "dias" && e === H.days.length - 1;  // today: the live change, as in the tile
+      if (live) {
+        $("dash-wallet-rows").querySelectorAll(".wsel").forEach((r) => { const v = r.dataset.p === "" ? null : +r.dataset.p, x = r.querySelector(".wp"); x.className = "wp " + cls(v); x.textContent = fmtPct(v); });
+        $("dash-wallet-per").textContent = "% de hoje";
+        return;
+      }
+      const pctOf = (o) => {
+        if (!o) return null;
+        const g = (i) => (i < 0 ? 0 : o.val[i] - o.inv[i] + o.rg[i]), inv0 = s0 < 0 ? 0 : o.inv[s0];
+        const base = (s0 < 0 ? 0 : o.val[s0]) + Math.max(0, o.inv[e] - inv0);
+        return base ? (g(e) - g(s0)) / base * 100 : null;
+      };
+      $("dash-wallet-rows").querySelectorAll(".wsel").forEach((r) => {
+        const v = pctOf(H.out[r.dataset.k]), x = r.querySelector(".wp");
+        x.className = "wp " + cls(v); x.textContent = fmtPct(v);
+      });
+      $("dash-wallet-per").textContent = "% " + PER[scale] + " · fecho " + dmy(H.days[Math.max(0, s0)]) + " → " + dmy(H.days[e]);
+    };
     // bars: the money in (dark blue), the gain stacked on top (green) or the loss below zero (red), at the end of each period
     const bars = () => {
       $("dash-wallet-what").textContent = pick || "Total";
       if (!window.Plotly || !H) return;
+      period();
       const o = H.out[pick] || H.out[""], last = {};
       H.days.forEach((d, i) => { if (d >= from && d <= to) last[keyOf[scale](d)] = i; });
       let keys = Object.keys(last).sort().filter((k) => o.inv[last[k]] || o.val[last[k]]);
@@ -1626,10 +1661,12 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
         (scale === "dias" ? "" : " (fecho " + H.days[last[k]].slice(8, 10) + "/" + H.days[last[k]].slice(5, 7) + ")"));
       const info = gain.map((g, i) => when[i] + "<br>investido " + fmtEur(inv[i]) + "<br>" + (g >= 0 ? "lucro " : "prejuízo ") + fmtEur(g) + (inv[i] ? " (" + fmtPct((val[i] / inv[i] - 1) * 100, 2) + ")" : "") + "<br>vale " + fmtEur(val[i]));
       $("dash-wallet-chart").innerHTML = "";
-      Plotly.newPlot("dash-wallet-chart", [
+      Plotly.newPlot("dash-wallet-chart", showInv ? [
         { x, y: inv.map((v, i) => (gain[i] < 0 ? val[i] : v)), name: "Investido", type: "bar", marker: { color: "#1a56c4", line: { color: "#3d7bff", width: 1 } }, hovertext: info, hoverinfo: "text" },
         { x, y: gain.map((g) => (g > 0 ? g : 0)), name: "Lucro", type: "bar", marker: { color: "#39ff88" }, hoverinfo: "skip" },
         { x, y: gain.map((g) => (g < 0 ? -g : 0)), name: "Prejuízo", type: "bar", marker: { color: "#ff4d6d" }, hoverinfo: "skip" },
+      ] : [
+        { x, y: gain, name: "Lucro", type: "bar", marker: { color: gain.map((g) => (g < 0 ? "#ff4d6d" : "#39ff88")) }, hovertext: info, hoverinfo: "text" },
       ], { barmode: "relative", bargap: keys.length < 4 ? 0.6 : 0.25, paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 11 },
         margin: { l: 56, r: 8, t: 8, b: keys.length > 12 ? 56 : 30 }, showlegend: false, hovermode: "x",
         yaxis: { ticksuffix: " €", gridcolor: "#2e2763", zerolinecolor: "#9b96c9" }, xaxis: { type: "category", tickangle: keys.length > 12 ? -45 : 0, nticks: 14 },
@@ -1658,6 +1695,12 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       from = f <= t ? f : t; to = f <= t ? t : f;
       bars();
     };
+    $("dash-wallet-inv").addEventListener("change", (e) => {
+      showInv = e.target.checked;
+      store.set("dash-wallet-inv", showInv);
+      $("dash-wallet-leg-inv").hidden = !showInv;
+      bars();
+    });
     $("dash-wallet-from").addEventListener("change", range);
     $("dash-wallet-to").addEventListener("change", range);
     $("dash-wallet-all").addEventListener("click", () => { $("dash-wallet-from").value = first; $("dash-wallet-to").value = todayIso; range(); });
