@@ -1583,7 +1583,10 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       H.days.forEach((d, i) => { last[keyOf[scale](d)] = i; });
       let keys = Object.keys(last).sort();
       keys = keys.filter((k) => o.inv[last[k]] || o.val[last[k]]);
+      const all = keys.length;
       keys = keys.slice(-SCALES.find(([k]) => k === scale)[2]);
+      if (keys.length) $("dash-wallet-what").textContent = (pick || "Total") + " · " + labelOf[scale](keys[0]) + " → " + labelOf[scale](keys[keys.length - 1]) +
+        (keys.length === all ? " (desde a 1.ª compra)" : " (últimos " + keys.length + " " + SCALES.find(([k]) => k === scale)[1].toLowerCase() + ")");
       if (!keys.length) { $("dash-wallet-chart").innerHTML = '<p class="muted small">Sem histórico para mostrar.</p>'; return; }
       const x = keys.map(labelOf[scale]), inv = keys.map((k) => o.inv[last[k]]), val = keys.map((k) => o.val[last[k]]);
       const gain = val.map((v, i) => v - inv[i]);
