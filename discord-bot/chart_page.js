@@ -547,7 +547,7 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .drow { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 0; border-top:1px solid var(--line); font-size:.9rem; }
 .dh + .drow, .chips + .dash-chart + .drow { border-top:0; } .drow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dash .grid { margin-bottom:8px; } .dash .chips { margin-bottom:6px; } .dash .chips .chip { padding:3px 10px; font-size:.8rem; }
-.dash-chart { height:260px; }
+.dash-chart { height:260px; } .dash-bars { height:240px; margin-top:4px; }
 @media (max-width:900px) { .dash-top { grid-template-columns:1fr 1fr; } .dash-row, .dash-row-a { grid-template-columns:1fr; } .dash-league-list { flex:none; } }
 .chart { width:100%; height:62vh; min-height:340px; background:var(--card); border:2px solid var(--line); border-radius:8px; }
 .range-custom { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 6px; font-size:12px; color:var(--muted, #b5bac1); }
@@ -1080,6 +1080,7 @@ function openTab(name) {
   if (name === "pretreino" && window.Plotly && $("pt-chart")) Plotly.Plots.resize("pt-chart");
   if (name === "dashboard" && window.Plotly && $("dash-pt-chart") && $("dash-pt-chart").data) Plotly.Plots.resize("dash-pt-chart");
   if (name === "dashboard" && window.dashFit) window.dashFit();
+  if (name === "dashboard" && window.Plotly && $("dash-wallet-chart") && $("dash-wallet-chart").data) Plotly.Plots.resize("dash-wallet-chart");
   try { history.replaceState(null, "", "#" + name); } catch (e) {}
 }
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
@@ -1508,16 +1509,48 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       if (!q || fx == null || p.qty <= 1e-9) continue;
       const v = p.qty * q.price * fx, d = p.qty * (q.price - (q.prev ?? q.price)) * fx;
       value += v; cost += p.cost * fx; day += d;
-      rows.push({ sym, qty: p.qty, v, pct: q.prev ? (q.price / q.prev - 1) * 100 : null });
+      rows.push({ sym, qty: p.qty, v, c: p.cost * fx, pct: q.prev ? (q.price / q.prev - 1) * 100 : null });
     }
     const dayP = value - day ? day / (value - day) * 100 : null;
     $("dash-wallet-tile").innerHTML = tile("💼 A tua carteira hoje", fmtPct(dayP), fmtEur(day) + " · valor total " + fmtEur(value), cls(day));
     const sells = Object.entries(w.verdicts || {}).filter(([k, v]) => k !== "rules" && v.verdict === "Vender").map(([k]) => k);
     rows.sort((a, b) => b.v - a.v);
+    let view = store.get("dash-wallet-view", "acoes");
+    if (view !== "total" && view !== "acoes") view = "acoes";
     $("dash-wallet").innerHTML = '<div class="grid">' + tile("Valor", fmtEur(value)) + tile("Ganho", fmtEur(value - cost), fmtPct(cost ? (value / cost - 1) * 100 : null), cls(value - cost)) +
       tile("Hoje", fmtEur(day), fmtPct(dayP), cls(day)) + tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up") + '</div>' +
+      '<div class="chips" id="dash-wallet-view">' + [["total", "Total"], ["acoes", "Por ação"]].map(([k, t]) => '<button class="chip' + (k === view ? ' on' : '') + '" data-v="' + k + '">' + t + '</button>').join("") + '</div>' +
+      '<div id="dash-wallet-chart" class="dash-chart dash-bars"></div>' +
+      '<p class="muted small"><span style="color:#00e5ff">■</span> <span>investido</span> · <span style="color:#39ff88">■</span> <span>lucro</span> · <span style="color:#ff4d6d">■</span> <span>prejuízo</span></p>' +
       rows.slice(0, 6).map((r) => '<div class="drow"><span class="nm"><b>' + esc(r.sym) + '</b> <span class="muted small">' + fmtNum(r.qty, r.qty % 1 ? 2 : 0) + ' · ' + fmtEur(r.v) + '</span></span><span class="' + cls(r.pct) + '">' + fmtPct(r.pct) + '</span></div>').join("") +
       (rows.length > 6 ? '<p class="muted small">+ ' + (rows.length - 6) + ' posições no perfil</p>' : '');
+    // bars: what went in (blue), the gain stacked on top (green) or the loss below zero (red); the whole portfolio or each position
+    const bars = () => {
+      if (!window.Plotly) { $("dash-wallet-chart").style.display = "none"; return; }
+      const list = view === "total" ? [{ sym: "Total", v: value, c: cost }] : rows;
+      const x = list.map((r) => r.sym), gain = list.map((r) => r.v - r.c);
+      const eur = (v) => fmtEur(v), pct = (r) => (r.c ? fmtPct((r.v / r.c - 1) * 100) : "");
+      Plotly.newPlot("dash-wallet-chart", [
+        { x, y: list.map((r) => r.c), name: "Investido", type: "bar", marker: { color: "#00e5ff", line: { color: "#7ff3ff", width: 1 } },
+          hovertext: list.map((r) => "investido " + eur(r.c)), hoverinfo: "x+text" },
+        { x, y: gain.map((g) => (g > 0 ? g : 0)), name: "Lucro", type: "bar", marker: { color: "#39ff88" },
+          hovertext: list.map((r) => (r.v >= r.c ? "lucro " + eur(r.v - r.c) + " (" + pct(r) + ") · vale " + eur(r.v) : "")), hoverinfo: "x+text" },
+        { x, y: gain.map((g) => (g < 0 ? g : 0)), name: "Prejuízo", type: "bar", marker: { color: "#ff4d6d" },
+          hovertext: list.map((r) => (r.v < r.c ? "prejuízo " + eur(r.v - r.c) + " (" + pct(r) + ") · vale " + eur(r.v) : "")), hoverinfo: "x+text" },
+      ], { barmode: "relative", bargap: view === "total" ? 0.6 : 0.3, paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 11 },
+        margin: { l: 56, r: 8, t: 8, b: 30 }, showlegend: false, hovermode: "closest",
+        yaxis: { ticksuffix: " €", gridcolor: "#2e2763", zerolinecolor: "#9b96c9" }, xaxis: { type: "category", tickangle: list.length > 8 ? -45 : 0 } },
+        { responsive: true, displaylogo: false, displayModeBar: false });
+    };
+    $("dash-wallet-view").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-v]");
+      if (!b) return;
+      view = b.dataset.v;
+      store.set("dash-wallet-view", view);
+      $("dash-wallet-view").querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c.dataset.v === view));
+      bars();
+    });
+    bars();
   }).catch(() => { $("dash-wallet").innerHTML = '<p class="muted">Não consegui ler a carteira agora.</p>'; });
 })();
 
