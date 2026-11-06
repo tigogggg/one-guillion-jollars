@@ -32,6 +32,27 @@ GREEN = 0x39FF88
 BOT_AUTHOR = "github-actions[bot]"
 MAX_COMMITS = 120
 
+# Where a note's button can take the members: the place of its most important change (key -> label, path on the site).
+PLACES = {
+    "dashboard": ("📊 Abrir o Dashboard", "/#dashboard"), "corrida": ("🏁 Abrir a Corrida", "/#corrida"),
+    "pretreino": ("⏪ Abrir o Pré-treino", "/#pretreino"), "agentes": ("🧾 Abrir os Agentes", "/#agentes"),
+    "decisao": ("⚖️ Abrir a Decisão", "/#decisao"), "propostas": ("🧠 Abrir as Propostas", "/#propostas"),
+    "noticias": ("📰 Abrir as Notícias", "/#noticias"), "glossario": ("❓ Abrir o Glossário", "/#ajuda"),
+    "estado": ("🩺 Abrir o Estado", "/#estado"), "perfil-definicoes": ("⚙️ Abrir as Definições", "/perfil#definicoes"),
+    "perfil-seguir": ("👀 Abrir o Seguir", "/perfil#seguir"), "perfil-privacidade": ("🔒 Abrir a Privacidade", "/perfil#conta"),
+    "carteira-resumo": ("💼 Abrir a tua carteira", "/perfil#resumo"), "carteira-posicoes": ("💼 Abrir as Posições", "/perfil#posicoes"),
+    "carteira-operacoes": ("🧾 Abrir as Operações", "/perfil#operacoes"), "carteira-adicionar": ("➕ Abrir Adicionar", "/perfil#adicionar"),
+    "carteira-propostas": ("🧠 Abrir Propostas para ti", "/perfil#propostas"), "carteira-importar": ("📥 Abrir Importar", "/perfil#importar"),
+    "carteira-analise": ("🤖 Abrir a Análise do Claude", "/perfil#analise"),
+}
+
+
+def button_for(note: dict, base: str) -> tuple[str, str]:
+    """The note's button: straight to where its most important change is, or the portal when Claude named no place."""
+    label, path = PLACES.get(str(note.get("local") or "").strip(), ("🏟️ Abrir o portal", "/"))
+    return label, base.rstrip("/") + path
+
+
 PROMPT = """És quem escreve as notas de atualização da plataforma One Guillion Jollars para os membros de um servidor
 Discord (português de Portugal, tom simples e direto, sem jargão técnico). A plataforma tem: o portal (liga de
 agentes de investimento simulados, notícias, oportunidades com score de segurança, propostas), a carteira de cada
@@ -47,8 +68,13 @@ Responde APENAS com JSON:
  "resumo": "1 a 2 frases",
  "novidades": ["o que há de novo, uma frase cada, com o sítio onde está (ex.: no portal, separador Carteira)"],
  "correcoes": ["o que foi corrigido, uma frase cada"],
- "acao": ["o que o membro tem de fazer, se alguma coisa (ex.: voltar a importar o ficheiro da XTB)"]}
+ "acao": ["o que o membro tem de fazer, se alguma coisa (ex.: voltar a importar o ficheiro da XTB)"],
+ "local": "onde está a novidade mais importante (a do título): uma destas chaves, ou null se não for um sítio só"}
 Com "publicar": false quando não há nada que interesse aos membros.
+Chaves para "local" (o botão da nota leva lá): dashboard (página inicial do portal), corrida, pretreino, agentes (fichas e
+posições dos agentes), decisao, propostas, noticias, glossario, estado (estado do sistema), perfil-definicoes,
+perfil-seguir (ações e agente a seguir), perfil-privacidade, carteira-resumo, carteira-posicoes, carteira-operacoes,
+carteira-adicionar, carteira-propostas, carteira-importar, carteira-analise.
 
 Commits:
 """
@@ -165,7 +191,7 @@ def main() -> int:
         print("::error title=Updates::Falta o canal 📢-novidades (Configurar o bot do Discord → canal_updates).")
         return 1
     base = interactive.worker_url()
-    buttons = [("🏟️ Abrir o portal", f"{base}/")] if base else None
+    buttons = [button_for(note, base)] if base else None
     status = send([message], **target, buttons=buttons)
     if status == 0:
         discord_bot.kv_put(KV_KEY, head)

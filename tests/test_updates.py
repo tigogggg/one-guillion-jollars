@@ -26,3 +26,10 @@ def test_commits_skip_bot_and_data_only(monkeypatch):
     items = updates.commits(None, "1 day ago")
     assert [c["sha"] for c in items] == ["aaa"]
     assert items[0]["body"] == "body" and items[0]["files"] == ["discord-bot/chart_page.js"]
+
+
+def test_the_button_goes_to_the_place_of_the_main_change():
+    assert updates.button_for({"local": "perfil-seguir"}, "https://site.x/") == ("👀 Abrir o Seguir", "https://site.x/perfil#seguir")
+    assert updates.button_for({"local": "dashboard"}, "https://site.x") == ("📊 Abrir o Dashboard", "https://site.x/#dashboard")
+    assert updates.button_for({"local": None}, "https://site.x") == ("🏟️ Abrir o portal", "https://site.x/")
+    assert updates.button_for({"local": "inventado"}, "https://site.x") == ("🏟️ Abrir o portal", "https://site.x/")

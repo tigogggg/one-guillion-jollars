@@ -569,6 +569,7 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .wchk input { accent-color:#3d7bff; margin:0; cursor:pointer; } .wper { margin:8px 0 2px; text-align:right; }
 .wrange { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:.8rem; color:var(--muted); }
 .wrange input { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:3px 6px; font:inherit; color-scheme:dark; }
+.wadv { margin-left:auto; margin-right:14px; white-space:nowrap; cursor:help; } .wadv.gold { color:var(--gold); }
 .wsel { cursor:pointer; border-radius:6px; padding-left:6px; padding-right:6px; transition:background .15s; }
 .wsel:hover { background:rgba(0,229,255,.06); } .wsel.on { background:rgba(26,86,196,.28); box-shadow:inset 3px 0 0 #3d7bff; }
 @media (max-width:900px) { .dash-top { grid-template-columns:1fr 1fr; } .dash-row, .dash-row-a { grid-template-columns:1fr; } .dash-league-list { flex:none; } }
@@ -1576,7 +1577,15 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     if (!SCALES.some(([k]) => k === scale)) scale = "meses";
     let pick = "";  // "" = the whole portfolio, else a symbol
     let showInv = store.get("dash-wallet-inv", true) !== false;  // off: only the gain or loss, on its own scale
-    const line = (k, label, sub, v, pct) => '<div class="drow wsel' + (k === pick ? ' on' : '') + '" data-k="' + esc(k) + '" data-p="' + (pct ?? "") + '" role="button" tabindex="0"><span class="nm"><b>' + label + '</b> <span class="muted small">' + sub + '</span></span><span class="wp ' + cls(pct) + '">' + fmtPct(pct) + '</span></div>';
+    // each position's advice: the portfolio's verdict (Manter / Reduzir / Vender, rules in the profile), reasons on hover
+    const advice = (k) => {
+      const v = k && (w.verdicts || {})[k];
+      if (!v || !v.verdict || v.verdict === "?") return k ? '<span class="wadv muted small">—</span>' : '<span class="wadv"></span>';
+      const icon = { Vender: "🔴", Reduzir: "🟠", Manter: "🟢" }[v.verdict] || "";
+      const why = (v.reasons || []).join(" · ") + (v.stop ? " · stop sugerido " + fmtNum(v.stop) : "");
+      return '<span class="wadv small ' + (v.verdict === "Vender" ? "down" : v.verdict === "Reduzir" ? "gold" : "up") + '" title="' + esc(why) + '" data-tip="' + esc(why) + '" tabindex="0">' + icon + ' ' + esc(v.verdict) + '</span>';
+    };
+    const line = (k, label, sub, v, pct) => '<div class="drow wsel' + (k === pick ? ' on' : '') + '" data-k="' + esc(k) + '" data-p="' + (pct ?? "") + '" role="button" tabindex="0"><span class="nm"><b>' + label + '</b> <span class="muted small">' + sub + '</span></span>' + advice(k) + '<span class="wp ' + cls(pct) + '">' + fmtPct(pct) + '</span></div>';
     // the tiles follow the chosen row: the whole portfolio or one position
     const TAX = 0.28;  // Portugal: 28% on the gain (capital gains), only when there is a gain
     const tiles = () => {
