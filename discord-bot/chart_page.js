@@ -7,6 +7,7 @@
 // down to the next scheduled runs, from the same schedule /horario edits.
 
 import { I18N_JS } from "./i18n.js";
+import { ADMIN_CLIENT, ADMIN_CSS, isAdmin } from "./admin.js";
 
 const TIMEZONE = "Europe/Lisbon";
 const PLOTLY = "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js";
@@ -131,7 +132,8 @@ export async function portalResponse(env, token, schedule, wantManifest = false,
                            wallet: `/c/${session.tok}` } : null;
   const version = await portalVersion(env);
   const [runs, quotes] = await Promise.all([workflowRuns(env), dashboardQuotes(session, market)]);
-  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, news, market, proposals, calendar, pretrain, user, geo, evolution, decision, version, runs, home, quotes,
+  const admin = isAdmin(env, session);  // 🔒 Admin: only the members in the ADMIN_IDS secret
+  return html(chartPage(data, nextRuns(schedule, Date.now()), null, { portal: true, admin, news, market, proposals, calendar, pretrain, user, geo, evolution, decision, version, runs, home, quotes,
                                                                        manifest: token === null ? "/manifest.webmanifest" : `/p/${token}/manifest.webmanifest` }));
 }
 
@@ -316,7 +318,8 @@ export function chartPage(data, upcoming, newer, extras = {}) {
     .concat(portal && extras.pretrain ? [["pretreino", "⏪ Pré-treino"]] : []).concat([["agentes", "🧾 Agentes"]])
     .concat(portal ? [["decisao", "⚖️ Decisão"], ["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"]] : [])
     .concat(portal ? [] : [["agenda", "⏱️ Agenda"]])  // in the portal the schedule is part of 🩺 Estado
-    .concat(portal ? [["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]] : []);  // the portfolio is in the profile (the name, top right)
+    .concat(portal ? [["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]] : [])  // the portfolio is in the profile (the name, top right)
+    .concat(portal && extras.admin ? [["admin", "🔒 Admin"]] : []);
   const me = extras.user;
   const body = `
 ${banner}
@@ -383,6 +386,7 @@ ${portal ? `<section data-tab="decisao" hidden><div id="decision"></div></sectio
     : '<h2>⏱️ Próximas atualizações</h2><div id="countdowns" class="grid"></div><p class="muted small">Horários de Lisboa, os mesmos do /horario no Discord. Cada tarefa demora alguns minutos a chegar.</p>'}
 </section>
 ${portal ? `<section data-tab="ajuda" hidden><div id="glossary"></div></section>` : ""}
+${portal && extras.admin ? `<section data-tab="admin" hidden><div id="admin"></div></section>` : ""}
 ${portal ? `<section data-tab="pesquisa" hidden><div id="q-out"></div></section>` : ""}
 <footer class="site-foot">
   <p>📊 Dados da liga de <span id="updated"></span> (hora de Lisboa)</p>
@@ -411,7 +415,8 @@ const EVOLUTION = ${safeJson(extras.evolution || null)};
 const QUOTES = ${safeJson(extras.quotes || null)};
 </script>
 <script src="${STATIC_PATHS.portal}"></script>
-${portal ? `<script src="${STATIC_PATHS.extra}"></script>` : ""}`;
+${portal ? `<script src="${STATIC_PATHS.extra}"></script>` : ""}
+${portal && extras.admin ? `<script src="${STATIC_PATHS.admin}"></script>` : ""}`;
   return page(portal ? "One Guillion Jollars" : data.title, body, `${extras.manifest ? `<link rel="manifest" href="${esc(extras.manifest)}"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png?v=1gj">` : ""}
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
@@ -2109,7 +2114,8 @@ if (PRETRAIN && $("pt-race")) {
 }
 `;
 
-STATIC_PATHS.css = staticAsset("style", CSS, "css");
+STATIC_PATHS.css = staticAsset("style", CSS + ADMIN_CSS, "css");
+STATIC_PATHS.admin = staticAsset("admin", ADMIN_CLIENT, "js");
 STATIC_PATHS.i18n = staticAsset("i18n", I18N_JS, "js");
 STATIC_PATHS.portal = staticAsset("portal", CLIENT, "js");
 

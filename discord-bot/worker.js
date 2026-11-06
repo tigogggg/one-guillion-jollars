@@ -20,6 +20,7 @@ import { currentSession, loginActive } from "./session.js";
 import { chartResponse, portalResponse, portalVersion, staticResponse } from "./chart_page.js";
 import { portfolioCommand, portfolioRoute, profileRoute } from "./portfolio.js";
 import { ICONS } from "./icons.js";
+import { adminRoute } from "./admin.js";
 import { dailyBackup } from "./store.js";
 
 // Installable as an app: a service worker that only passes requests through (the pages need live data).
@@ -174,7 +175,7 @@ function secure(response) {
 async function tooMany(env, request, path) {
   const ip = request.headers.get("CF-Connecting-IP") || "?";
   const [binding, key] = path === "/entrar" || path.startsWith("/entrar/") || path === "/sair" ? [env.RL_AUTH, "auth"]
-    : request.method === "POST" && path.startsWith("/c/") ? [env.RL_WRITE, "write"]
+    : request.method === "POST" && (path.startsWith("/c/") || path.startsWith("/admin/")) ? [env.RL_WRITE, "write"]
     : request.method === "GET" && /^\/(c|p|g)\//.test(path) ? [env.RL_READ, "read"] : [null, ""];
   if (!binding?.limit) return false;
   try {
@@ -245,7 +246,11 @@ async function route(request, env, ctx) {
       if (!session) return new Response(null, { status: 302, headers: { Location: "/entrar", "Cache-Control": "no-store" } });
       return portalResponse(env, null, await getSchedule(env), path !== "/", session);
     }
-    if (request.method === "GET" && path === "/perfil" && env.CONFIG) return profileRoute(request, env);  // the member's profile and portfolio
+    if (request.method === "GET" && path === "/perfil" && env.CONFIG) return profileRoute(request, env);
+    if (path.startsWith("/admin/") && env.CONFIG) {  // 🔒 Admin: the tick collector's push and the admins' data
+      const out = await adminRoute(request, env);
+      if (out) return out;
+    }  // the member's profile and portfolio
     const wallet = path.match(/^\/c\/([0-9a-f]{24})(\/data|\/history|\/analysis|\/versions|\/export|\/manifest\.webmanifest)?$/);
     if (wallet && env.CONFIG) {
       return portfolioRoute(request, env, wallet[1], wallet[2] || "", (workflow, inputs) => dispatchWorkflow(env, workflow, inputs));

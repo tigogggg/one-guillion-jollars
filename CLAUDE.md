@@ -8,6 +8,8 @@ Reply to him in **pt-PT**, short and clear; commit messages in English.
 - `discord-bot/`: Cloudflare Worker (site + Discord interactions). Portal (`chart_page.js`), personal portfolios
   (`portfolio.js`), sign-in with Discord/Google (`login.js`, `session.js`), storage D1 + KV (`store.js`).
   The whole site requires sign-in; `/` is the portal. Deployed by `.github/workflows/deploy-worker.yml` on push.
+  🔒 Admin tab (`admin.js`): only Discord ids in the `ADMIN_IDS` secret; shows the tick collector `rjpm1995/arcade-agents-tick`,
+  which pushes its data to `POST /admin/tick` with the `TICK_PUSH_KEY` secret (`tick.portal` there).
 - `scripts/`: Python (run with `uv run python scripts/...`). Agents league (`agents.py`), pre-training / backtest
   (`pretrain.py`), market context (`context.py`: VIX, policy uncertainty, credit, rates, dollar, geopolitical risk,
   oil, gold, sector ETFs), political agenda by sector (`policy.py`: federal contract spending, policy-uncertainty
