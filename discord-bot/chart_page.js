@@ -548,18 +548,18 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .dh + .drow, .chips + .dash-chart + .drow { border-top:0; } .drow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dash .grid { margin-bottom:8px; } .dash .chips { margin-bottom:6px; } .dash .chips .chip { padding:3px 10px; font-size:.8rem; }
 .dash-chart { height:260px; } .dash-bars { height:260px; margin-top:4px; }
-.wtiles { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.35fr) minmax(0,1fr); grid-template-areas:"a c d" "b c e"; gap:8px; margin-bottom:10px; }
-.wtiles > div { min-width:0; display:flex; } .wtiles .tile { flex:1; margin:0; }
-.wt-a { grid-area:a; } .wt-b { grid-area:b; } .wt-c { grid-area:c; } .wt-d { grid-area:d; } .wt-e { grid-area:e; }
-.wgain { display:flex; flex-direction:column; gap:6px; }
-.wg { display:grid; grid-template-columns:auto 1fr auto; align-items:baseline; gap:8px; padding:4px 0; border-top:1px solid var(--line); }
-.wg .k { font-size:.8rem; } .wg .v { font-size:1.35rem; font-weight:600; text-align:right; } .wg .s { font-size:.8rem; min-width:4.2em; text-align:right; }
-.wg .v.up, .wg .s.up { color:var(--up); } .wg .v.down, .wg .s.down { color:var(--down); }
+.wtiles { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:8px; margin-bottom:10px; } .wtiles .tile { margin:0; }
+.qhelp { display:inline-grid; place-items:center; width:15px; height:15px; margin-left:3px; border:1px solid var(--muted); border-radius:50%; font-size:.68rem; line-height:1; cursor:help; vertical-align:1px; }
+.qhelp:hover, .qhelp:focus { border-color:var(--neon); color:var(--neon); outline:none; }
+.qhelp { position:relative; } .qhelp::after { content:attr(data-tip); position:absolute; right:-10px; top:calc(100% + 8px); width:min(260px, 70vw); padding:8px 10px; border:1px solid var(--neon);
+  border-radius:8px; background:#17123a; color:var(--fg); font-size:.78rem; line-height:1.35; text-align:left; white-space:normal; z-index:20; box-shadow:0 6px 18px rgba(0,0,0,.5);
+  opacity:0; visibility:hidden; transition:opacity .12s; pointer-events:none; }
+.qhelp:hover::after, .qhelp:focus::after { opacity:1; visibility:visible; }
+@media (max-width:900px) { .wtiles { grid-template-columns:repeat(2,minmax(0,1fr)); } .wtiles .tile:first-child { grid-column:1 / -1; } }
 .wbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 12px; margin-bottom:6px; }
 .dash .wbar .chips { margin:0; }
 .wrange { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:.8rem; color:var(--muted); }
 .wrange input { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:3px 6px; font:inherit; color-scheme:dark; }
-@media (max-width:640px) { .wtiles { grid-template-columns:1fr 1fr; grid-template-areas:"c c" "a d" "b e"; } }
 .wsel { cursor:pointer; border-radius:6px; padding-left:6px; padding-right:6px; transition:background .15s; }
 .wsel:hover { background:rgba(0,229,255,.06); } .wsel.on { background:rgba(26,86,196,.28); box-shadow:inset 3px 0 0 #3d7bff; }
 @media (max-width:900px) { .dash-top { grid-template-columns:1fr 1fr; } .dash-row, .dash-row-a { grid-template-columns:1fr; } .dash-league-list { flex:none; } }
@@ -1541,15 +1541,14 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       const verdict = pick ? ((w.verdicts || {})[pick] || {}).verdict : null;
       const gross = r.v - r.c, net = gross > 0 ? gross * (1 - TAX) : gross;
       const pc = (g) => (r.c ? fmtPct(g / r.c * 100, 2) : "—");
-      return '<div class="wt-a">' + tile("Valor" + (pick ? " · " + esc(pick) : ""), fmtEur(r.v)) + '</div>' +
-        '<div class="wt-b">' + tile("Hoje", fmtEur(r.d), fmtPct(r.pct, 2), cls(r.d)) + '</div>' +
-        '<div class="wt-c"><div class="tile wgain"><div class="k">Ganho' + (pick ? " · " + esc(pick) : "") + '</div>' +
-          '<div class="wg"><span class="k">Bruto</span><span class="v ' + cls(gross) + '">' + fmtEur(gross) + '</span><span class="s ' + cls(gross) + '">' + pc(gross) + '</span></div>' +
-          '<div class="wg"><span class="k">Líquido</span><span class="v ' + cls(net) + '">' + fmtEur(net) + '</span><span class="s ' + cls(net) + '">' + pc(net) + '</span></div>' +
-          '<div class="s">' + (gross > 0 ? "depois de 28% de imposto (" + fmtEur(gross * TAX) + ") se vendesses hoje" : "sem imposto: não há lucro") + '</div></div></div>' +
-        '<div class="wt-d">' + tile("Investido", fmtEur(r.c), "custo das posições abertas") + '</div>' +
-        '<div class="wt-e">' + (pick ? tile("Veredito", esc(verdict || "—"), "da carteira para " + esc(pick), verdict === "Vender" ? "down" : verdict ? "up" : "")
-          : tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up")) + '</div>';
+      const help = gross > 0 ? "Depois de 28% de imposto sobre o lucro (" + fmtEur(gross * TAX) + "), se vendesses hoje. Em Portugal as mais-valias pagam 28% (taxa liberatória); quem opta pelo englobamento pode pagar outra taxa."
+        : "Sem imposto: não há lucro. Em Portugal o imposto de 28% só incide sobre o lucro, quando vendes.";
+      return tile("Valor" + (pick ? " · " + esc(pick) : ""), fmtEur(r.v)) +
+        tile("Ganho bruto", fmtEur(gross), pc(gross), cls(gross)) +
+        '<div class="tile"><div class="k">Ganho líquido <span class="qhelp" tabindex="0" data-tip="' + esc(help) + '" aria-label="' + esc(help) + '">?</span></div><div class="v ' + cls(net) + '">' + fmtEur(net) + '</div><div class="s">' + pc(net) + '</div></div>' +
+        tile("Hoje", fmtEur(r.d), fmtPct(r.pct, 2), cls(r.d)) +
+        (pick ? tile("Veredito", esc(verdict || "—"), "da carteira para " + esc(pick), verdict === "Vender" ? "down" : verdict ? "up" : "")
+          : tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up"));
     };
     const first = w.tx.reduce((m, t) => (t.date < m ? t.date : m), "9999"), todayIso = new Date().toISOString().slice(0, 10);
     let from = first, to = todayIso;
