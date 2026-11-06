@@ -1511,7 +1511,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       if (!q || fx == null || p.qty <= 1e-9) continue;
       const v = p.qty * q.price * fx, d = p.qty * (q.price - (q.prev ?? q.price)) * fx;
       value += v; cost += p.cost * fx; day += d;
-      rows.push({ sym, qty: p.qty, v, c: p.cost * fx, pct: q.prev ? (q.price / q.prev - 1) * 100 : null });
+      rows.push({ sym, qty: p.qty, v, c: p.cost * fx, d, pct: q.prev ? (q.price / q.prev - 1) * 100 : null });
     }
     const dayP = value - day ? day / (value - day) * 100 : null;
     $("dash-wallet-tile").innerHTML = tile("💼 A tua carteira hoje", fmtPct(dayP), fmtEur(day) + " · valor total " + fmtEur(value), cls(day));
@@ -1522,8 +1522,16 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     if (!SCALES.some(([k]) => k === scale)) scale = "meses";
     let pick = "";  // "" = the whole portfolio, else a symbol
     const line = (k, label, sub, v, pct) => '<div class="drow wsel' + (k === pick ? ' on' : '') + '" data-k="' + esc(k) + '" role="button" tabindex="0"><span class="nm"><b>' + label + '</b> <span class="muted small">' + sub + '</span></span><span class="' + cls(pct) + '">' + fmtPct(pct) + '</span></div>';
-    $("dash-wallet").innerHTML = '<div class="grid">' + tile("Valor", fmtEur(value)) + tile("Ganho", fmtEur(value - cost), fmtPct(cost ? (value / cost - 1) * 100 : null), cls(value - cost)) +
-      tile("Hoje", fmtEur(day), fmtPct(dayP), cls(day)) + tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up") + '</div>' +
+    // the tiles follow the chosen row: the whole portfolio or one position
+    const tiles = () => {
+      const r = pick ? rows.find((x) => x.sym === pick) : { v: value, c: cost, d: day, pct: dayP };
+      const verdict = pick ? ((w.verdicts || {})[pick] || {}).verdict : null;
+      return tile("Valor" + (pick ? " · " + esc(pick) : ""), fmtEur(r.v)) + tile("Ganho", fmtEur(r.v - r.c), fmtPct(r.c ? (r.v / r.c - 1) * 100 : null), cls(r.v - r.c)) +
+        tile("Hoje", fmtEur(r.d), fmtPct(r.pct), cls(r.d)) +
+        (pick ? tile("Veredito", esc(verdict || "—"), "da carteira para " + esc(pick), verdict === "Vender" ? "down" : verdict ? "up" : "")
+          : tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up"));
+    };
+    $("dash-wallet").innerHTML = '<div class="grid" id="dash-wallet-tiles">' + tiles() + '</div>' +
       '<div class="chips" id="dash-wallet-scale">' + SCALES.map(([k, t]) => '<button class="chip' + (k === scale ? ' on' : '') + '" data-s="' + k + '">' + t + '</button>').join("") + '</div>' +
       '<div id="dash-wallet-chart" class="dash-chart dash-bars"><p class="muted small">A carregar o histórico…</p></div>' +
       '<p class="muted small"><span style="color:#1a56c4">■</span> <span>investido</span> · <span style="color:#39ff88">■</span> <span>lucro</span> · <span style="color:#ff4d6d">■</span> <span>prejuízo</span> · <span id="dash-wallet-what">Total</span></p>' +
@@ -1583,9 +1591,9 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       const info = gain.map((g, i) => when[i] + "<br>investido " + fmtEur(inv[i]) + "<br>" + (g >= 0 ? "lucro " : "prejuízo ") + fmtEur(g) + (inv[i] ? " (" + fmtPct((val[i] / inv[i] - 1) * 100) + ")" : "") + "<br>vale " + fmtEur(val[i]));
       $("dash-wallet-chart").innerHTML = "";
       Plotly.newPlot("dash-wallet-chart", [
-        { x, y: inv, name: "Investido", type: "bar", marker: { color: "#1a56c4", line: { color: "#3d7bff", width: 1 } }, hovertext: info, hoverinfo: "text" },
+        { x, y: inv.map((v, i) => (gain[i] < 0 ? val[i] : v)), name: "Investido", type: "bar", marker: { color: "#1a56c4", line: { color: "#3d7bff", width: 1 } }, hovertext: info, hoverinfo: "text" },
         { x, y: gain.map((g) => (g > 0 ? g : 0)), name: "Lucro", type: "bar", marker: { color: "#39ff88" }, hoverinfo: "skip" },
-        { x, y: gain.map((g) => (g < 0 ? g : 0)), name: "Prejuízo", type: "bar", marker: { color: "#ff4d6d" }, hoverinfo: "skip" },
+        { x, y: gain.map((g) => (g < 0 ? -g : 0)), name: "Prejuízo", type: "bar", marker: { color: "#ff4d6d" }, hoverinfo: "skip" },
       ], { barmode: "relative", bargap: keys.length < 4 ? 0.6 : 0.25, paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 11 },
         margin: { l: 56, r: 8, t: 8, b: keys.length > 12 ? 56 : 30 }, showlegend: false, hovermode: "x",
         yaxis: { ticksuffix: " €", gridcolor: "#2e2763", zerolinecolor: "#9b96c9" }, xaxis: { type: "category", tickangle: keys.length > 12 ? -45 : 0, nticks: 14 } },
@@ -1604,6 +1612,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       if (!r || (e.type === "keydown" && e.key !== "Enter" && e.key !== " ")) return;
       e.preventDefault();
       pick = r.dataset.k;
+      $("dash-wallet-tiles").innerHTML = tiles();
       $("dash-wallet-rows").querySelectorAll(".wsel").forEach((x) => x.classList.toggle("on", x.dataset.k === pick));
       bars();
     };
