@@ -312,7 +312,7 @@ export function chartPage(data, upcoming, newer, extras = {}) {
     ? `<a class="banner" href="/g/${esc(newer)}">🔄 Há uma versão mais recente deste gráfico · abrir</a>`
     : "";
   const portal = !!extras.portal;
-  const tabs = (portal ? [["hoje", "🏠 Hoje"], ["dashboard", "📊 Dashboard"]] : []).concat([["corrida", "🏁 Corrida"]])
+  const tabs = (portal ? [["dashboard", "📊 Dashboard"]] : []).concat([["corrida", "🏁 Corrida"]])
     .concat(portal && extras.pretrain ? [["pretreino", "⏪ Pré-treino"]] : []).concat([["agentes", "🧾 Agentes"]])
     .concat(portal ? [["decisao", "⚖️ Decisão"], ["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"]] : [])
     .concat(portal ? [] : [["agenda", "⏱️ Agenda"]])  // in the portal the schedule is part of 🩺 Estado
@@ -328,8 +328,7 @@ ${banner}
   <p class="muted">${esc(data.subtitle || "")}</p>`}
 </header>
 <nav class="tabs" id="tabs">${tabs.map(([k, label], i) => `<button class="tab${i ? "" : " on"}" data-tab="${k}">${label}</button>`).join("")}</nav>
-${portal ? `<section data-tab="hoje"><div id="today"></div></section>
-<section data-tab="dashboard" hidden><div id="dash" class="dash"></div></section>` : ""}
+${portal ? `<section data-tab="dashboard"><div id="dash" class="dash"></div></section>` : ""}
 <section class="race" id="race" data-tab="corrida"${portal ? " hidden" : ""}>
   <div class="marquee"><span>🏁 Grande Prémio dos Agentes 🏁</span></div>
   <div class="hud">
@@ -1209,7 +1208,8 @@ function restoreView(v) {
 {
   const hash = location.hash.slice(1);  // old #agenda links; #perfil and #carteira moved to /perfil
   if ((hash === "perfil" || hash === "carteira") && WALLET) location.replace("/perfil");
-  const asked = hash === "agenda" && $("status") ? "estado" : hash === "oportunidades" ? "propostas" : hash;  // Oportunidades joined Propostas
+  // Oportunidades joined Propostas; Hoje gave way to the Dashboard (the start page)
+  const asked = hash === "agenda" && $("status") ? "estado" : hash === "oportunidades" ? "propostas" : hash === "hoje" ? "dashboard" : hash;
   const known = asked && document.querySelector('#tabs .tab[data-tab="' + asked + '"]');
   const start = PREFS && PREFS.start && document.querySelector('#tabs .tab[data-tab="' + PREFS.start + '"]') ? PREFS.start : null;  // ⚙️ Definições
   openTab(known ? asked : start || document.querySelector("#tabs .tab").dataset.tab);
@@ -1349,64 +1349,6 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
 })();
 
 // ---- today ----
-(function today() {
-  if (!$("today")) return;
-  const M = MARKET || {}, P = PROPOSALS, c = M.context || {};
-  const zone = M.zone || P?.zone || "—", colour = { Alta: "var(--up)", Neutra: "var(--gold)", Cautelosa: "#ff9f43", Queda: "var(--down)" }[zone] || "var(--muted)";
-  const ctx = [c.vix != null ? ["VIX", fmtNum(c.vix, 0), c.vix > 30 ? "down" : c.vix < 18 ? "up" : ""] : null,
-    c.epu_pct != null ? ["Incerteza política", "percentil " + fmtNum(c.epu_pct * 100, 0), c.epu_pct > 0.8 ? "down" : ""] : null,
-    c.credit_dd != null ? ["Crédito de alto risco", fmtNum(c.credit_dd * 100, 1) + "% abaixo do melhor do ano", c.credit_dd > 0.05 ? "down" : c.credit_dd < 0.01 ? "up" : ""] : null,
-    c.hy != null ? ["Spread de crédito", fmtNum(c.hy, 1) + "%", c.hy > 5 ? "down" : ""] : null,
-    c.usd_chg != null ? ["Dólar vs euro (3 meses)", fmtPct(-c.usd_chg * 100), c.usd_chg > 0.03 ? "down" : ""] : null,
-    c.spy_trend != null ? ["S&P 500 vs média 200d", fmtPct(c.spy_trend * 100), cls(c.spy_trend)] : null,
-    c.gpr_pct != null ? ["Risco geopolítico (índice)", "percentil " + fmtNum(c.gpr_pct * 100, 0), c.gpr_pct > 0.85 ? "down" : ""] : null,
-    c.oil_chg != null ? ["Petróleo (3 meses)", fmtPct(c.oil_chg * 100), c.oil_chg > 0.25 ? "down" : ""] : null,
-    c.gold_chg != null ? ["Ouro (3 meses)", fmtPct(c.gold_chg * 100), c.gold_chg > 0.12 ? "down" : ""] : null].filter(Boolean);
-  const G = GEO;
-  const geoHtml = G && G.risk != null ? '<div class="panel"><div class="top" style="display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center">' +
-    '<span class="pixel" style="font-size:.75rem;color:' + (G.risk >= 4 ? "var(--down)" : G.risk >= 3 ? "var(--gold)" : "var(--up)") + '">🌍 RISCO GEOPOLÍTICO E MACRO: ' + G.risk + '/5</span>' +
-    '<span class="muted small">lido pelo Claude às ' + esc(lisbon(Date.parse(G.at), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) + '</span></div>' +
-    '<p>' + esc(G.summary || "") + '</p>' + ((G.themes || []).length ? '<div class="cards">' + G.themes.map((t) => '<div class="opp"><b>' + esc(t.theme) + '</b><p class="small">' + esc(t.impact) + '</p>' +
-      ((t.winners || []).length ? '<p class="small up">▲ ' + t.winners.map(esc).join(", ") + '</p>' : '') + ((t.losers || []).length ? '<p class="small down">▼ ' + t.losers.map(esc).join(", ") + '</p>' : '') + '</div>').join("") + '</div>' : '') +
-    '</div>' : '';
-  const leaders = agents.slice().sort((a, b) => headline(b) - headline(a)).slice(0, 3);
-  const news = ((NEWS || {}).items || []).filter((i) => (i.importancia || 0) >= 2).slice(0, 3);
-  $("today").innerHTML = '' +
-    '<div class="panel"><div class="top" style="display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center"><span class="pixel" style="color:' + colour + ';font-size:.8rem">MERCADO: ' + esc(zone.toUpperCase()) + '</span>' +
-    (M.stage2_pct != null ? '<span class="muted small">' + fmtNum(M.stage2_pct, 0) + '% das ações do S&P 500 em <abbr class="g" title="' + esc(GLOSS["Stage 2"]) + '">Stage 2</abbr></span>' : '') + '</div>' +
-    (M.stage2_pct != null ? '<div class="bar" style="margin:8px 0"><i style="width:' + M.stage2_pct + '%;background:' + colour + '"></i></div>' : '') +
-    (ctx.length ? '<div class="grid">' + ctx.map(([k, v, cl]) => tile(k, v, "", cl)).join("") + '</div>' : '') + '</div>' +
-    geoHtml +
-    '<h2>🧠 Melhores propostas</h2>' + (P && P.buys.some((b) => !b.conflict) ? '<div class="cards">' + P.buys.filter((b) => !b.conflict).slice(0, 3).map((b) => '<div class="opp"><div class="top"><span class="sym">' + esc(b.symbol) +
-      '</span><span class="muted">' + esc(b.name || "") + '</span>' + (b.safety != null ? '<span class="score ' + esc((b.level || "").split(" ")[0]) + '">🛡️ ' + b.safety + '</span>' : '') + '</div><p class="small">Confiança ' +
-      fmtNum(b.confidence, 0) + '% · entrada até ' + fmtNum(b.plan.entry_max) + ' · stop ' + fmtNum(b.plan.stop) + ' · alvo ' + fmtNum(b.plan.target) + ' (' + fmtNum(b.plan.rr, 1) + 'R)</p></div>').join("") +
-      '</div><p><a href="#propostas" class="go" data-t="propostas">Ver todas as propostas →</a></p>' : '<p class="muted">Sem propostas hoje.</p>') +
-    '<h2>💼 A tua carteira</h2><div id="today-wallet"><p class="muted">Abre a tua carteira uma vez neste aparelho (<a href="/entrar">entrar com o Discord ou Google</a>, botão "A minha carteira" no Discord ou <code>/carteira</code>) e o resumo aparece aqui.</p></div>' +
-    '<h2>📰 Notícias do dia</h2><div class="news">' + (news.map((i) => '<article class="' + (i.sentimento > 0 ? "pos" : i.sentimento < 0 ? "neg" : "") + '"><b>' + esc(i.symbol) + '</b> ' +
-      esc(i.resumo || i.title) + '</article>').join("") || '<p class="muted">Sem notícias importantes.</p>') + '</div><p><a href="#noticias" class="go" data-t="noticias">Ver as notícias →</a></p>' +
-    '<h2>🏁 Liga</h2><div class="grid">' + leaders.map((a, i) => tile(["🥇", "🥈", "🥉"][i] + " " + esc(a.emoji + " " + a.name), fmtPct(headline(a)), esc(a.strategy.label), cls(headline(a)))).join("") + '</div>' +
-    '<h2>⏱️ A seguir</h2><div class="grid">' + UPCOMING.slice(0, 3).map((j) => tile(esc(j.label), lisbon(j.at, { weekday: "short", hour: "2-digit", minute: "2-digit" }))).join("") + '</div>';
-  $("today").addEventListener("click", (e) => { const a = e.target.closest(".go"); if (a) { e.preventDefault(); openTab(a.dataset.t); window.scrollTo(0, 0); } });
-  const path = store.get("carteira", null);
-  if (path && /^\/c\/[0-9a-f]{24}$/.test(path)) fetch(path + "/data", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((w) => {
-    if (!w) return;
-    let value = 0, cost = 0, day = 0;
-    const pos = {};
-    for (const t of w.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq)) {
-      const p = pos[t.symbol] ||= { qty: 0, cost: 0, cur: t.currency };
-      if (t.side === "buy") { p.qty += t.qty; p.cost += t.qty * t.price + t.fee; } else { const avg = p.qty ? p.cost / p.qty : 0; p.cost -= avg * t.qty; p.qty -= t.qty; }
-    }
-    for (const [sym, p] of Object.entries(pos)) { const q = w.quotes[sym], fx = w.fx[p.cur]; if (!q || fx == null || p.qty <= 1e-9) continue;
-      value += p.qty * q.price * fx; cost += p.cost * fx; day += p.qty * (q.price - (q.prev ?? q.price)) * fx; }
-    const sells = Object.entries(w.verdicts || {}).filter(([k, v]) => k !== "rules" && v.verdict === "Vender").map(([k]) => k);
-    const follows = (w.follows || []).map((f) => esc(f.symbol) + (f.change != null ? ' <span class="' + cls(f.change) + '">' + fmtPct(f.change * 100) + '</span>' : '')).join(" · ");
-    $("today-wallet").innerHTML = '<div class="grid">' + tile("Valor", fmtEur(value)) + tile("Ganho", fmtEur(value - cost), fmtPct(cost ? (value / cost - 1) * 100 : null), cls(value - cost)) +
-      tile("Hoje", fmtEur(day), "", cls(day)) + tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up") + '</div>' +
-      (follows ? '<p class="small">👀 A seguir: ' + follows + '</p>' : '') + '<p><a href="' + esc(path) + '">Abrir a minha carteira →</a></p>';
-  }).catch(() => {});
-})();
-
-
 // ---- 📊 dashboard: the market, the member's portfolio, the league, the pre-training, the news and the proposals ----
 (function dashboard() {
   if (!$("dash")) return;
@@ -2102,7 +2044,7 @@ const EXTRA = String.raw`// ---- evolution of the agents between pre-training ru
   draw();
 })();
 
-// ---- the logo and the title go to the main page (Hoje), without reloading when already on it ----
+// ---- the logo and the title go to the main page (the Dashboard), without reloading when already on it ----
 document.addEventListener("click", (e) => {
   const a = e.target.closest("a.home");
   if (!a || a.getAttribute("href") !== location.pathname) return;

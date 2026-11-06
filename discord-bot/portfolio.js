@@ -869,7 +869,7 @@ async function history(env, data, hourly = false) {
 const WALLET_TABS = [["resumo", "📊 Resumo"], ["posicoes", "💼 Posições"], ["operacoes", "🧾 Operações"], ["adicionar", "➕ Adicionar"],
                      ["propostas", "🧠 Propostas para ti"], ["importar", "📥 Importar"], ["analise", "🤖 Análise do Claude"]];
 const PROFILE_TABS = [["definicoes", "⚙️ Definições"], ["seguir", "👀 Seguir"], ["conta", "🔒 Privacidade"]];
-const START_TABS = [["", "🏠 Hoje"], ["dashboard", "📊 Dashboard"], ["corrida", "🏁 Corrida"], ["pretreino", "⏪ Pré-treino"], ["agentes", "🧾 Agentes"], ["propostas", "🧠 Propostas"],
+const START_TABS = [["", "📊 Dashboard"], ["corrida", "🏁 Corrida"], ["pretreino", "⏪ Pré-treino"], ["agentes", "🧾 Agentes"], ["propostas", "🧠 Propostas"],
                     ["noticias", "📰 Notícias"], ["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]];
 
 function portfolioPage(data, tok, opts = {}) {
