@@ -511,7 +511,7 @@ table.perf td:first-child { white-space:normal; min-width:120px; } table.perf tr
 .tabs { position:relative; z-index:5; display:flex; flex-wrap:wrap; gap:6px; padding:8px 0; margin:18px 0 4px; }
 .tab { flex:none; font-family:var(--pixel); font-size:.55rem; background:var(--card); color:var(--fg); border:2px solid var(--line); border-radius:6px; padding:7px 10px; cursor:pointer;
        display:inline-flex; align-items:center; justify-content:center; gap:7px; line-height:1.2; }
-.tab .ti { font-family:system-ui, "Segoe UI Emoji", "Apple Color Emoji", sans-serif; font-size:1.05rem; line-height:1; }
+.tab .ti { font-family:system-ui, "Segoe UI Emoji", "Apple Color Emoji", sans-serif; font-size:1.05rem; line-height:1; transform:translateY(-1.5px); }  /* the pixel font's ink sits high: lift the emoji to its centre */
 .tab.on { border-color:var(--accent); color:#fff; box-shadow:0 0 10px rgba(255,46,136,.5); }
 @media (min-width:641px) { .tabs .tab { flex:1 1 auto; text-align:center; white-space:nowrap; } }
 .news { display:grid; gap:8px; } .news article { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--line); border-radius:8px; padding:10px 12px; }
