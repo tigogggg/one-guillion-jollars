@@ -11,6 +11,7 @@
 
 import { avatarUrl, esc, html, memberFace, page, safeJson, siteTopbar, staticAsset, tabLabel } from "./chart_page.js";
 import { currentSession, loginActive } from "./session.js";
+import { WALLET_CARD } from "./wallet_card.js";
 import { cached, createPortfolio, deletePortfolio, getVersion, hasDb, listVersions, loadPortfolio, renamePortfolio, savePortfolio } from "./store.js";
 
 const MAX_TX = 3000;
@@ -953,9 +954,7 @@ function portfolioPage(data, tok, opts = {}) {
 <section data-tab="resumo"${opts.profile ? " hidden" : ""}>
   <div class="resumo-layout">
     <div class="resumo-main">
-      <h2>📈 Evolução <span class="scale-pick"><button type="button" class="btn ghost on" data-scale="dia">Diária</button><button type="button" class="btn ghost" data-scale="hora">Horária</button></span></h2>
-      <div id="chart" class="chart"></div>
-      <p class="muted small" id="chart-note">Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.</p>
+      <div class="dcard"><div class="dh"><h3>💼 A tua carteira</h3></div><div id="wallet-card"><p class="muted small">A carregar…</p></div></div>
     </div>
     <div id="totals" class="totals-col"></div>
   </div>
@@ -1044,11 +1043,12 @@ ${opts.profile ? "</div></div>" : ""}
 const TOKEN = ${safeJson(tok)};
 const PROFILE = ${opts.profile ? "true" : "false"};
 </script>
+<script src="${WALLET_PATH}"></script>
 <script src="${CLIENT_PATH}"></script>`;
   return page(opts.profile ? `Perfil de ${me.name}` : `Carteira de ${data.name || "membro"}`, body, `${opts.embed ? '<base target="_top">' : ""}<link rel="manifest" href="/c/${tok}/manifest.webmanifest"><meta name="theme-color" content="#0b0820"><link rel="apple-touch-icon" href="/icon-192.png?v=1gj">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
-<style>.scale-pick { float:right; display:flex; gap:6px; } .scale-pick .btn { background:#3a2f86; border-bottom-color:#1d1650; padding:6px 10px; } .scale-pick .btn.on { background:var(--accent); border-bottom-color:#a3004f; }
+<style>
 .form { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; align-items:end; }
 .form label { display:grid; gap:4px; font-size:.85rem; color:var(--muted); }
 .form input, .form select { background:#0b0820; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px; font:inherit; }
@@ -1074,7 +1074,7 @@ document.querySelector('input[name=date]').value = new Date().toISOString().slic
 function openTab(name) {
   document.querySelectorAll("#tabs .tab").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
   document.querySelectorAll("section[data-tab]").forEach((s) => { s.hidden = s.dataset.tab !== name; });
-  if (name === "resumo" && window.Plotly && $("chart").data) Plotly.Plots.resize("chart");
+  if (name === "resumo" && WCARD) WCARD.redraw();  // drawn only while visible
   if (PROFILE) try { history.replaceState(null, "", "#" + name); } catch (e) {}  // /perfil#seguir opens that part
 }
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
@@ -1615,9 +1615,6 @@ function render() {
     tile("Dinheiro disponível", eur(cashEur), accounts.length + (accounts.length === 1 ? " conta" : " contas")) : "") +
     ((s.dividends || []).length ? tile("Dividendos (12 meses)", eur(s.dividends.filter((d) => Date.parse(d.date) > Date.now() - 365 * 864e5)
       .reduce((t, d) => t + d.amount * (s.fx[d.currency] ?? 1), 0)), s.dividends.length + " pagamentos importados") : "") +
-    tile("Valor atual", eur(value), open.length + " posições abertas") +
-    tile("Ganho não realizado", eur(total), pct(cost ? total / cost : null), cls(total)) +
-    tile("Hoje", eur(day), pct(value - day ? day / (value - day) : null), cls(day)) +
     tile("Ganho realizado (vendas)", eur(realized), closed.length + " posições fechadas", cls(realized)) +
     tile("Ganho total", eur(total + realized), "não realizado + realizado", cls(total + realized)) +
     tile("Investido nas abertas", eur(cost), "custo médio com comissões") +
@@ -1660,45 +1657,12 @@ async function load() {
   } catch (e) {}
 }
 
-let SCALE = "dia";
-try { SCALE = localStorage.getItem("ogj-escala") === "hora" ? "hora" : "dia"; } catch (e) {}
-document.querySelectorAll(".scale-pick [data-scale]").forEach((b) => {
-  b.classList.toggle("on", b.dataset.scale === SCALE);
-  b.addEventListener("click", () => {
-    SCALE = b.dataset.scale;
-    try { localStorage.setItem("ogj-escala", SCALE); } catch (e) {}
-    document.querySelectorAll(".scale-pick [data-scale]").forEach((x) => x.classList.toggle("on", x === b));
-    drawHistory();
-  });
-});
-async function drawHistory() {
-  if (!window.Plotly || !SNAP || !SNAP.tx.length) { $("chart").innerHTML = '<p class="muted" style="padding:16px">Adiciona a primeira compra para ver a evolução.</p>'; return; }
-  const hourly = SCALE === "hora";
-  $("chart-note").textContent = hourly
-    ? "Valor da carteira em euros vs. dinheiro investido, hora a hora no último mês (hora de Lisboa; noites e fins de semana escondidos)."
-    : "Valor da carteira em euros vs. dinheiro investido (compras menos vendas), dia a dia desde a primeira compra.";
-  const h = await (await fetch(BASE + "/history" + (hourly ? "?escala=hora" : ""), { cache: "no-store" })).json();
-  const days = [...new Set(Object.values(h.series).flatMap((s) => s.t))].filter((d) => d >= SNAP.tx.reduce((m, t) => t.date < m ? t.date : m, "9999")).sort();
-  const lastBefore = (s, d) => { if (!s) return null; let v = null; for (let i = 0; i < s.t.length && s.t[i] <= d; i++) if (s.c[i] != null) v = s.c[i]; return v; };
-  const fxOn = (cur, d, table = h.fx) => cur === "EUR" ? 1 : (() => { const r = lastBefore(table[cur], d); return r ? (cur === "GBp" || cur === "GBX" ? 0.01 : 1) / r : null; })();
-  const tx = SNAP.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq);
-  const value = [], invested = [];
-  for (const d of days) {
-    const held = {}; let inv = 0;
-    for (const t of tx) { if (t.date > d) break; held[t.symbol] = (held[t.symbol] || 0) + (t.side === "buy" ? t.qty : -t.qty);
-      const fx = fxOn(t.currency, t.date, h.fx_dia || h.fx) ?? fxOn(t.currency, d) ?? 1; inv += (t.side === "buy" ? t.qty * t.price + t.fee : -(t.qty * t.price - t.fee)) * fx; }
-    let v = 0;
-    for (const [sym, q] of Object.entries(held)) { if (q <= 1e-9) continue; const t = tx.find((x) => x.symbol === sym);
-      const px = lastBefore(h.series[sym], d), fx = fxOn(t.currency, d); if (px != null && fx != null) v += q * px * fx; }
-    value.push(v); invested.push(inv);
-  }
-  Plotly.newPlot("chart", [
-    { x: days, y: value, name: "Valor da carteira", type: "scatter", mode: "lines", line: { color: "#00e5ff", width: 2 }, hovertemplate: "%{y:,.2f} €<extra>Valor</extra>" },
-    { x: days, y: invested, name: "Dinheiro investido", type: "scatter", mode: "lines", line: { color: "#ffe14d", width: 1.5, dash: "dash" }, hovertemplate: "%{y:,.2f} €<extra>Investido</extra>" },
-  ], { paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff" }, margin: { l: 60, r: 12, t: 12, b: 40 }, hovermode: "x unified",
-       xaxis: { gridcolor: "#2e2763", ...(hourly ? { rangebreaks: [{ bounds: ["sat", "mon"] }, { pattern: "hour", bounds: [21.5, 7.5] }], hoverformat: "%d/%m %H:%M" } : {}) },
-       yaxis: { gridcolor: "#2e2763", ticksuffix: " €" }, legend: { orientation: "h", y: -0.15 } },
-     { responsive: true, displaylogo: false });
+// 📊 Resumo: the same portfolio card as the portal's Dashboard (wallet_card.js), loaded again after every change
+var WCARD = null;  // var: openTab may run before this line
+function drawHistory() {
+  if (!window.ogjWalletCard) return;
+  if (!WCARD) WCARD = ogjWalletCard({ root: $("wallet-card"), base: BASE, prefix: "wc", tile });
+  else WCARD.reload();
 }
 
 $("form").addEventListener("submit", async (e) => {
@@ -1735,3 +1699,4 @@ setInterval(load, 60000);
 `;
 
 const CLIENT_PATH = staticAsset("carteira", CLIENT, "js");
+const WALLET_PATH = staticAsset("wallet-card", WALLET_CARD, "js");

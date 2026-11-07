@@ -8,6 +8,7 @@
 
 import { I18N_JS } from "./i18n.js";
 import { ADMIN_CLIENT, ADMIN_CSS, isAdmin } from "./admin.js";
+import { WALLET_CARD } from "./wallet_card.js";
 
 const TIMEZONE = "Europe/Lisbon";
 const PLOTLY = "https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js";
@@ -420,6 +421,7 @@ const GEO = ${safeJson(extras.geo || null)};
 const EVOLUTION = ${safeJson(extras.evolution || null)};
 const QUOTES = ${safeJson(extras.quotes || null)};
 </script>
+${portal ? `<script src="${STATIC_PATHS.wallet}"></script>` : ""}
 <script src="${STATIC_PATHS.portal}"></script>
 ${portal ? `<script src="${STATIC_PATHS.extra}"></script>` : ""}
 ${portal && extras.admin ? `<script src="${STATIC_PATHS.admin}"></script>` : ""}`;
@@ -460,6 +462,7 @@ a.home { color:inherit; text-decoration:none; }
 .resumo-main > h2:first-child { margin-top:0; }
 .totals-col { display:flex; flex-direction:column; gap:8px; }
 .totals-col .tile { margin:0; }
+.resumo-main .wtiles { grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); } .resumo-main .wtiles .tile:first-child { grid-column:auto; }
 @media (max-width:760px) {
   .profile-layout { grid-template-columns:1fr; gap:10px; }
   .side { position:static; flex-direction:row; overflow-x:auto; padding:8px; scrollbar-width:none; }
@@ -577,7 +580,7 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .qhelp:hover::after, .qhelp:focus::after { opacity:1; visibility:visible; }
 @media (max-width:900px) { .wtiles { grid-template-columns:repeat(2,minmax(0,1fr)); } .wtiles .tile:first-child { grid-column:1 / -1; } }
 .wbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 12px; margin-bottom:6px; }
-.dash .wbar .chips { margin:0; } .wleft { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
+.wbar .chips { margin:0; } .wleft { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; }
 .wchk { display:inline-flex; align-items:center; gap:5px; font-size:.8rem; color:var(--muted); cursor:pointer; user-select:none; }
 .wchk input { accent-color:#3d7bff; margin:0; cursor:pointer; } .wper { margin:8px 0 2px; text-align:right; }
 .wrange { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:.8rem; color:var(--muted); }
@@ -1210,7 +1213,7 @@ function openTab(name) {
   if (name === "pretreino" && window.Plotly && $("pt-chart")) Plotly.Plots.resize("pt-chart");
   if (name === "dashboard" && window.Plotly && $("dash-pt-chart") && $("dash-pt-chart").data) Plotly.Plots.resize("dash-pt-chart");
   if (name === "dashboard" && window.dashFit) window.dashFit();
-  if (name === "dashboard" && window.Plotly && $("dash-wallet-chart") && $("dash-wallet-chart").data) Plotly.Plots.resize("dash-wallet-chart");
+  if (name === "dashboard" && window.dashWallet) window.dashWallet.redraw();  // drawn only while visible
   try { history.replaceState(null, "", "#" + name); } catch (e) {}
 }
 $("tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (b) openTab(b.dataset.tab); });
@@ -1567,227 +1570,9 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
   window.addEventListener("resize", fitLeague);
   fitLeague();
 
-  // the member's portfolio: the same data as the profile (/c/<token>/data)
-  if (walletOn) fetch(WALLET + "/data", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((w) => {
-    if (!w || !(w.tx || []).length) { $("dash-wallet-tile").innerHTML = stockTile(); $("dash-wallet").innerHTML = '<p class="muted">Ainda não tens movimentos.</p>'; return; }
-    let value = 0, cost = 0, day = 0;
-    const pos = {};
-    for (const t of w.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq)) {
-      const p = pos[t.symbol] ||= { qty: 0, cost: 0, cur: t.currency, name: t.name || "" };
-      if (t.side === "buy") { p.qty += t.qty; p.cost += t.qty * t.price + t.fee; } else { const avg = p.qty ? p.cost / p.qty : 0; p.cost -= avg * t.qty; p.qty -= t.qty; }
-    }
-    const rows = [];
-    for (const [sym, p] of Object.entries(pos)) {
-      const q = w.quotes[sym], fx = w.fx[p.cur];
-      if (!q || fx == null || p.qty <= 1e-9) continue;
-      const v = p.qty * q.price * fx, d = p.qty * (q.price - (q.prev ?? q.price)) * fx;
-      value += v; cost += p.cost * fx; day += d;
-      rows.push({ sym, name: q.name || p.name || "", qty: p.qty, v, c: p.cost * fx, d, pct: q.prev ? (q.price / q.prev - 1) * 100 : null });
-    }
-    const dayP = value - day ? day / (value - day) * 100 : null;
-    $("dash-wallet-tile").innerHTML = tile("💼 A tua carteira hoje", fmtPct(dayP), fmtEur(day) + " · valor total " + fmtEur(value), cls(day));
-    const sells = Object.entries(w.verdicts || {}).filter(([k, v]) => k !== "rules" && v.verdict === "Vender").map(([k]) => k);
-    rows.sort((a, b) => b.v - a.v);
-    const SCALES = [["dias", "Dias", "dias"], ["semanas", "Semanas", "semanas"], ["meses", "Meses", "meses"], ["anos", "Anos", "anos"]];
-    let scale = store.get("dash-wallet-scale", "meses");
-    if (!SCALES.some(([k]) => k === scale)) scale = "meses";
-    let pick = "";  // "" = the whole portfolio, else a symbol
-    let showInv = store.get("dash-wallet-inv", true) !== false;  // off: only the gain or loss, on its own scale
-    // each position's advice: the portfolio's verdict (Manter / Reduzir / Vender, rules in the profile), reasons on hover
-    const advice = (k) => {
-      const v = k && (w.verdicts || {})[k];
-      if (!v || !v.verdict || v.verdict === "?") return k ? '<span class="wadv muted small">—</span>' : '<span class="wadv"></span>';
-      const icon = { Vender: "🔴", Reduzir: "🟠", Manter: "🟢" }[v.verdict] || "";
-      const why = (v.reasons || []).join(" · ") + (v.stop ? " · stop sugerido " + fmtNum(v.stop) : "");
-      return '<span class="wadv small ' + (v.verdict === "Vender" ? "down" : v.verdict === "Reduzir" ? "gold" : "up") + '" title="' + esc(why) + '" data-tip="' + esc(why) + '" tabindex="0">' + icon + ' ' + esc(v.verdict) + '</span>';
-    };
-    // the company's name, short: "BANCO COMERCIAL PORTUGUES, S.A." -> "Banco Comercial Portugues" (the full one on hover)
-    const SUFFIX = /[\s,]+(s\.?\s?a\.?|sgps|n\.?\s?v\.?|se|ag|plc|inc\.?|corp\.?|corporation|ltd\.?|limited|s\.?p\.?a\.?|asa|ab|oyj|co\.?|company|group|holdings?)\.?$/i;
-    const nice = (s) => {
-      let n = String(s || "").trim(), o;
-      do { o = n; n = n.replace(SUFFIX, "").trim(); } while (n !== o && n);
-      if (!n) n = String(s || "").trim();
-      if (n === n.toUpperCase()) n = n.toLowerCase().replace(/(^|[\s\-&.'(/])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
-      return n;
-    };
-    const line = (k, label, sub, v, pct, name) => '<div class="drow wsel' + (k === pick ? ' on' : '') + '" data-k="' + esc(k) + '" data-p="' + (pct ?? "") + '" role="button" tabindex="0"><span class="nm wnm"><span class="wl1"><b>' + label + '</b>' +
-      (name ? ' <span class="wname" data-noi18n title="' + esc(name) + '">' + esc(nice(name)) + '</span>' : '') + '</span><span class="wl2 muted small">' + sub + '</span></span>' + advice(k) + '<span class="wp ' + cls(pct) + '">' + fmtPct(pct) + '</span></div>';
-    // the tiles follow the chosen row: the whole portfolio or one position
-    const TAX = 0.28;  // Portugal: 28% on the gain (capital gains), only when there is a gain
-    const tiles = () => {
-      const r = pick ? rows.find((x) => x.sym === pick) : { v: value, c: cost, d: day, pct: dayP };
-      const verdict = pick ? ((w.verdicts || {})[pick] || {}).verdict : null;
-      const gross = r.v - r.c, net = gross > 0 ? gross * (1 - TAX) : gross;
-      const pc = (g) => (r.c ? fmtPct(g / r.c * 100, 2) : "—");
-      const help = gross > 0 ? "Depois de 28% de imposto sobre o lucro (" + fmtEur(gross * TAX) + "), se vendesses hoje. Em Portugal as mais-valias pagam 28% (taxa liberatória); quem opta pelo englobamento pode pagar outra taxa."
-        : "Sem imposto: não há lucro. Em Portugal o imposto de 28% só incide sobre o lucro, quando vendes.";
-      return tile("Valor" + (pick ? " · " + esc(pick) : ""), fmtEur(r.v)) +
-        tile("Ganho bruto", fmtEur(gross), pc(gross), cls(gross)) +
-        '<div class="tile"><div class="k">Ganho líquido <span class="qhelp" tabindex="0" data-tip="' + esc(help) + '" aria-label="' + esc(help) + '">?</span></div><div class="v ' + cls(net) + '">' + fmtEur(net) + '</div><div class="s">' + pc(net) + '</div></div>' +
-        tile("Hoje", fmtEur(r.d), fmtPct(r.pct, 2), cls(r.d)) +
-        (pick ? tile("Veredito", esc(verdict || "—"), "da carteira para " + esc(pick), verdict === "Vender" ? "down" : verdict ? "up" : "")
-          : tile("Sinais de venda", sells.length ? esc(sells.join(", ")) : "nenhum", "veredito da carteira", sells.length ? "down" : "up"));
-    };
-    const first = w.tx.reduce((m, t) => (t.date < m ? t.date : m), "9999"), todayIso = new Date().toISOString().slice(0, 10);
-    let from = first, to = todayIso;
-    $("dash-wallet").innerHTML = '<div class="wtiles" id="dash-wallet-tiles">' + tiles() + '</div>' +
-      '<div class="wbar"><div class="wleft"><div class="chips" id="dash-wallet-scale">' + SCALES.map(([k, t]) => '<button class="chip' + (k === scale ? ' on' : '') + '" data-s="' + k + '">' + t + '</button>').join("") + '</div>' +
-      '<label class="wchk"><input type="checkbox" id="dash-wallet-inv"' + (showInv ? ' checked' : '') + '> <span>Investimento</span></label></div>' +
-      '<div class="wrange"><label>De <input type="date" id="dash-wallet-from" value="' + first + '" min="' + first + '" max="' + todayIso + '"></label>' +
-      '<label>a <input type="date" id="dash-wallet-to" value="' + todayIso + '" min="' + first + '" max="' + todayIso + '"></label>' +
-      '<button class="chip" id="dash-wallet-all" title="Desde a primeira compra até hoje">Tudo</button></div></div>' +
-      '<div id="dash-wallet-chart" class="dash-chart dash-bars"><p class="muted small">A carregar o histórico…</p></div>' +
-      '<p class="muted small"><span id="dash-wallet-leg-inv"' + (showInv ? '' : ' hidden') + '><span style="color:#1a56c4">■</span> <span>investido</span> · </span><span style="color:#39ff88">■</span> <span>lucro</span> · <span style="color:#ff4d6d">■</span> <span>prejuízo</span> · <span id="dash-wallet-what">Total</span></p>' +
-      '<p class="muted small wper" id="dash-wallet-per">% de hoje</p>' +
-      '<div id="dash-wallet-rows">' + line("", "Total", fmtEur(value), value, dayP) +
-      rows.slice(0, 6).map((r) => line(r.sym, esc(r.sym), fmtNum(r.qty, r.qty % 1 ? 2 : 0) + ' · ' + fmtEur(r.v), r.v, r.pct, r.name)).join("") + '</div>' +
-      (rows.length > 6 ? '<p class="muted small">+ ' + (rows.length - 6) + ' posições no perfil</p>' : '');
-
-    // day by day since the first purchase, each position's money in (average cost, in euros at each purchase's rate) and
-    // its value at that day's close; the last day is today's live value, the same as the tiles above
-    let H = null;
-    const build = (h) => {
-      const tx = w.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq);
-      const first = tx[0].date, today = new Date().toISOString().slice(0, 10);
-      const days = [...new Set(Object.values(h.series || {}).flatMap((x) => x.t))].filter((d) => d >= first && d < today).sort();
-      days.push(today);
-      const cursor = (x) => { let i = 0, v = null; return (d) => { if (!x) return null; while (i < x.t.length && x.t[i] <= d) { if (x.c[i] != null) v = x.c[i]; i++; } return v; }; };
-      const rate = (cur, close) => (close ? (cur === "GBp" || cur === "GBX" ? 0.01 : 1) / close : null);
-      const fxAt = (cur, d) => { if (!cur || cur === "EUR") return 1; const x = (h.fx || {})[cur]; let v = null; if (x) for (let i = 0; i < x.t.length && x.t[i] <= d; i++) if (x.c[i] != null) v = x.c[i]; return rate(cur, v) ?? w.fx[cur] ?? 1; };
-      const px = {}, fxc = {}, st = {}, out = { "": { inv: [], val: [], rg: [] } };
-      for (const t of tx) { px[t.symbol] ||= cursor((h.series || {})[t.symbol]); if (t.currency && t.currency !== "EUR") fxc[t.currency] ||= cursor((h.fx || {})[t.currency]); }
-      let ti = 0;
-      for (const d of days) {
-        for (; ti < tx.length && tx[ti].date <= d; ti++) {
-          const t = tx[ti], q = st[t.symbol] ||= { qty: 0, inv: 0, rg: 0, cur: t.currency };
-          if (t.side === "buy") { q.qty += t.qty; q.inv += (t.qty * t.price + t.fee) * fxAt(t.currency, t.date); }
-          else { const avg = q.qty ? q.inv / q.qty : 0; q.rg += (t.qty * t.price - t.fee) * fxAt(t.currency, t.date) - avg * t.qty; q.inv -= avg * t.qty; q.qty -= t.qty; }
-        }
-        let ti2 = 0, tv = 0, tr = 0;
-        for (const [sym, q] of Object.entries(st)) {
-          const o = out[sym] ||= { inv: new Array(out[""].inv.length).fill(0), val: new Array(out[""].inv.length).fill(0), rg: new Array(out[""].inv.length).fill(0) };
-          const close = px[sym](d), fx = !q.cur || q.cur === "EUR" ? 1 : rate(q.cur, fxc[q.cur](d)) ?? w.fx[q.cur] ?? 1;
-          const live = d === today ? rows.find((r) => r.sym === sym) : null;
-          const held = q.qty > 1e-9, inv = held ? (live ? live.c : q.inv) : 0;
-          const val = held ? (live ? live.v : close != null ? q.qty * close * fx : inv) : 0;
-          o.inv.push(inv); o.val.push(val); o.rg.push(q.rg); ti2 += inv; tv += val; tr += q.rg;
-        }
-        out[""].inv.push(ti2); out[""].val.push(tv); out[""].rg.push(tr);
-      }
-      return { days, out };
-    };
-    const monday = (d) => { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() - (x.getUTCDay() + 6) % 7); return x.toISOString().slice(0, 10); };
-    const keyOf = { dias: (d) => d, semanas: monday, meses: (d) => d.slice(0, 7), anos: (d) => d.slice(0, 4) };
-    const labelOf = { dias: (k) => k.slice(8, 10) + "/" + k.slice(5, 7), semanas: (k) => k.slice(8, 10) + "/" + k.slice(5, 7), meses: (k) => k.slice(5, 7) + "/" + k.slice(0, 4), anos: (k) => k };
-    const PER = { dias: "do dia", semanas: "da semana", meses: "do mês", anos: "do ano" };
-    const dmy = (d) => d.split("-").reverse().join("/");
-    const period = () => {
-      if (!H || !H.days.length) return;
-      let e = -1;
-      H.days.forEach((d, i) => { if (d <= to) e = i; });
-      if (e < 0) return;
-      const k = keyOf[scale](H.days[e]);
-      let b = e;
-      while (b > 0 && keyOf[scale](H.days[b - 1]) === k) b--;
-      const s0 = b - 1;  // the close before the period starts (-1: nothing held yet)
-      const live = scale === "dias" && e === H.days.length - 1;  // today: the live change, as in the tile
-      if (live) {
-        $("dash-wallet-rows").querySelectorAll(".wsel").forEach((r) => { const v = r.dataset.p === "" ? null : +r.dataset.p, x = r.querySelector(".wp"); x.className = "wp " + cls(v); x.textContent = fmtPct(v); });
-        $("dash-wallet-per").textContent = "% de hoje";
-        return;
-      }
-      const pctOf = (o) => {
-        if (!o) return null;
-        const g = (i) => (i < 0 ? 0 : o.val[i] - o.inv[i] + o.rg[i]), inv0 = s0 < 0 ? 0 : o.inv[s0];
-        const base = (s0 < 0 ? 0 : o.val[s0]) + Math.max(0, o.inv[e] - inv0);
-        return base ? (g(e) - g(s0)) / base * 100 : null;
-      };
-      $("dash-wallet-rows").querySelectorAll(".wsel").forEach((r) => {
-        const v = pctOf(H.out[r.dataset.k]), x = r.querySelector(".wp");
-        x.className = "wp " + cls(v); x.textContent = fmtPct(v);
-      });
-      $("dash-wallet-per").textContent = "% " + PER[scale] + " · fecho " + dmy(H.days[Math.max(0, s0)]) + " → " + dmy(H.days[e]);
-    };
-    // bars: the money in (dark blue), the gain stacked on top (green) or the loss below zero (red), at the end of each period
-    const bars = () => {
-      $("dash-wallet-what").textContent = pick || "Total";
-      if (!window.Plotly || !H) return;
-      period();
-      const o = H.out[pick] || H.out[""], last = {};
-      H.days.forEach((d, i) => { if (d >= from && d <= to) last[keyOf[scale](d)] = i; });
-      let keys = Object.keys(last).sort().filter((k) => o.inv[last[k]] || o.val[last[k]]);
-      const room = Math.max(10, Math.floor(($("dash-wallet-chart").clientWidth || 600) / 12));  // at least ~12px per bar
-      const n = Math.max(1, Math.ceil(keys.length / room));
-      const span = {};  // each bar's first period, when it holds several
-      if (n > 1) {
-        const kept = [];
-        for (let i = keys.length; i > 0; i -= n) { kept.unshift(keys[i - 1]); span[keys[i - 1]] = keys[Math.max(0, i - n)]; }
-        keys = kept;
-      }
-      const unit = SCALES.find(([k]) => k === scale)[2];
-      if (keys.length) $("dash-wallet-what").textContent = (pick || "Total") + " · " + H.days[last[span[keys[0]] || keys[0]]].split("-").reverse().join("/") + " → " +
-        H.days[last[keys[keys.length - 1]]].split("-").reverse().join("/") + (n > 1 ? " · cada barra junta " + n + " " + unit : "");
-      if (!keys.length) { $("dash-wallet-chart").innerHTML = '<p class="muted small">Sem histórico nestas datas.</p>'; return; }
-      // dd/mm repeats across years: then the year goes in too (Plotly would stack equal labels into one bar)
-      const years = new Set(keys.map((k) => k.slice(0, 4))).size > 1 && (scale === "dias" || scale === "semanas");
-      const x = keys.map((k) => labelOf[scale](k) + (years ? "/" + k.slice(2, 4) : "")), inv = keys.map((k) => o.inv[last[k]]), val = keys.map((k) => o.val[last[k]]);
-      const gain = val.map((v, i) => v - inv[i]);
-      const when = keys.map((k) => (span[k] && span[k] !== k ? labelOf[scale](span[k]) + " a " : scale === "semanas" ? "semana de " : "") + labelOf[scale](k) +
-        (scale === "dias" ? "" : " (fecho " + H.days[last[k]].slice(8, 10) + "/" + H.days[last[k]].slice(5, 7) + ")"));
-      const info = gain.map((g, i) => when[i] + "<br>investido " + fmtEur(inv[i]) + "<br>" + (g >= 0 ? "lucro " : "prejuízo ") + fmtEur(g) + (inv[i] ? " (" + fmtPct((val[i] / inv[i] - 1) * 100, 2) + ")" : "") + "<br>vale " + fmtEur(val[i]));
-      $("dash-wallet-chart").innerHTML = "";
-      Plotly.newPlot("dash-wallet-chart", showInv ? [
-        { x, y: inv.map((v, i) => (gain[i] < 0 ? val[i] : v)), name: "Investido", type: "bar", marker: { color: "#1a56c4", line: { color: "#3d7bff", width: 1 } }, hovertext: info, hoverinfo: "text" },
-        { x, y: gain.map((g) => (g > 0 ? g : 0)), name: "Lucro", type: "bar", marker: { color: "#39ff88" }, hoverinfo: "skip" },
-        { x, y: gain.map((g) => (g < 0 ? -g : 0)), name: "Prejuízo", type: "bar", marker: { color: "#ff4d6d" }, hoverinfo: "skip" },
-      ] : [
-        { x, y: gain, name: "Lucro", type: "bar", marker: { color: gain.map((g) => (g < 0 ? "#ff4d6d" : "#39ff88")) }, hovertext: info, hoverinfo: "text" },
-      ], { barmode: "relative", bargap: keys.length < 4 ? 0.6 : 0.25, paper_bgcolor: "#17123a", plot_bgcolor: "#17123a", font: { color: "#e8e6ff", size: 11 },
-        margin: { l: 56, r: 8, t: 8, b: keys.length > 12 ? 56 : 30 }, showlegend: false, hovermode: "x",
-        yaxis: { ticksuffix: " €", gridcolor: "#2e2763", zerolinecolor: "#9b96c9" }, xaxis: { type: "category", tickangle: keys.length > 12 ? -45 : 0, nticks: 14 },
-        hoverlabel: { bgcolor: "#17123a", bordercolor: "#3d7bff" } },
-        { responsive: true, displaylogo: false, displayModeBar: false });
-    };
-    $("dash-wallet-scale").addEventListener("click", (e) => {
-      const b = e.target.closest("[data-s]");
-      if (!b) return;
-      scale = b.dataset.s;
-      store.set("dash-wallet-scale", scale);
-      $("dash-wallet-scale").querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c.dataset.s === scale));
-      bars();
-    });
-    const choose = (e) => {
-      const r = e.target.closest(".wsel");
-      if (!r || (e.type === "keydown" && e.key !== "Enter" && e.key !== " ")) return;
-      e.preventDefault();
-      pick = r.dataset.k;
-      $("dash-wallet-tiles").innerHTML = tiles();
-      $("dash-wallet-rows").querySelectorAll(".wsel").forEach((x) => x.classList.toggle("on", x.dataset.k === pick));
-      bars();
-    };
-    const range = () => {
-      const f = $("dash-wallet-from").value || first, t = $("dash-wallet-to").value || todayIso;
-      from = f <= t ? f : t; to = f <= t ? t : f;
-      bars();
-    };
-    $("dash-wallet-inv").addEventListener("change", (e) => {
-      showInv = e.target.checked;
-      store.set("dash-wallet-inv", showInv);
-      $("dash-wallet-leg-inv").hidden = !showInv;
-      bars();
-    });
-    $("dash-wallet-from").addEventListener("change", range);
-    $("dash-wallet-to").addEventListener("change", range);
-    $("dash-wallet-all").addEventListener("click", () => { $("dash-wallet-from").value = first; $("dash-wallet-to").value = todayIso; range(); });
-    let redraw = 0;
-    window.addEventListener("resize", () => { clearTimeout(redraw); redraw = setTimeout(bars, 250); });
-    $("dash-wallet-rows").addEventListener("click", choose);
-    $("dash-wallet-rows").addEventListener("keydown", choose);
-    fetch(WALLET + "/history", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((h) => {
-      H = build(h || { series: {}, fx: {} });
-      bars();
-    }).catch(() => { H = build({ series: {}, fx: {} }); bars(); });
-  }).catch(() => { $("dash-wallet").innerHTML = '<p class="muted">Não consegui ler a carteira agora.</p>'; });
+  // the member's portfolio: the same card as the profile's Resumo (wallet_card.js), reading the profile's API
+  if (walletOn && window.ogjWalletCard) window.dashWallet = ogjWalletCard({ root: $("dash-wallet"), base: WALLET, prefix: "dash-wallet", max: 6, tile,
+    onLoad: (s) => { $("dash-wallet-tile").innerHTML = s ? tile("💼 A tua carteira hoje", fmtPct(s.dayP), fmtEur(s.day) + " · valor total " + fmtEur(s.value), cls(s.day)) : stockTile(); } });
 })();
 
 // ---- news ----
@@ -2139,6 +1924,7 @@ STATIC_PATHS.css = staticAsset("style", CSS + ADMIN_CSS, "css");
 STATIC_PATHS.admin = staticAsset("admin", ADMIN_CLIENT, "js");
 STATIC_PATHS.i18n = staticAsset("i18n", I18N_JS, "js");
 STATIC_PATHS.portal = staticAsset("portal", CLIENT, "js");
+STATIC_PATHS.wallet = staticAsset("wallet-card", WALLET_CARD, "js");
 
 // Search, status and guide: a separate script, so they work even if a section above fails on odd data.
 const EXTRA = String.raw`// ---- evolution of the agents between pre-training runs ----
