@@ -248,6 +248,12 @@ export function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+// A menu button's label "📊 Dashboard": the icon in its own span (a bit bigger, centred with the text).
+export function tabLabel(label) {
+  const m = String(label).match(/^(\S+)\s+(.+)$/);
+  return m && !/[A-Za-zÀ-ú0-9]/.test(m[1]) ? `<span class="ti" aria-hidden="true">${m[1]}</span><span>${m[2]}</span>` : label;
+}
+
 // JSON inside <script>: no "</script>" or line separators can break out.
 export function safeJson(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
@@ -315,7 +321,7 @@ export function chartPage(data, upcoming, newer, extras = {}) {
     : "";
   const portal = !!extras.portal;
   const tabs = (portal ? [["dashboard", "📊 Dashboard"]] : []).concat([["corrida", "🏁 Corrida"]])
-    .concat(portal && extras.pretrain ? [["pretreino", "⏪ Pré-treino"]] : []).concat([["agentes", "🧾 Agentes"]])
+    .concat(portal && extras.pretrain ? [["pretreino", "⏪ Treino"]] : []).concat([["agentes", "🧾 Agentes"]])
     .concat(portal ? [["decisao", "⚖️ Decisão"], ["propostas", "🧠 Propostas"], ["noticias", "📰 Notícias"]] : [])
     .concat(portal ? [] : [["agenda", "⏱️ Agenda"]])  // in the portal the schedule is part of 🩺 Estado
     .concat(portal ? [["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]] : [])  // the portfolio is in the profile (the name, top right)
@@ -330,7 +336,7 @@ ${banner}
   </form>`) : `<div class="topbar"><h1>${esc(data.title)}</h1></div>
   <p class="muted">${esc(data.subtitle || "")}</p>`}
 </header>
-<nav class="tabs" id="tabs">${tabs.map(([k, label], i) => `<button class="tab${i ? "" : " on"}" data-tab="${k}">${label}</button>`).join("")}</nav>
+<nav class="tabs" id="tabs">${tabs.map(([k, label], i) => `<button class="tab${i ? "" : " on"}" data-tab="${k}">${tabLabel(label)}</button>`).join("")}</nav>
 ${portal ? `<section data-tab="dashboard"><div id="dash" class="dash"></div></section>` : ""}
 <section class="race" id="race" data-tab="corrida"${portal ? " hidden" : ""}>
   <div class="marquee"><span>🏁 Grande Prémio dos Agentes 🏁</span></div>
@@ -348,7 +354,7 @@ ${portal ? `<section data-tab="dashboard"><div id="dash" class="dash"></div></se
   <p class="muted small">Toca numa linha da legenda para a esconder ou mostrar, toca duas vezes para ver só essa. Arrasta para fazer zoom; duplo toque volta ao início.</p>
 </section>
 ${portal && extras.pretrain ? `<section class="race" id="pt-race" data-tab="pretreino" hidden>
-  <div class="marquee"><span>⏪ Pré-treino · 20 anos com os parâmetros escolhidos · custos e impostos incluídos ⏪</span></div>
+  <div class="marquee"><span>⏪ Treino · 20 anos com os parâmetros escolhidos · custos e impostos incluídos ⏪</span></div>
   <p class="muted small">${esc(extras.pretrain.subtitle || "")}. É uma simulação do passado: mostra como cada estratégia se teria portado, não o que vai fazer.</p>
   <div class="hud">
     <div>Dia <b id="pt-race-date">—</b></div>
@@ -446,7 +452,7 @@ a.home { color:inherit; text-decoration:none; }
 .profile-form .row-btns { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 4px; }
 .profile-layout { display:grid; grid-template-columns:230px minmax(0,1fr); gap:20px; align-items:start; margin-top:14px; }
 .side { position:sticky; top:12px; display:flex; flex-direction:column; gap:6px; padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--card); }
-.side .tab { text-align:left; width:100%; line-height:1.6; }
+.side .tab { text-align:left; width:100%; line-height:1.6; justify-content:flex-start; }
 .side-h { margin:6px 2px 0; font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
 .side-h:first-child { margin-top:0; }
 .side-main > section > h2:first-child, .side-main > section > .grid:first-child { margin-top:0; }
@@ -503,7 +509,9 @@ table.perf td:first-child { white-space:normal; min-width:120px; } table.perf tr
 .board li:nth-child(1) { border-color:var(--gold); box-shadow:0 0 10px rgba(255,225,77,.45); }
 .board li:nth-child(2) { border-color:#c0c7d6; } .board li:nth-child(3) { border-color:#d08a4a; }
 .tabs { position:relative; z-index:5; display:flex; flex-wrap:wrap; gap:6px; padding:8px 0; margin:18px 0 4px; }
-.tab { flex:none; font-family:var(--pixel); font-size:.55rem; background:var(--card); color:var(--fg); border:2px solid var(--line); border-radius:6px; padding:9px 10px; cursor:pointer; }
+.tab { flex:none; font-family:var(--pixel); font-size:.55rem; background:var(--card); color:var(--fg); border:2px solid var(--line); border-radius:6px; padding:7px 10px; cursor:pointer;
+       display:inline-flex; align-items:center; justify-content:center; gap:7px; line-height:1.2; }
+.tab .ti { font-family:system-ui, "Segoe UI Emoji", "Apple Color Emoji", sans-serif; font-size:1.05rem; line-height:1; }
 .tab.on { border-color:var(--accent); color:#fff; box-shadow:0 0 10px rgba(255,46,136,.5); }
 @media (min-width:641px) { .tabs .tab { flex:1 1 auto; text-align:center; white-space:nowrap; } }
 .news { display:grid; gap:8px; } .news article { background:var(--card); border:1px solid var(--line); border-left:4px solid var(--line); border-radius:8px; padding:10px 12px; }
@@ -576,6 +584,9 @@ h1 { font-size:1.35rem; margin:.2rem 0; } h2 { font-size:1.05rem; margin:1.4rem 
 .wrange input { background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:3px 6px; font:inherit; color-scheme:dark; }
 .wadv { margin-left:auto; margin-right:14px; white-space:nowrap; cursor:help; } .wadv.gold { color:var(--gold); }
 .wsel { cursor:pointer; border-radius:6px; padding-left:6px; padding-right:6px; transition:background .15s; }
+.drow .wnm { display:flex; flex-direction:column; gap:1px; white-space:normal; }
+.wnm .wl1, .wnm .wl2 { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wnm .wname { color:var(--fg); opacity:.75; font-size:.85rem; }
 .wsel:hover { background:rgba(0,229,255,.06); } .wsel.on { background:rgba(26,86,196,.28); box-shadow:inset 3px 0 0 #3d7bff; }
 @media (max-width:900px) { .dash-top { grid-template-columns:1fr 1fr; } .dash-row, .dash-row-a { grid-template-columns:1fr; } .dash-league-list { flex:none; } }
 .chart { width:100%; height:62vh; min-height:340px; background:var(--card); border:2px solid var(--line); border-radius:8px; }
@@ -980,7 +991,7 @@ function strategyHtml(s) {
     '<p>💡 ' + md(s.idea) + '</p><p>🟢 <b>Quando compra:</b> ' + md(s.buys) + '</p><p>🔴 <b>Quando vende:</b> ' + md(s.sells) +
     '</p><p>⚖️ <b>Tamanho das posições:</b> ' + md(s.size) + '</p><p>🛡️ <b>Regras comuns:</b><br>' + md(s.rules) + '</p></div>' +
     '<h3>⚙️ Parâmetros</h3>' + table(["Parâmetro", "Valor", "O que faz"], (s.params || []).map((p) => ['<code>' + esc(p.key) + '</code>', esc(p.value), esc(p.meaning)])) +
-    (s.pretrain ? '<h3>🧠 Pré-treino</h3><div class="prose"><p>' + md(s.pretrain) + '</p></div>' : "");
+    (s.pretrain ? '<h3>🧠 Treino</h3><div class="prose"><p>' + md(s.pretrain) + '</p></div>' : "");
 }
 
 function liveHtml(a) {
@@ -1480,7 +1491,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     (leaders.map((a, i) => '<div class="drow"><span class="nm">' + (i + 1) + ' · <a href="#" class="dash-agent" data-n="' + esc(a.name) + '">' + esc(a.emoji + " " + a.name) + '</a></span><span class="' + cls(headline(a)) + '">' + fmtPct(headline(a)) + '</span></div>').join("") ||
       '<p class="muted">Ainda sem agentes.</p>') + '</div>' +
     (leaders.length ? '<p class="muted small">' + leaders.length + ' agentes na liga · dados de ' + esc(lisbon(Date.parse(DATA.updated), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })) + '</p>' : '') + '</div>';
-  const pretrain = '<div class="dcard"><div class="dh"><h3>⏪ Pré-treino</h3>' + (PRETRAIN ? go("pretreino", "Pré-treino") : '') + '</div><div id="dash-pt">' +
+  const pretrain = '<div class="dcard"><div class="dh"><h3>⏪ Treino</h3>' + (PRETRAIN ? go("pretreino", "Treino") : '') + '</div><div id="dash-pt">' +
     (PRETRAIN ? '' : '<p class="muted">O pré-treino aparece aqui depois da próxima execução.</p>') + '</div></div>';
   const items = ((NEWS || {}).items || []).filter((i) => (i.importancia || 0) >= 2).slice(0, 5);
   const news = '<div class="dcard"><div class="dh"><h3>📰 Notícias</h3>' + go("noticias", "Todas") + '</div>' +
@@ -1562,7 +1573,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
     let value = 0, cost = 0, day = 0;
     const pos = {};
     for (const t of w.tx.slice().sort((a, b) => a.date.localeCompare(b.date) || a.seq - b.seq)) {
-      const p = pos[t.symbol] ||= { qty: 0, cost: 0, cur: t.currency };
+      const p = pos[t.symbol] ||= { qty: 0, cost: 0, cur: t.currency, name: t.name || "" };
       if (t.side === "buy") { p.qty += t.qty; p.cost += t.qty * t.price + t.fee; } else { const avg = p.qty ? p.cost / p.qty : 0; p.cost -= avg * t.qty; p.qty -= t.qty; }
     }
     const rows = [];
@@ -1571,7 +1582,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       if (!q || fx == null || p.qty <= 1e-9) continue;
       const v = p.qty * q.price * fx, d = p.qty * (q.price - (q.prev ?? q.price)) * fx;
       value += v; cost += p.cost * fx; day += d;
-      rows.push({ sym, qty: p.qty, v, c: p.cost * fx, d, pct: q.prev ? (q.price / q.prev - 1) * 100 : null });
+      rows.push({ sym, name: q.name || p.name || "", qty: p.qty, v, c: p.cost * fx, d, pct: q.prev ? (q.price / q.prev - 1) * 100 : null });
     }
     const dayP = value - day ? day / (value - day) * 100 : null;
     $("dash-wallet-tile").innerHTML = tile("💼 A tua carteira hoje", fmtPct(dayP), fmtEur(day) + " · valor total " + fmtEur(value), cls(day));
@@ -1590,7 +1601,17 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       const why = (v.reasons || []).join(" · ") + (v.stop ? " · stop sugerido " + fmtNum(v.stop) : "");
       return '<span class="wadv small ' + (v.verdict === "Vender" ? "down" : v.verdict === "Reduzir" ? "gold" : "up") + '" title="' + esc(why) + '" data-tip="' + esc(why) + '" tabindex="0">' + icon + ' ' + esc(v.verdict) + '</span>';
     };
-    const line = (k, label, sub, v, pct) => '<div class="drow wsel' + (k === pick ? ' on' : '') + '" data-k="' + esc(k) + '" data-p="' + (pct ?? "") + '" role="button" tabindex="0"><span class="nm"><b>' + label + '</b> <span class="muted small">' + sub + '</span></span>' + advice(k) + '<span class="wp ' + cls(pct) + '">' + fmtPct(pct) + '</span></div>';
+    // the company's name, short: "BANCO COMERCIAL PORTUGUES, S.A." -> "Banco Comercial Portugues" (the full one on hover)
+    const SUFFIX = /[\s,]+(s\.?\s?a\.?|sgps|n\.?\s?v\.?|se|ag|plc|inc\.?|corp\.?|corporation|ltd\.?|limited|s\.?p\.?a\.?|asa|ab|oyj|co\.?|company|group|holdings?)\.?$/i;
+    const nice = (s) => {
+      let n = String(s || "").trim(), o;
+      do { o = n; n = n.replace(SUFFIX, "").trim(); } while (n !== o && n);
+      if (!n) n = String(s || "").trim();
+      if (n === n.toUpperCase()) n = n.toLowerCase().replace(/(^|[\s\-&.'(/])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+      return n;
+    };
+    const line = (k, label, sub, v, pct, name) => '<div class="drow wsel' + (k === pick ? ' on' : '') + '" data-k="' + esc(k) + '" data-p="' + (pct ?? "") + '" role="button" tabindex="0"><span class="nm wnm"><span class="wl1"><b>' + label + '</b>' +
+      (name ? ' <span class="wname" data-noi18n title="' + esc(name) + '">' + esc(nice(name)) + '</span>' : '') + '</span><span class="wl2 muted small">' + sub + '</span></span>' + advice(k) + '<span class="wp ' + cls(pct) + '">' + fmtPct(pct) + '</span></div>';
     // the tiles follow the chosen row: the whole portfolio or one position
     const TAX = 0.28;  // Portugal: 28% on the gain (capital gains), only when there is a gain
     const tiles = () => {
@@ -1619,7 +1640,7 @@ if (PRETRAIN) perfTable("pt-perf", PRETRAIN, PRETRAIN.agents || [], (a) => {  //
       '<p class="muted small"><span id="dash-wallet-leg-inv"' + (showInv ? '' : ' hidden') + '><span style="color:#1a56c4">■</span> <span>investido</span> · </span><span style="color:#39ff88">■</span> <span>lucro</span> · <span style="color:#ff4d6d">■</span> <span>prejuízo</span> · <span id="dash-wallet-what">Total</span></p>' +
       '<p class="muted small wper" id="dash-wallet-per">% de hoje</p>' +
       '<div id="dash-wallet-rows">' + line("", "Total", fmtEur(value), value, dayP) +
-      rows.slice(0, 6).map((r) => line(r.sym, esc(r.sym), fmtNum(r.qty, r.qty % 1 ? 2 : 0) + ' · ' + fmtEur(r.v), r.v, r.pct)).join("") + '</div>' +
+      rows.slice(0, 6).map((r) => line(r.sym, esc(r.sym), fmtNum(r.qty, r.qty % 1 ? 2 : 0) + ' · ' + fmtEur(r.v), r.v, r.pct, r.name)).join("") + '</div>' +
       (rows.length > 6 ? '<p class="muted small">+ ' + (rows.length - 6) + ' posições no perfil</p>' : '');
 
     // day by day since the first purchase, each position's money in (average cost, in euros at each purchase's rate) and
@@ -2283,7 +2304,7 @@ async function savePrefs(fields) {
       when: "Na liga diária (07:30): o que os agentes querem comprar ou vender na abertura, com entrada, stop, alvo e score." },
     { k: "📅 Agenda", iso: when(CALENDAR), max: 30 + weekendSlack, wf: "agents.yml", title: /daily/, next: sched("agentes"),
       when: "Na liga diária (07:30): resultados das empresas e calendário macro dos 14 dias seguintes." },
-    { k: "⏪ Pré-treino", iso: PRETRAIN && PRETRAIN.updated, max: 24 * 8, wf: "pretrain.yml", title: /Pré-treino/, next: sched("treino"),
+    { k: "⏪ Treino", iso: PRETRAIN && PRETRAIN.updated, max: 24 * 8, wf: "pretrain.yml", title: /Pré-treino/, next: sched("treino"),
       when: "Ao domingo às 06:00 (depois dos dados da semana) e quando pedido: cada perfil treina em série até a escolha estabilizar; a seguir conservador e arrojado, e voltas aos 3 perfis enquanto alguma escolha mudar." },
     { k: "⚡ Treino da reatividade", wf: "intraday-lab.yml", max: 24 * 8, next: null,
       when: "Quando acaba o último perfil do pré-treino: barras de 30 min da Alpaca (EUA, guardadas e só as novas descarregadas) e a reatividade de cada estratégia (abertura, confirmação ou tempo real)." },

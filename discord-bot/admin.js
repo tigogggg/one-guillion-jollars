@@ -167,9 +167,9 @@ export const ADMIN_CLIENT = String.raw`
   if (!SUB.some((s) => s[0] === sub)) sub = "dl";
   let D = null, busy = false, timer = 0;
 
-  root.innerHTML = '<div class="adm"><div class="adm-top"><div class="chips" id="adm-sub">' +
-    SUB.map((s) => '<button class="chip' + (s[0] === sub ? " on" : "") + '" data-s="' + s[0] + '">' + e(s[1]) + "</button>").join("") +
-    '</div><span class="pill" id="adm-pill">…</span><span class="muted small" id="adm-fresh"></span></div>' +
+  // the Google Drive card (with the collector's state) is common to the three subtabs, above them
+  root.innerHTML = '<div class="adm"><div class="adm-card adm-drivebox" id="adm-drive"><p class="muted">A carregar…</p></div><nav class="adm-subs" id="adm-sub">' +
+    SUB.map((s) => '<button class="adm-subtab' + (s[0] === sub ? " on" : "") + '" data-s="' + s[0] + '">' + e(s[1]) + "</button>").join("") + "</nav>" +
     '<div id="adm-dl"><p class="muted">A carregar…</p></div><div id="adm-enx" hidden></div>' +
     '<div id="adm-cat" hidden><div class="adm-card"><h3>Ações em euros na Dukascopy (sem comissão de câmbio)</h3>' +
     '<div class="adm-tools"><input type="search" id="adm-q" placeholder="Procurar empresa ou ticker…" aria-label="Procurar empresa ou ticker">' +
@@ -182,11 +182,7 @@ export const ADMIN_CLIENT = String.raw`
   const fresh = (p, label) => (p ? label + " " + ago(p.recebido) + (p.onde ? " (" + e(p.onde) + ")" : "") : label + " nunca recebido");
   function showSub() {
     for (const s of SUB) $a("adm-" + s[0]).hidden = s[0] !== sub;
-    $a("adm-sub").querySelectorAll(".chip").forEach((c) => c.classList.toggle("on", c.dataset.s === sub));
-    if (!D) return;
-    const p = sub === "enx" ? D.euronext : sub === "cat" ? D.catalogo : D.estado;
-    $a("adm-fresh").innerHTML = fresh(p, "recebido");
-    pill();
+    $a("adm-sub").querySelectorAll(".adm-subtab").forEach((c) => c.classList.toggle("on", c.dataset.s === sub));
   }
   $a("adm-sub").addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-s]"); if (!b) return;
@@ -196,24 +192,27 @@ export const ADMIN_CLIENT = String.raw`
     if (sub === "cat") drawCatalog();
   });
 
-  function pill() {
-    let t = "…", c = "";
-    if (sub === "enx") {
-      const tk = (D.euronext && D.euronext.dados.tarefa) || {}, last = D.euronext && D.euronext.dados.diario;
-      const okRun = last && last.codigo === 0;
-      t = D.euronext && D.euronext.dados.a_correr ? "Trades: a recolher" : last ? "Trades: última corrida " + (okRun ? "ok" : "falhou") : tk.existe ? "Trades: agendado" : "Trades";
-      c = D.euronext && D.euronext.dados.a_correr ? "run" : last && !okRun ? "err" : "";
-    } else if (D.estado) {
+  // the collector's state: one pill per data source, each with when it last arrived
+  function pills() {
+    let dt = "Dukascopy: sem dados", dc = "";
+    if (D.estado) {
       const p = D.estado.dados.pipeline || {}, stale = Date.now() - Date.parse(D.estado.recebido) > 5 * 60000;
-      t = "Dukascopy: " + (p.a_correr ? (stale ? "a descarregar? (sem notícias do PC)" : "a descarregar") : p.estado === "erro" ? "erro" : p.estado === "concluído" ? "concluído" : "parado");
-      c = p.a_correr && !stale ? "run" : p.estado === "erro" || (p.a_correr && stale) ? "err" : "";
-    } else t = "Dukascopy: sem dados";
-    $a("adm-pill").textContent = t;
-    $a("adm-pill").className = "pill" + (c ? " " + c : "");
+      dt = "Dukascopy: " + (p.a_correr ? (stale ? "a descarregar? (sem notícias do PC)" : "a descarregar") : p.estado === "erro" ? "erro" : p.estado === "concluído" ? "concluído" : "parado");
+      dc = p.a_correr && !stale ? "run" : p.estado === "erro" || (p.a_correr && stale) ? "err" : "";
+    }
+    let tt = "Trades: sem dados", tc = "";
+    if (D.euronext) {
+      const x = D.euronext.dados, tk = x.tarefa || {}, last = x.diario, okRun = last && last.codigo === 0;
+      tt = x.a_correr ? "Trades: a recolher" : last ? "Trades: última corrida " + (okRun ? "ok" : "falhou") : tk.existe ? "Trades: agendado" : "Trades";
+      tc = x.a_correr ? "run" : last && !okRun ? "err" : "";
+    }
+    const one = (t, c, p) => '<div class="adm-st"><span class="pill' + (c ? " " + c : "") + '">' + e(t) + '</span><span class="muted small">' + fresh(p, "recebido") + "</span></div>";
+    return '<div class="adm-sts">' + one(dt, dc, D.estado) + one(tt, tc, D.euronext) +
+      '<div class="adm-st"><span class="pill">Catálogo</span><span class="muted small">' + fresh(D.catalogo, "recebido") + "</span></div></div>";
   }
 
-  // Google Drive: what is used by whom and what is still to come (on both data tabs)
-  function driveCard(kind) {
+  // Google Drive: what is used by whom and what is still to come, with the collector's state (above the subtabs)
+  function driveCard() {
     const s = D.estado && D.estado.dados, x = D.euronext && D.euronext.dados;
     const d = (s && s.drive && s.drive.total ? s.drive : null) || (x && x.drive) || null;
     let body;
@@ -231,13 +230,13 @@ export const ADMIN_CLIENT = String.raw`
         '<i style="width:' + w(tr.bytes) + '"></i><i class="t" style="width:' + w(tr.perYear) + '"></i></div>' +
         '<div class="adm-legend"><span style="--c:var(--muted)">outros ficheiros</span><span style="--c:#ff2e88">quotes Dukascopy</span><span style="--c:rgba(255,46,136,.35)">quotes por vir</span>' +
         '<span style="--c:var(--neon)">trades Euronext &amp; Xetra</span><span style="--c:rgba(0,229,255,.35)">trades, próximos 12 meses</span></div>' +
-        '<div class="adm-note">' + (kind === "dl"
-          ? "Quotes: " + fmtBytes(q.bytes) + " guardados; a ~" + fmtBytes(q.perMonth) + " por ação-mês a lista toda precisa de cerca de <b>" + fmtBytes(q.total) + "</b>. " + fits
-          : "Trades: " + fmtBytes(tr.bytes) + " guardados, cerca de <b>" + fmtBytes(tr.perYear) + " por ano</b> ao ritmo atual. " +
-            (years != null ? "Depois das quotes acabarem, o espaço livre dá para cerca de <b>" + (years >= 1 ? years.toFixed(1).replace(".", ",") + " anos" : Math.round(years * 12) + " meses") + "</b> de trades." : "")) +
+        '<div class="adm-note">' +
+          "Quotes: " + fmtBytes(q.bytes) + " guardados; a ~" + fmtBytes(q.perMonth) + " por ação-mês a lista toda precisa de cerca de <b>" + fmtBytes(q.total) + "</b>. " + fits + "<br>" +
+          "Trades: " + fmtBytes(tr.bytes) + " guardados, cerca de <b>" + fmtBytes(tr.perYear) + " por ano</b> ao ritmo atual. " +
+            (years != null ? "Depois das quotes acabarem, o espaço livre dá para cerca de <b>" + (years >= 1 ? years.toFixed(1).replace(".", ",") + " anos" : Math.round(years * 12) + " meses") + "</b> de trades." : "") +
         " <span class=\"muted\">Lida " + ago(d.verificado) + ".</span></div></div></div>";
     }
-    return '<div class="adm-card span12"><h3>Google Drive</h3>' + body + "</div>";
+    $a("adm-drive").innerHTML = '<div class="adm-dh"><h3>Google Drive</h3>' + pills() + "</div>" + body;
   }
 
   function drawQuotes() {
@@ -255,14 +254,14 @@ export const ADMIN_CLIENT = String.raw`
     }).join("");
     const feed = (s.recentes || []).map((r) => '<div class="' + (r.falhou ? "fail" : "") + '"><span class="muted">' + e(r.hora) + "</span><b>" + e(r.acao) + "</b><span>" + e(r.dia) + "</span>" +
       '<span style="margin-left:auto">' + (r.falhou ? "o servidor falhou, volta a tentar" : fmtInt(r.ticks) + " ticks") + '</span><span class="muted" style="width:60px;text-align:right">' + (r.segundos != null ? r.segundos.toFixed(1).replace(".", ",") + " s" : "") + "</span></div>").join("");
-    $a("adm-dl").innerHTML = '<div class="adm-grid">' + driveCard("dl") +
-      '<div class="adm-card span8"><h3>Ações</h3><div class="adm-scroll"><table class="adm-t"><thead><tr><th>Ação</th><th style="width:16%">Meses</th><th class="num">Feitos</th><th class="num">Ticks</th><th class="num">Tamanho</th><th class="num">Meses guardados</th></tr></thead><tbody>' + rows + "</tbody></table></div></div>" +
+    const table = '<div class="adm-card span8"><h3>Ações</h3><div class="adm-scroll"><table class="adm-t"><thead><tr><th>Ação</th><th style="width:16%">Meses</th><th class="num">Feitos</th><th class="num">Ticks</th><th class="num">Tamanho</th><th class="num">Meses guardados</th></tr></thead><tbody>' + rows + "</tbody></table></div></div>";
+    $a("adm-dl").innerHTML = '<div class="adm-grid">' +
       '<div class="adm-card span4"><h3>Progresso geral</h3><div class="adm-row"><div class="adm-big">' + pct.toFixed(1).replace(".", ",") + '%</div><div class="muted">' + fmtInt(t.meses_feitos) + " de " + fmtInt(t.meses_total) + " ações-mês</div></div>" +
       '<div class="adm-bar" style="margin-top:10px"><i class="b" style="width:' + pct + '%"></i></div><div class="adm-stats">' +
       '<div><b>' + fmtInt(t.ticks) + '</b><span>ticks guardados</span></div><div><b>' + fmtBytes(t.bytes) + '</b><span>na Drive</span></div>' +
       '<div><b>' + (p.segundos_por_mes ? fmtDur(p.segundos_por_mes) : "–") + '</b><span>por mês</span></div><div><b>' + (p.a_correr ? fmtDur(p.eta_segundos) : "–") + '</b><span>falta</span></div></div>' +
       (a ? '<p class="muted small">Agora: ' + e(a.acao) + " " + e(a.mes) + ", " + a.dias_feitos + " de " + a.dias_total + " dias de bolsa" + (a.passagem > 1 ? " (tentativa " + a.passagem + ")" : "") + "</p>" : "") +
-      (p.estado === "erro" && p.erro ? '<div class="adm-note down">' + e(p.erro) + "</div>" : "") + "</div>" +
+      (p.estado === "erro" && p.erro ? '<div class="adm-note down">' + e(p.erro) + "</div>" : "") + "</div>" + table +
       '<div class="adm-card span12"><h3>Últimos dias descarregados</h3><div class="adm-feed">' + (feed || '<span class="muted">Ainda nada.</span>') + "</div></div></div>";
   }
 
@@ -295,7 +294,7 @@ export const ADMIN_CLIENT = String.raw`
       '<td class="num">' + (r.tem_cotacoes ? r.dias_cotacoes : '<span class="muted" title="a Dukascopy não tem esta ação">–</span>') + "</td>" +
       '<td class="num">' + (r.tem_cotacoes ? r.dias_juntos : '<span class="muted">–</span>') + (r.compras != null ? '<div class="muted small">' + Math.round(100 * r.compras) + "% compras</div>" : "") + "</td>" +
       '<td class="num">' + fmtInt(r.negocios) + '</td><td class="num">' + fmtBytes(r.bytes) + '</td><td class="num">' + (r.ultimo || "–") + '<div class="muted small">' + (r.ultimo_negocios != null ? fmtInt(r.ultimo_negocios) + " trades" : "") + "</div></td></tr>").join("");
-    $a("adm-enx").innerHTML = '<div class="adm-grid">' + driveCard("enx") +
+    $a("adm-enx").innerHTML = '<div class="adm-grid">' +
       '<div class="adm-card span8"><h3>Trades guardados</h3><div class="adm-row"><div class="adm-big">' + fmtInt(t.dias) + '</div><div class="muted">ações-dia · ' + rows.length + " aç" + (rows.length === 1 ? "ão" : "ões") + "</div></div>" +
       '<div class="adm-stats"><div><b>' + fmtInt(t.negocios) + '</b><span>trades</span></div><div><b>' + fmtBytes(t.bytes) + '</b><span>Parquet</span></div><div><b>' + onDrive + "/" + fmtInt(t.dias) + '</b><span>na Drive</span></div><div><b>' + (latest || "–") + '</b><span>último dia</span></div></div></div>' +
       '<div class="adm-card span4"><h3>Recolha diária</h3><div class="adm-kv">' + (runHtml + taskHtml || '<span class="muted" style="grid-column:span 2">Sem informação.</span>') + "</div>" +
@@ -357,9 +356,9 @@ export const ADMIN_CLIENT = String.raw`
       const r = await fetch("/admin/tick/dados", { cache: "no-store", credentials: "same-origin" });
       if (!r.ok) throw new Error("HTTP " + r.status);
       D = await r.json();
-      drawQuotes(); drawTrades(); showSub(); drawCatalog();
+      driveCard(); drawQuotes(); drawTrades(); showSub(); drawCatalog();
     } catch (x) {
-      $a("adm-fresh").textContent = "não consegui ler os dados (" + x.message + ")";
+      $a("adm-drive").innerHTML = "<p class=\"down\">Não consegui ler os dados (" + e(x.message) + ")</p>";
     } finally { busy = false; }
   }
   function tick() {
@@ -374,8 +373,16 @@ export const ADMIN_CLIENT = String.raw`
 `;
 
 export const ADMIN_CSS = `
-.adm-top { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-bottom:12px; }
-.adm-top .chips { margin:0; }
+.adm-drivebox { margin-bottom:16px; }
+.adm-dh { display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; gap:8px 16px; margin-bottom:10px; }
+.adm-dh h3 { margin:0; }
+.adm-sts { display:flex; flex-wrap:wrap; gap:8px 16px; justify-content:flex-end; }
+.adm-st { display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
+@media (max-width:640px) { .adm-sts { justify-content:flex-start; } .adm-st { align-items:flex-start; } }
+.adm-subs { display:flex; flex-wrap:wrap; justify-content:center; gap:14px; margin:0 0 16px; }
+.adm-subtab { font-family:var(--pixel); font-size:.55rem; line-height:1.6; background:var(--card); color:var(--fg); border:2px solid var(--line); border-radius:6px; padding:12px 18px; cursor:pointer; }
+.adm-subtab:hover { border-color:var(--neon); }
+.adm-subtab.on { border-color:var(--accent); color:#fff; box-shadow:0 0 10px rgba(255,46,136,.5); }
 .adm .pill { padding:4px 10px; border-radius:999px; font-size:.75rem; border:1px solid var(--line); color:var(--muted); }
 .adm .pill.run { color:var(--up); border-color:var(--up); box-shadow:0 0 8px rgba(57,255,136,.35); }
 .adm .pill.run::before { content:""; display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--up); margin-right:6px; animation:admpulse 1.4s infinite; vertical-align:1px; }

@@ -9,7 +9,7 @@
 // Finance quotes (refreshed every minute, usually ~15 min behind the exchange),
 // converts everything to euros, and draws the value since the first purchase.
 
-import { avatarUrl, esc, html, memberFace, page, safeJson, siteTopbar, staticAsset } from "./chart_page.js";
+import { avatarUrl, esc, html, memberFace, page, safeJson, siteTopbar, staticAsset, tabLabel } from "./chart_page.js";
 import { currentSession, loginActive } from "./session.js";
 import { cached, createPortfolio, deletePortfolio, getVersion, hasDb, listVersions, loadPortfolio, renamePortfolio, savePortfolio } from "./store.js";
 
@@ -869,11 +869,11 @@ async function history(env, data, hourly = false) {
 const WALLET_TABS = [["resumo", "📊 Resumo"], ["posicoes", "💼 Posições"], ["operacoes", "🧾 Operações"], ["adicionar", "➕ Adicionar"],
                      ["propostas", "🧠 Propostas para ti"], ["importar", "📥 Importar"], ["analise", "🤖 Análise do Claude"]];
 const PROFILE_TABS = [["definicoes", "⚙️ Definições"], ["seguir", "👀 Seguir"], ["conta", "🔒 Privacidade"]];
-const START_TABS = [["", "📊 Dashboard"], ["corrida", "🏁 Corrida"], ["pretreino", "⏪ Pré-treino"], ["agentes", "🧾 Agentes"], ["propostas", "🧠 Propostas"],
+const START_TABS = [["", "📊 Dashboard"], ["corrida", "🏁 Corrida"], ["pretreino", "⏪ Treino"], ["agentes", "🧾 Agentes"], ["propostas", "🧠 Propostas"],
                     ["noticias", "📰 Notícias"], ["ajuda", "❓ Glossário"], ["estado", "🩺 Estado"]];
 
 function portfolioPage(data, tok, opts = {}) {
-  const tabButton = ([t, label], on) => `<button class="tab${on ? " on" : ""}" data-tab="${t}">${label}</button>`;
+  const tabButton = ([t, label], on) => `<button class="tab${on ? " on" : ""}" data-tab="${t}">${tabLabel(label)}</button>`;
   const me = { name: data.display_name || data.name || "membro", avatar: avatarUrl(data.owner, data.avatar) };
   const prefs = { capital: 10000, risk: 1, start: "", ...(data.settings || {}) };
   const since = data.created ? "Membro desde " + new Date(data.created).toLocaleDateString("pt-PT", { month: "long", year: "numeric", timeZone: "Europe/Lisbon" }) + " · " : "";
