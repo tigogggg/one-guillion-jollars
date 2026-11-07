@@ -370,7 +370,7 @@ export const ADMIN_CLIENT = String.raw`
 
 export const ADMIN_CSS = `
 .adm-drivebox { margin-bottom:16px; }
-.adm-dh { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-bottom:10px; } .adm-dh h3 { margin:0; }
+.adm-dh { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 14px; margin-bottom:10px; } .adm-card .adm-dh h3 { margin:0; line-height:1; }
 .adm-head { display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:12px 14px; margin:0 0 16px; }
 .adm-subs { display:flex; flex-wrap:wrap; justify-content:center; gap:14px; }
 .adm-subtab { font-family:var(--pixel); font-size:.55rem; line-height:1.6; background:var(--card); color:var(--fg); border:2px solid var(--line); border-radius:6px; padding:12px 18px; cursor:pointer; }
