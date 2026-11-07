@@ -167,9 +167,9 @@ export const ADMIN_CLIENT = String.raw`
   if (!SUB.some((s) => s[0] === sub)) sub = "dl";
   let D = null, busy = false, timer = 0;
 
-  // the subtabs with the download state beside them, then the Google Drive card (common to the three)
+  // the subtabs, then the Google Drive card (common to the three, the download state beside its title)
   root.innerHTML = '<div class="adm"><div class="adm-head"><nav class="adm-subs" id="adm-sub">' +
-    SUB.map((s) => '<button class="adm-subtab' + (s[0] === sub ? " on" : "") + '" data-s="' + s[0] + '">' + e(s[1]) + "</button>").join("") + '</nav><span class="pill" id="adm-pill">…</span></div>' +
+    SUB.map((s) => '<button class="adm-subtab' + (s[0] === sub ? " on" : "") + '" data-s="' + s[0] + '">' + e(s[1]) + "</button>").join("") + '</nav></div>' +
     '<div class="adm-card adm-drivebox" id="adm-drive"><p class="muted">A carregar…</p></div>' +
     '<div id="adm-dl"><p class="muted">A carregar…</p></div><div id="adm-enx" hidden></div>' +
     '<div id="adm-cat" hidden><div class="adm-card"><h3>Ações em euros na Dukascopy (sem comissão de câmbio)</h3>' +
@@ -193,7 +193,7 @@ export const ADMIN_CLIENT = String.raw`
     if (sub === "cat") drawCatalog();
   });
 
-  // the download state, beside the subtabs (when the PC last sent it: on hover)
+  // the download state, beside the Google Drive title (when the PC last sent it: on hover)
   function pill() {
     let t = "Dukascopy: sem dados", c = "";
     if (D.estado) {
@@ -232,7 +232,7 @@ export const ADMIN_CLIENT = String.raw`
             (years != null ? "Depois das quotes acabarem, o espaço livre dá para cerca de <b>" + (years >= 1 ? years.toFixed(1).replace(".", ",") + " anos" : Math.round(years * 12) + " meses") + "</b> de trades." : "") +
         " <span class=\"muted\">Lida " + ago(d.verificado) + ".</span></div></div></div>";
     }
-    $a("adm-drive").innerHTML = "<h3>Google Drive</h3>" + body;
+    $a("adm-drive").innerHTML = '<div class="adm-dh"><h3>Google Drive</h3><span class="pill" id="adm-pill"></span></div>' + body;
   }
 
   function drawQuotes() {
@@ -352,7 +352,7 @@ export const ADMIN_CLIENT = String.raw`
       const r = await fetch("/admin/tick/dados", { cache: "no-store", credentials: "same-origin" });
       if (!r.ok) throw new Error("HTTP " + r.status);
       D = await r.json();
-      pill(); driveCard(); drawQuotes(); drawTrades(); showSub(); drawCatalog();
+      driveCard(); pill(); drawQuotes(); drawTrades(); showSub(); drawCatalog();
     } catch (x) {
       $a("adm-drive").innerHTML = "<p class=\"down\">Não consegui ler os dados (" + e(x.message) + ")</p>";
     } finally { busy = false; }
@@ -370,6 +370,7 @@ export const ADMIN_CLIENT = String.raw`
 
 export const ADMIN_CSS = `
 .adm-drivebox { margin-bottom:16px; }
+.adm-dh { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-bottom:10px; } .adm-dh h3 { margin:0; }
 .adm-head { display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:12px 14px; margin:0 0 16px; }
 .adm-subs { display:flex; flex-wrap:wrap; justify-content:center; gap:14px; }
 .adm-subtab { font-family:var(--pixel); font-size:.55rem; line-height:1.6; background:var(--card); color:var(--fg); border:2px solid var(--line); border-radius:6px; padding:12px 18px; cursor:pointer; }
