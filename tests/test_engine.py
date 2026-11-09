@@ -439,7 +439,7 @@ def test_the_news_strategies_match_python_in_the_engine(markets, monkeypatch, tm
     now = datetime(day.year, day.month, day.day, 20, 0, tzinfo=timezone.utc)
     before = json_copy(state)
     moves, _ = agents.reactive_round(config, state, live, now)
-    r = engine.shadow_round(config, before, state, live, now, only=engine.ENGINE_SHADOW)
+    r = engine.shadow_round(config, before, state, live, now, only=PORTED_LIVE)
     import json
     diffs = json.loads((tmp_path / f"{day.isoformat()}.jsonl").read_text().splitlines()[-1])["diffs"]
     assert r["agents"] == 4 and diffs == []
@@ -485,7 +485,7 @@ def test_the_view_and_ranking_strategies_match_python_in_the_engine(markets, mon
     now = datetime(day.year, day.month, day.day, 20, 0, tzinfo=timezone.utc)
     before = json_copy(state)
     agents.reactive_round(config, state, live, now)
-    r = engine.shadow_round(config, before, state, live, now, only=engine.ENGINE_SHADOW)
+    r = engine.shadow_round(config, before, state, live, now, only=PORTED_LIVE)
     diffs = json.loads((tmp_path / f"{day.isoformat()}.jsonl").read_text().splitlines()[-1])["diffs"]
     assert r["agents"] == 2 and diffs == []
     for s in ("visionario", "joalheiro"):  # both acted
@@ -530,8 +530,28 @@ def test_the_meta_agents_match_python_in_the_engine(markets, monkeypatch, tmp_pa
     now = datetime(day.year, day.month, day.day, 20, 0, tzinfo=timezone.utc)
     before = json_copy(state)
     agents.reactive_round(config, state, live, now)
-    r = engine.shadow_round(config, before, state, live, now, only=engine.ENGINE_SHADOW)
+    r = engine.shadow_round(config, before, state, live, now, only=PORTED_LIVE)
     diffs = json.loads((tmp_path / f"{day.isoformat()}.jsonl").read_text().splitlines()[-1])["diffs"]
     assert r["agents"] == 3 and diffs == []
     acted = {s: len(state["agents"][s]["pending"]) + len(state["agents"][s]["positions"]) for s in ("conselho", "maestro", "super")}
     assert acted["super"] and acted["conselho"]  # they acted (the Maestro only when a leader beats the index)
+
+
+def test_agents_run_as_a_program_is_the_module_the_engine_imports():
+    """Run as a script, agents.py must not be loaded twice: the engine read a copy without the liquidity spreads."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    code = ("import runpy, sys; sys.argv = ['agents.py', '--help']; sys.path.insert(0, 'scripts')\n"
+            "try:\n    runpy.run_path('scripts/agents.py', run_name='__main__')\nexcept SystemExit:\n    pass\n"
+            "import agents; print(agents.__name__ == '__main__')")
+    out = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, timeout=120)
+    assert out.stdout.strip().splitlines()[-1] == "True", out.stderr[-500:]
+
+
+# the live-only strategies ported to the engine in November 2026: their parity tests keep comparing all of them, in
+# or out of engine.ENGINE_SHADOW
+PORTED_LIVE = {"jornalista", "catalisador", "cetico", "visionario", "joalheiro", "conselho", "maestro", "super"}
+

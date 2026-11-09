@@ -35,7 +35,9 @@ SEPARATE = ("sector", "industry", "name", "stage2", "trend_score")  # kept apart
 # Strategies newly ported to the engine (the live-only ones): they still trade in Python, while every round also runs
 # them in the engine from the same state and writes the differences (shadow_round, agents/sombra); once a stretch of
 # real rounds matches, a strategy leaves this set and trades in the engine.
-ENGINE_SHADOW = {"jornalista", "catalisador", "cetico", "visionario", "joalheiro", "conselho", "maestro", "super"}
+# 9 Nov 2026: jornalista, catalisador, cetico, visionario, conselho and maestro left it (0 differences from 5 Nov, with
+# real orders); joalheiro and super stay until they place orders to compare.
+ENGINE_SHADOW = {"joalheiro", "super"}
 
 
 def enabled(strategy: str) -> bool:

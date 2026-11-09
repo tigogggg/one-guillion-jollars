@@ -36,6 +36,12 @@ import statistics
 import sys
 import unicodedata
 import weakref
+
+if __name__ == "__main__":
+    # Run as a program, this file is also the `agents` the other scripts import (engine.py, ibkr.py, ...): without
+    # this, Python loads it a second time and anything set while running (each stock's liquidity spread, filled by
+    # set_liquidity) exists only here, so the Rust engine priced trades without it.
+    sys.modules.setdefault("agents", sys.modules[__name__])
 from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
